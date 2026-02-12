@@ -12,6 +12,10 @@ A modern reimagining of the classic chronological reader, built for speed and co
 - **Advanced Filtering**: Author favoring, karma thresholds, and "Fully Read" thread hiding.
 - **Local State**: Persistence for read tracking and preferences in browser storage.
 
+## 📥 Installation
+1. Install a userscript manager like **Tampermonkey**.
+2. Click here to install: [**Install LW Power Reader**](https://github.com/weidai11/userscripts/raw/main/dist/power-reader.user.js)
+
 ## 🏗 VCS & Workflow
 This repository uses **Jujutsu**. Use `jj` for all version control operations.
 
