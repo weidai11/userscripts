@@ -2,6 +2,9 @@ import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
 async function setupDefault(page: any, commentCount: number = 20) {
+    const p1PostedAt = new Date(Date.now() - 500000).toISOString();
+    const p2PostedAt = new Date(Date.now() - 1000000).toISOString();
+
     const comments = [];
     for (let i = 0; i < commentCount; i++) {
         comments.push({
@@ -12,7 +15,7 @@ async function setupDefault(page: any, commentCount: number = 20) {
             postedAt: new Date(Date.now() - i * 1000).toISOString(),
             baseScore: 10,
             user: { _id: 'u1', slug: 'user-1', username: 'User1', karma: 500 },
-            post: { _id: 'p1', title: 'First Post With Many Comments', slug: 'first-post', postedAt: new Date(Date.now() - 500000).toISOString() }
+            post: { _id: 'p1', title: 'First Post With Many Comments', slug: 'first-post', postedAt: p1PostedAt }
         });
     }
     // Second post (p2)
@@ -25,13 +28,41 @@ async function setupDefault(page: any, commentCount: number = 20) {
             postedAt: new Date(Date.now() - 100000 - i * 1000).toISOString(),
             baseScore: 10,
             user: { _id: 'u2', slug: 'user-2', username: 'User2', karma: 500 },
-            post: { _id: 'p2', title: 'Second Post Title', slug: 'second-post', postedAt: new Date(Date.now() - 1000000).toISOString() }
+            post: { _id: 'p2', title: 'Second Post Title', slug: 'second-post', postedAt: p2PostedAt }
         });
     }
 
+    const posts = [
+        {
+            _id: 'p1',
+            title: 'First Post With Many Comments',
+            slug: 'first-post',
+            pageUrl: 'https://www.lesswrong.com/posts/p1/first-post',
+            postedAt: p1PostedAt,
+            htmlBody: '<div style="height: 2200px;">Long post body to keep [e] enabled in sticky-header tests.</div>',
+            baseScore: 50,
+            voteCount: 10,
+            commentCount,
+            user: { _id: 'u1', slug: 'user-1', username: 'User1', karma: 500 },
+        },
+        {
+            _id: 'p2',
+            title: 'Second Post Title',
+            slug: 'second-post',
+            pageUrl: 'https://www.lesswrong.com/posts/p2/second-post',
+            postedAt: p2PostedAt,
+            htmlBody: '<p>Second post body.</p>',
+            baseScore: 20,
+            voteCount: 5,
+            commentCount: 3,
+            user: { _id: 'u2', slug: 'user-2', username: 'User2', karma: 500 },
+        }
+    ];
+
     await initPowerReader(page, {
         testMode: true,
-        comments
+        comments,
+        posts
     });
 }
 

@@ -47,12 +47,17 @@ export const buildPostGroups = (
   const parentIds = new Set<string>();
 
   const cutoff = getLoadFrom();
+  const isImplicitlyRead = (item: { postedAt?: string }) => {
+    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
+  };
 
   sortedComments.forEach(c => {
     const isContext = (c as any).isContext;
     const isLocallyRead = isRead(c._id, readState, c.postedAt);
+    const implicit = isImplicitlyRead(c);
+    const commentIsRead = isLocallyRead || implicit;
 
-    if (isContext || !isLocallyRead) {
+    if (isContext || !commentIsRead) {
       if (!isContext) unreadIds.add(c._id);
 
       // Keep entire ancestor chain for context
@@ -72,10 +77,10 @@ export const buildPostGroups = (
   // Include read parents for context
   const idsToShow = new Set([...unreadIds, ...parentIds]);
 
-  // Track unread posts
+  // Track unread posts (we'll refine this count after filtering groups)
   const unreadPostIds = new Set<string>();
   posts.forEach(p => {
-    const readStatus = isRead(p._id, readState, p.postedAt);
+    const readStatus = isRead(p._id, readState, p.postedAt) || isImplicitlyRead(p);
     if (!readStatus) {
       unreadPostIds.add(p._id);
     }
@@ -119,32 +124,18 @@ export const buildPostGroups = (
   });
 
   // [PR-SORT-02] Top-Level Sorting
-  // Convert to array to sort
   let groupsList = Array.from(postGroups.values());
 
-  // [PR-FILTER-01] Filter out "Fully Read" posts:
-  // - Post itself is read
-  // - AND has no unread comments
-  groupsList = groupsList.filter(g => {
-    const postRecord = state.postById.get(g.postId);
-    const post = postRecord || g.fullPost || { _id: g.postId } as Post;
-
-    const isPostRead = isRead(g.postId, readState, post.postedAt);
-    const hasUnreadComment = g.comments.some(c => unreadIds.has(c._id));
-
-    if (isPostRead && !hasUnreadComment) {
-      return false;
-    }
-    return true;
-  });
-
-  groupsList.forEach(g => {
+  // Calculate Tree-Karma for all groups BEFORE filtering.
+  // This provides a definitive "has unread content" signal.
+  groupsList.forEach((g: PostGroup) => {
     const postRecord = state.postById.get(g.postId);
     const post = postRecord || g.fullPost || { _id: g.postId, baseScore: 0 } as Post;
-    const isPostRead = isRead(g.postId, readState, post.postedAt);
+    const isPostRead = isRead(g.postId, readState, post.postedAt) || isImplicitlyRead(post);
 
-    // Find comments that are top-level for this post (no parent)
-    const rootCommentsOfPost = (state.childrenByParentId.get('') || []).filter(c => c.postId === g.postId);
+    // rootCommentsOfPost should include ANY comment whose parent is not in the batch.
+    // This ensures we find unread comments even if their parents are missing.
+    const rootCommentsOfPost = g.comments.filter((c: Comment) => !c.parentCommentId || !state.commentById.has(c.parentCommentId));
 
     (g as any).treeKarma = calculateTreeKarma(
       g.postId,
@@ -156,7 +147,19 @@ export const buildPostGroups = (
       cutoff
     );
     (g as any).postedAt = post.postedAt || new Date().toISOString();
+
+    if ((g as any).treeKarma === -Infinity) {
+      Logger.warn(`Post group ${g.postId} has Tree-Karma -Infinity (no unread items found in its tree).`);
+    }
   });
+
+  // [PR-FILTER-01] Filter out "Fully Read" posts:
+  // - A post is fully read if its Tree-Karma is -Infinity (no unread items in tree)
+  groupsList = groupsList.filter(g => (g as any).treeKarma !== -Infinity);
+
+  // Final unread post count based on visible groups
+  const visiblePostIds = new Set(groupsList.map(g => g.postId));
+  const finalUnreadPostIds = new Set([...unreadPostIds].filter(id => visiblePostIds.has(id)));
 
   // Sort by Tree-Karma descending, then by date descending
   groupsList.sort((a, b) => {
@@ -172,7 +175,7 @@ export const buildPostGroups = (
 
   return {
     groups: sortedGroups,
-    unreadItemCount: unreadIds.size + unreadPostIds.size
+    unreadItemCount: unreadIds.size + finalUnreadPostIds.size
   };
 };
 
@@ -225,6 +228,7 @@ const renderHelpSection = (showHelp: boolean): string => {
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
             <li><strong>[^]</strong> Find parent · <strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
+            <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
           </ul>
         </div>
 

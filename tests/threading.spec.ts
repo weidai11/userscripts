@@ -59,6 +59,43 @@ test.describe('Power Reader Threading', () => {
         await expect(child).toBeAttached();
     });
 
+    test('[PR-NEST-04.1] Multi-level missing parent chain preserves descendants', async ({ page }) => {
+        const now = new Date().toISOString();
+        const comments = [
+            {
+                _id: 'child-chain',
+                postId: 'post1',
+                postedAt: now,
+                htmlBody: '<p>Leaf comment</p>',
+                parentCommentId: 'missing-2',
+                parentComment: {
+                    _id: 'missing-2',
+                    parentCommentId: 'missing-1',
+                    parentComment: {
+                        _id: 'missing-1',
+                        parentCommentId: null
+                    }
+                },
+                user: { username: 'U' },
+                post: { _id: 'post1', title: 'Post 1' }
+            }
+        ];
+
+        await initPowerReader(page, {
+            testMode: true,
+            comments
+        });
+
+        const placeholder1 = page.locator('.pr-comment[data-id="missing-1"][data-placeholder="1"]');
+        const placeholder2 = placeholder1.locator('> .pr-replies > .pr-comment[data-id="missing-2"][data-placeholder="1"]');
+        const child = placeholder2.locator('> .pr-replies > .pr-comment[data-id="child-chain"]');
+
+        await expect(placeholder1).toBeAttached();
+        await expect(placeholder2).toBeAttached();
+        await expect(child).toBeAttached();
+        await expect(child).toContainText('Leaf comment');
+    });
+
     test('[PR-NEST-05] Thread structure nests correctly with placeholders and mixed depths', async ({ page }) => {
         const basePost = { _id: 'post1', title: 'Post 1' };
         const now = new Date().toISOString();

@@ -332,14 +332,14 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 - Uses `commentReplies` view recursively or full thread fetch logic.
 - Merges fetched comments into state.
 - Re-renders the post group.
-- **Hiding Rule**: Hidden if the comment has 0 children OR if all its children are already loaded in state.
+- **Disable Rule**: Always rendered, but disabled if the comment has 0 descendants (`directChildrenCount == 0`) OR if all its **descendants** are already loaded in state (recursive check, not just direct children). Tooltip explains why.
 
 **[PR-CMTBTN-02]** **Load Parents & Scroll** (`[t]`):
 - **Combined Action**: "Trace to Root".
 - **Primary Function**: Scrolls to the top-level ancestor (Root) of the thread.
 - **Data Loading**: If the top-level ancestor (or any intermediate parent) is missing from the state, it **recursively fetches** the missing parents from the server before scrolling.
 - **Viewport**: After loading/scrolling, flashes the root comment with `.pr-highlight-parent`.
-- **Hiding Rule**: Hidden if the comment is already at the top level (no parent).
+- **Disable Rule**: Always rendered, but disabled if the comment is already at the top level (no parent). Tooltip: "Already at top level".
 
 **[PR-CMTBTN-03]** **Send to AI Studio** (`[g]`):
 - Triggers the Google AI Studio integration for this comment.
@@ -349,6 +349,7 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 
 **Button Rendering:**
 - Buttons appear in this order: `[g]` `[r]` `[t]` ... `[^]` `[−]` `[+]`
+- **Visibility Policy**: Action buttons MUST never be hidden, only disabled (with `cursor: not-allowed` and reduced opacity). Disabled buttons MUST have a tooltip explaining why they are disabled.
 - **Tooltips**: All buttons MUST have descriptive tooltips (e.g., "[t]" -> "Load parents and scroll to root").
 - **Author Controls**: `[↑]` / `[↓]` must have tooltips explaining they affect author preferences.
 
@@ -537,6 +538,18 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
+### 26. Forum Header Injection
+
+**[PR-INJECT-01]** The userscript injects a link to the Power Reader into the main site header on all forum pages (matching `*`).
+
+- **Target Container**: `.Header-rightHeaderItems`
+- **Link Text**: "POWER Reader" (with "POWER" styled as a badge: dark background, bold white text).
+- **Placement**: Positioned after the search bar (if present) or at the start of the right-side items.
+- **Hydration Safety**: Injection is delayed by 2 seconds after page load or SPA navigation to avoid React hydration mismatches (Error #418).
+- **Mutation Observer**: A `MutationObserver` ensures the link persists during client-side navigation within the forum.
+
+---
+
 ## Technical Requirements
 
 ### Userscript Metadata
@@ -546,8 +559,10 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 // ==UserScript==
 // @name         LW Power Reader
 // @namespace    http://weidai.com/
-// @match        https://www.lesswrong.com/reader*
-// @match        https://forum.effectivealtruism.org/reader*
+// @match        https://www.lesswrong.com/*
+// @match        https://forum.effectivealtruism.org/*
+// @match        https://www.greaterwrong.com/*
+// @match        https://aistudio.google.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -556,5 +571,6 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 // @run-at       document-start
 // @connect      lesswrong.com
 // @connect      forum.effectivealtruism.org
+// @connect      greaterwrong.com
 // ==/UserScript==
 ```

@@ -79,68 +79,6 @@ export const attachEventListeners = (state: ReaderState): void => {
       e.stopPropagation();
       openReactionPicker(target, state);
     }
-    // Post collapse/expand
-    else if (action === 'collapse' && target.classList.contains('pr-post-toggle')) {
-      e.stopPropagation();
-      handlePostCollapse(target, state);
-    }
-    else if (action === 'expand' && target.classList.contains('pr-post-toggle')) {
-      e.stopPropagation();
-      handlePostExpand(target, state);
-    }
-
-    // Author preferences
-    else if (action === 'author-up') {
-      e.stopPropagation();
-      handleAuthorUp(target, state);
-    }
-    else if (action === 'author-down') {
-      e.stopPropagation();
-      handleAuthorDown(target, state);
-    }
-    // Read more
-    else if (action === 'read-more') {
-      e.stopPropagation();
-      handleReadMore(target);
-    }
-    // Load post
-    else if (action === 'load-post') {
-      e.preventDefault();
-      e.stopPropagation();
-      const post = target.closest('.pr-post') as HTMLElement;
-      // Also check if we're in the sticky header
-      const postId = post?.dataset.postId || target.closest('.pr-post-header')?.getAttribute('data-post-id');
-      if (postId) {
-        handleLoadPost(postId, target, state);
-      }
-    }
-    // Post action buttons
-    else if (action === 'toggle-post-body') {
-      e.stopPropagation();
-      handleTogglePostBody(target, state);
-    }
-    else if (action === 'load-all-comments') {
-      e.stopPropagation();
-      handleLoadAllComments(target, state);
-    }
-    else if (action === 'scroll-to-post-top') {
-      e.stopPropagation();
-      const rawTarget = e.target;
-      if (rawTarget instanceof Element && isHeaderInteractive(rawTarget as HTMLElement)) return;
-      handleScrollToPostTop(target, state);
-    }
-    else if (action === 'scroll-to-comments') {
-      e.stopPropagation();
-      handleScrollToComments(target);
-    }
-    else if (action === 'scroll-to-next-post') {
-      e.stopPropagation();
-      handleScrollToNextPost(target);
-    }
-    else if (action === 'send-to-ai-studio') {
-      e.stopPropagation();
-      handleSendToAIStudio(state, e.shiftKey);
-    }
   });
 
   // Click for general interactions
@@ -161,10 +99,71 @@ export const attachEventListeners = (state: ReaderState): void => {
     const action = actionTarget.dataset.action;
     if (actionTarget.classList.contains('disabled')) return;
 
-    if (action === 'collapse' && target.classList.contains('pr-collapse')) {
-      handleCommentCollapse(target);
-    } else if (action === 'expand' && target.classList.contains('pr-expand')) {
-      handleCommentExpand(target);
+    // Post collapse/expand
+    if (action === 'collapse' && actionTarget.classList.contains('pr-post-toggle')) {
+      e.stopPropagation();
+      handlePostCollapse(actionTarget, state);
+    }
+    else if (action === 'expand' && actionTarget.classList.contains('pr-post-toggle')) {
+      e.stopPropagation();
+      handlePostExpand(actionTarget, state);
+    }
+    // Author preferences
+    else if (action === 'author-up') {
+      e.stopPropagation();
+      handleAuthorUp(actionTarget, state);
+    }
+    else if (action === 'author-down') {
+      e.stopPropagation();
+      handleAuthorDown(actionTarget, state);
+    }
+    // Read more
+    else if (action === 'read-more') {
+      e.stopPropagation();
+      handleReadMore(actionTarget);
+    }
+    // Load post
+    else if (action === 'load-post') {
+      e.preventDefault();
+      e.stopPropagation();
+      const post = actionTarget.closest('.pr-post') as HTMLElement;
+      // Also check if we're in the sticky header
+      const postId = post?.dataset.postId || actionTarget.closest('.pr-post-header')?.getAttribute('data-post-id');
+      if (postId) {
+        handleLoadPost(postId, actionTarget, state);
+      }
+    }
+    // Post action buttons
+    else if (action === 'toggle-post-body') {
+      e.stopPropagation();
+      handleTogglePostBody(actionTarget, state);
+    }
+    else if (action === 'load-all-comments') {
+      e.stopPropagation();
+      handleLoadAllComments(actionTarget, state);
+    }
+    else if (action === 'scroll-to-post-top') {
+      e.stopPropagation();
+      const rawTarget = e.target;
+      if (rawTarget instanceof Element && isHeaderInteractive(rawTarget as HTMLElement)) return;
+      handleScrollToPostTop(actionTarget, state);
+    }
+    else if (action === 'scroll-to-comments') {
+      e.stopPropagation();
+      handleScrollToComments(actionTarget);
+    }
+    else if (action === 'scroll-to-next-post') {
+      e.stopPropagation();
+      handleScrollToNextPost(actionTarget);
+    }
+    else if (action === 'send-to-ai-studio') {
+      e.stopPropagation();
+      handleSendToAIStudio(state, e.shiftKey);
+    }
+    else if (action === 'collapse' && actionTarget.classList.contains('pr-collapse')) {
+      handleCommentCollapse(actionTarget);
+    } else if (action === 'expand' && actionTarget.classList.contains('pr-expand')) {
+      handleCommentExpand(actionTarget);
     }
     else if (action === 'expand-placeholder') {
       e.preventDefault();

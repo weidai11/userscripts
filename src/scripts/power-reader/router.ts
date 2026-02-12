@@ -5,9 +5,10 @@
 import { Logger } from './utils/logger';
 import { handleAIStudio } from './utils/ai-studio-handler';
 
-export type RouteResult = 
+export type RouteResult =
   | { type: 'reader'; path: 'main' | 'reset' }
   | { type: 'ai-studio' }
+  | { type: 'forum-injection' }
   | { type: 'skip' };
 
 /**
@@ -32,9 +33,9 @@ export const getRoute = (): RouteResult => {
   }
 
   // LessWrong / EA Forum / GreaterWrong
-  const isForumDomain = 
-    host.includes('lesswrong.com') || 
-    host.includes('forum.effectivealtruism.org') || 
+  const isForumDomain =
+    host.includes('lesswrong.com') ||
+    host.includes('forum.effectivealtruism.org') ||
     host.includes('greaterwrong.com');
 
   if (!isForumDomain) {
@@ -42,7 +43,7 @@ export const getRoute = (): RouteResult => {
   }
 
   if (!pathname.startsWith('/reader')) {
-    return { type: 'skip' };
+    return { type: 'forum-injection' };
   }
 
   // /reader/reset - clear state and show setup

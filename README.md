@@ -7,6 +7,7 @@ A modern reimagining of the classic chronological reader, built for speed and co
 
 - **Chronological Density**: Uses `allRecentComments` with date-based pagination for a gap-free experience.
 - **Deep Thread Context**: Auto-fetches missing parent chains for deep links.
+- **Site-wide Integration**: Accessible via a "POWER Reader" link injected into the main forum header on all pages.
 - **Power Navigation**: Hotkeys like `[e]` (expand), `[a]` (load all), `[r]` (replies), `[t]` (trace to root).
 - **Rich Reactions**: Independent Agreement voting and full "Pro" reaction (Insightful, Crux, etc.) support.
 - **Advanced Filtering**: Author favoring, karma thresholds, and "Fully Read" thread hiding.
@@ -28,7 +29,7 @@ jj git push --bookmark main
 ### Development Workflow
 1.  **Start Dev Server**: `npm run dev:power-reader` (PowerReader) or `npm run dev:playground`.
 2.  **Install Loader**: Visit `http://localhost:5173/` and install the Tampermonkey loader script.
-3.  **Visit Site**: Go to [lesswrong.com/reader](https://www.lesswrong.com/reader). The script takes over the `/reader` URL.
+3.  **Visit Site**: Go to any forum page (e.g. [LessWrong](https://www.lesswrong.com)). Use the "POWER Reader" link in the header or visit `/reader` directly.
 4.  **Edit & Reload**: Changes to `src/` trigger automatic reloads via HMR.
 
 ## 🛠 Tech Stack

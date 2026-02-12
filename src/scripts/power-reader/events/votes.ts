@@ -15,7 +15,7 @@ import {
   type VoteResponse,
 } from '../utils/voting';
 import type { Comment } from '../../../shared/graphql/queries';
-import { renderComment } from '../render/comment';
+import { renderComment, highlightQuotes } from '../render/comment';
 import { renderReactions } from '../utils/rendering';
 import { Logger } from '../utils/logger';
 
@@ -203,6 +203,28 @@ export const syncVoteToState = (
 
     // Also re-render reactions if they might have changed
     refreshReactions(commentId, state);
+
+    // Refresh body to show highlighted quotes
+    refreshCommentBody(commentId, state);
+  }
+};
+
+/**
+ * Re-render comment body to show highlights
+ */
+export const refreshCommentBody = (commentId: string, state: ReaderState): void => {
+  const comment = state.commentById.get(commentId);
+  if (!comment) return;
+
+  const el = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
+  if (!el) return;
+
+  const bodyEl = el.querySelector('.pr-comment-body');
+  if (bodyEl && comment.htmlBody) {
+    bodyEl.innerHTML = highlightQuotes(
+      comment.htmlBody,
+      comment.extendedScore as any
+    );
   }
 };
 

@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.515] - 2026-02-12
+
+### Added
+- **Forum Header Injection**: The Power Reader is now accessible from any forum page via a "POWER Reader" link injected into the main site header.
+- **Site-wide Integration**: Updated `@match` patterns to enable the script on all LessWrong, EA Forum, and GreaterWrong pages.
+
+### Changed
+- **Action Button Visibility**: `[r]` (Load Replies) and `[t]` (Trace to Root) buttons are now always rendered. When inactive, they show as disabled with explanatory tooltips (e.g., "Already at top level").
+- **Improved Load Descendants**: The `[r]` action now automatically resolves missing ancestor chains before fetching the thread, ensuring the true root is used for the full thread load.
+- **Event Unification**: Moved post-level interactions (toggle body, scroll to top) from `mousedown` to `click` for better consistency and test stability.
+
+### Fixed
+- **Implicit Read Logic ([PR-READ-07])**: Fixed a critical bug where the `__LOAD_RECENT__` sentinel value was being compared as a date string, causing all posts to be incorrectly treated as implicitly read during the initial load.
+- **Tree-Karma Calculation**: Fixed a bug where comments with undefined `baseScore` resulted in `NaN` comparisons, causing entire threads to be incorrectly filtered out.
+- **Unread Item Counting**: Refined the status bar counter to correctly account for session cutoffs and Tree-Karma filtering.
+- **Sticky Header Scrolling**: Improved scroll-correction logic for post expansion and collapse actions from the sticky header, ensuring the viewport accurately returns to the post header.
+- **Inline Reactions**: Fixed an issue where highlighted quotes would not update immediately after voting.
+- **Header Injection Hydration**: Replaced fragile 2-second timeout with MutationObserver-based detection of the header container, making injection reliable on slow connections.
+- **Tree-Karma Type Safety**: Added explicit `Number()` cast for the root `baseScore` parameter in `calculateTreeKarma` to match the cast already applied to child scores, preventing string comparison bugs.
+- **Trace-to-Root Scroll Decision**: Added a `requestAnimationFrame` wait before the `isElementFullyVisible` check in `[t]`, ensuring the browser has painted freshly-inserted DOM before `elementFromPoint` is called.
+
+## [1.2.495] - 2026-02-12
+
+### Fixed
+- **Implicit Read Logic ([PR-READ-07])**: Fixed a critical bug where the `__LOAD_RECENT__` sentinel value was being compared as a date string, causing all posts to be incorrectly treated as implicitly read during the initial load.
+- **Tree-Karma Calculation**: Fixed a bug where comments with undefined `baseScore` (e.g. in some API responses or mocks) resulted in `NaN` comparisons, causing the entire thread's Karma to be validly calculated as `-Infinity` and thus filtered out.
+- **Inline Reactions**: Fixed an issue where highlighted quotes for inline reactions would not appear immediately after voting, requiring a page refresh.
+- **Test Infrastructure**: improved test data setup in `navigation-expansion.spec.ts` to correctly model nested comment structures for parent chain reconstruction.
+
+## [1.2.490] - 2026-02-12
+
+### Changed
+- **Button Visibility Policy**: `[r]` (Load Replies) and `[t]` (Trace to Root) buttons are now always rendered, never hidden. When inactive, they show as disabled with a tooltip explaining why (e.g., "No replies to load", "Already at top level").
+- **[r] Disable Logic**: `[r]` now checks all **descendants** recursively (not just direct children) before disabling. It only disables when every node in the subtree has all its children loaded.
+
 ## [1.2.489] - 2026-02-10
 
 ### Improved

@@ -139,6 +139,13 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Solution**: In `ReadTracker.ts`, we perform a specialized check for `.pr-post` items. We extract the bounding box of the `.pr-post-content` (the body) instead of the whole post group. If the body has been scrolled past, the post is marked read, even if dozens of unread comments remain visible below it.
 - **Gotcha**: If the post body is collapsed or missing (header-only post), we fall back to checking the `.pr-post-header` instead. This ensures header-only posts are still marked read correctly.
 
+### Forum Injection & Hydration Safety
+- **Context**: Injecting links into a live React application (like the LessWrong forum) is risky because React's "Hydration" process expects the DOM to exactly match its server-rendered state. If a userscript modifies the DOM too early, React may crash with a "Hydration Mismatch" (Error #418).
+- **Solution**: 
+    1. **Delay**: Wait 2 seconds after `window.load` before performing the initial injection.
+    2. **Guarded Observer**: Use a `MutationObserver` to maintain the link during SPA navigations, but only act if the initial hydration window has passed.
+    3. **Pre-Injection Check**: Always verify `document.getElementById('link-id')` is missing before injecting to avoid duplicates.
+
 ### Layout Sizing in Dynamic Grids (The Width: 0 Hack)
 - **Problem**: A flexbox list with `flex-wrap: wrap` and `width: 50%` items will try to expand its container to accommodate the longest un-wrapped label, breaking a parent container that is supposed to be sized by a different child (the grid).
 - **Solution**: Apply `width: 0; min-width: 100%` to the wrapping container. This trick forces the flex container to ignore its children's intrinsic width when the parent is calculating its own `fit-content` size, effectively making the container "follow" the width dictated by other elements (like a fixed-width grid header) while still filling the available 100% once the parent size is decided.

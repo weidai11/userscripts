@@ -85,17 +85,27 @@ const syncPostToggleButtons = (post: Element, isCollapsed: boolean): void => {
 export const handlePostCollapse = (target: HTMLElement, state: ReaderState): void => {
   const postId = getPostIdFromTarget(target);
   if (!postId) return;
-  const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
+  const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
   if (!post) return;
 
-  // If collapsed from sticky header, scroll to the original header FIRST
-  // before the page height shrinks, to prevent scroll clamping issues.
   const isFromSticky = !!target.closest('.pr-sticky-header');
+  let headerTop: number | null = null;
+
   if (isFromSticky) {
-    handleScrollToPostTop(target, state);
+    const postHeader = post.querySelector('.pr-post-header') as HTMLElement;
+    if (postHeader) {
+      headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+    }
   }
 
   collapsePost(post);
+
+  if (headerTop !== null) {
+    window.scrollTo({
+      top: headerTop,
+      behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+    });
+  }
 };
 
 /**
@@ -104,16 +114,23 @@ export const handlePostCollapse = (target: HTMLElement, state: ReaderState): voi
 export const handlePostExpand = (target: HTMLElement, state: ReaderState): void => {
   const postId = getPostIdFromTarget(target);
   if (!postId) return;
-  const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
+  const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
   if (!post) return;
 
-  // If expanded from sticky header, scroll back to original header
   const isFromSticky = !!target.closest('.pr-sticky-header');
-  if (isFromSticky) {
-    handleScrollToPostTop(target, state);
-  }
 
   expandPost(post);
+
+  if (isFromSticky) {
+    const postHeader = post.querySelector('.pr-post-header') as HTMLElement;
+    if (postHeader) {
+      const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({
+        top: headerTop,
+        behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+      });
+    }
+  }
 };
 
 /**
@@ -508,7 +525,7 @@ export const handleLoadPost = async (
 export const handleTogglePostBody = async (target: HTMLElement, state: ReaderState): Promise<void> => {
   const postId = getPostIdFromTarget(target);
   if (!postId) return;
-  const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+  const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
   if (!postEl) return;
 
   // Find the actual button to update its text/title
@@ -516,9 +533,6 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
 
   // Sticky Header Logic: If clicked from sticky header, also scroll back to post
   const isFromSticky = !!target.closest('.pr-sticky-header');
-  if (isFromSticky) {
-    handleScrollToPostTop(target, state);
-  }
 
   let container = postEl.querySelector('.pr-post-body-container') as HTMLElement;
 
@@ -564,6 +578,18 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
         newBtn.title = 'Collapse post body';
       }
 
+      if (isFromSticky) {
+        const freshPostEl = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
+        const postHeader = freshPostEl?.querySelector('.pr-post-header') as HTMLElement;
+        if (postHeader) {
+          const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+          window.scrollTo({
+            top: newHeaderTop,
+            behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+          });
+        }
+      }
+
       Logger.info(`Loaded and expanded post body for ${postId}`);
       return;
     } catch (err) {
@@ -586,6 +612,17 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
     const overlay = container.querySelector('.pr-read-more-overlay') as HTMLElement;
     if (overlay) overlay.style.display = 'flex';
     if (eBtn) eBtn.title = 'Expand post body';
+  }
+
+  if (isFromSticky) {
+    const postHeader = postEl.querySelector('.pr-post-header') as HTMLElement;
+    if (postHeader) {
+      const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({
+        top: newHeaderTop,
+        behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+      });
+    }
   }
 };
 
@@ -631,7 +668,14 @@ export const handleScrollToPostTop = (target: HTMLElement, state: ReaderState): 
       // Find the [e] button and trigger it if it exists and isn't disabled
       const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
       if (eBtn && !eBtn.classList.contains('disabled')) {
-        handleTogglePostBody(eBtn, state);
+        handleTogglePostBody(eBtn, state).then(() => {
+           // Re-scroll to ensure we are still at the top after expansion/load
+           const refreshedTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+           window.scrollTo({
+             top: refreshedTop,
+             behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+           });
+        });
         return;
       }
     }
@@ -678,7 +722,15 @@ export const handleLoadThread = async (target: HTMLElement, state: ReaderState):
     target.textContent = '[...]';
     try {
       let currentParentId: string | null = comment.parentCommentId;
-      while (currentParentId && !state.commentById.has(currentParentId)) {
+      const visited = new Set<string>();
+      while (currentParentId && !visited.has(currentParentId)) {
+        visited.add(currentParentId);
+        const existing = state.commentById.get(currentParentId);
+        if (existing) {
+          // Already loaded — keep walking up to find more gaps
+          currentParentId = existing.parentCommentId || null;
+          continue;
+        }
         const res = await queryGraphQL<GetCommentQuery, GetCommentQueryVariables>(GET_COMMENT, { id: currentParentId });
         const parent = res?.comment?.result as unknown as Comment;
         if (!parent) break;
@@ -800,23 +852,69 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
   const comment = state.commentById.get(commentId);
   if (!comment) return;
 
-  let topLevelId = findTopLevelAncestorId(commentId, state);
-  if (!topLevelId) topLevelId = commentId;
-
   const originalText = target.textContent;
   target.textContent = '[...]';
 
   try {
+    let topLevelId = findTopLevelAncestorId(commentId, state);
+
+    // If ancestry is incomplete locally, walk up via GetComment first so thread load uses true root.
+    if (!topLevelId && comment.parentCommentId) {
+      let currentParentId: string | null = comment.parentCommentId;
+      const visited = new Set<string>();
+      while (currentParentId && !visited.has(currentParentId)) {
+        visited.add(currentParentId);
+        const existing = state.commentById.get(currentParentId);
+        if (existing) {
+          currentParentId = existing.parentCommentId || null;
+          continue;
+        }
+        const parentRes = await queryGraphQL<GetCommentQuery, GetCommentQueryVariables>(GET_COMMENT, { id: currentParentId });
+        const parent = parentRes?.comment?.result as unknown as Comment;
+        if (!parent) break;
+        (parent as any).isContext = true;
+        state.comments.push(parent);
+        rebuildIndexes(state);
+        currentParentId = parent.parentCommentId || null;
+      }
+      topLevelId = findTopLevelAncestorId(commentId, state);
+    }
+
+    if (!topLevelId) topLevelId = commentId;
+
     const res = await queryGraphQL<GetThreadCommentsQuery, GetThreadCommentsQueryVariables>(GET_THREAD_COMMENTS, {
       topLevelCommentId: topLevelId,
       limit: CONFIG.loadMax,
     });
-    const comments = res?.comments?.results || [];
-    const added = mergeComments(comments as Comment[], state);
-    Logger.info(`Load descendants for ${commentId}: ${comments.length} fetched, ${added} new`);
-    if (added > 0 && comment.postId) {
+    const fetchedComments = (res?.comments?.results || []) as Comment[];
+
+    // [r] is an explicit "show me replies" action; keep fetched thread comments expanded.
+    fetchedComments.forEach((c) => {
+      (c as any).forceVisible = true;
+      (c as any).justRevealed = true;
+    });
+
+    const added = mergeComments(fetchedComments, state);
+
+    fetchedComments.forEach((c) => {
+      const inState = state.commentById.get(c._id);
+      if (inState) {
+        (inState as any).forceVisible = true;
+        (inState as any).justRevealed = true;
+      }
+    });
+
+    Logger.info(`Load descendants for ${commentId}: ${fetchedComments.length} fetched, ${added} new`);
+    if ((added > 0 || fetchedComments.length > 0) && comment.postId) {
       reRenderPostGroup(comment.postId, state, commentId);
     }
+
+    setTimeout(() => {
+      fetchedComments.forEach((c) => {
+        const inState = state.commentById.get(c._id);
+        if (inState) (inState as any).justRevealed = false;
+      });
+    }, 2000);
   } catch (err) {
     Logger.error('Failed to load descendants', err);
   } finally {
@@ -882,7 +980,11 @@ export const handleLoadParentsAndScroll = async (target: HTMLElement, state: Rea
 
       if (!rootEl) return;
 
-      // Check if root is visible within viewport (accounting for sticky header and other obscuration)
+      // Wait one animation frame so the browser paints the freshly-inserted DOM.
+      // Without this, elementFromPoint (used by isElementFullyVisible) can report
+      // newly-inserted elements as obscured because the layout hasn't been flushed.
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
       const isVisible = isElementFullyVisible(rootEl);
 
       if (!isVisible) {

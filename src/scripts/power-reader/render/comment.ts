@@ -6,7 +6,7 @@ import type { Comment, NamesAttachedReactionsScore, CurrentUserExtendedVote } fr
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
 import { getScoreColor, getRecencyColor } from '../utils/colors';
-import { getReadState, getAuthorPreferences, isRead } from '../utils/storage';
+import { getReadState, getAuthorPreferences, isRead, getLoadFrom } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { renderVoteButtons, renderReactions, escapeHtml } from '../utils/rendering';
 import { Logger } from '../utils/logger';
@@ -77,13 +77,21 @@ export const renderCommentTree = (
   comment: Comment,
   state: ReaderState,
   allComments: Comment[],
-  allCommentIds?: Set<string>
+  allCommentIds?: Set<string>,
+  childrenByParentId?: Map<string, Comment[]>
 ): string => {
   const idSet = allCommentIds ?? new Set(allComments.map(c => c._id));
+  const childrenIndex = childrenByParentId ?? state.childrenByParentId;
   // Use indexed children lookup
-  const replies = state.childrenByParentId.get(comment._id) ?? [];
+  const replies = childrenIndex.get(comment._id) ?? [];
   // Filter to only include comments that are in the current render set
   const visibleReplies = replies.filter(r => idSet.has(r._id));
+
+  // [PR-READ-07] Check for implicit read based on cutoff
+  const cutoff = getLoadFrom();
+  const isImplicitlyRead = (item: { postedAt?: string }) => {
+    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
+  };
 
   if (visibleReplies.length > 0) {
     const readState = getReadState();
@@ -91,10 +99,11 @@ export const renderCommentTree = (
       r.treeKarma = calculateTreeKarma(
         r._id,
         r.baseScore || 0,
-        readState[r._id] === 1,
-        state.childrenByParentId.get(r._id) || [],
+        readState[r._id] === 1 || isImplicitlyRead(r),
+        childrenIndex.get(r._id) || [],
         readState,
-        state.childrenByParentId
+        childrenIndex,
+        cutoff
       );
     });
 
@@ -108,10 +117,30 @@ export const renderCommentTree = (
   }
 
   const repliesHtml = visibleReplies.length > 0
-    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet)).join('')}</div>`
+    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet, childrenIndex)).join('')}</div>`
     : '';
 
   return renderComment(comment, state, repliesHtml);
+};
+
+/**
+ * Check if all descendants of a comment are already loaded.
+ * Uses an iterative stack-based approach for efficiency.
+ */
+const hasAllDescendantsLoaded = (commentId: string, state: ReaderState): boolean => {
+  const stack = [commentId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    const comment = state.commentById.get(id);
+    const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
+    if (directChildrenCount <= 0) continue;
+    const loadedChildren = state.childrenByParentId.get(id) || [];
+    if (loadedChildren.length < directChildrenCount) return false;
+    for (const child of loadedChildren) {
+      stack.push(child._id);
+    }
+  }
+  return true;
 };
 
 /**
@@ -252,8 +281,23 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
 
   const hasParent = !!comment.parentCommentId;
   const totalChildren = (comment as any).directChildrenCount || 0;
-  const loadedChildren = state.childrenByParentId.get(comment._id) || [];
-  const showLoadReplies = totalChildren > 0 && loadedChildren.length < totalChildren;
+  // [r] button: always rendered, disabled when no replies or all loaded
+  let rDisabled: boolean;
+  let rTooltip: string;
+  if (totalChildren <= 0) {
+    rDisabled = true;
+    rTooltip = 'No replies to load';
+  } else if (hasAllDescendantsLoaded(comment._id, state)) {
+    rDisabled = true;
+    rTooltip = 'All replies already loaded in current feed';
+  } else {
+    rDisabled = false;
+    rTooltip = 'Load all replies from server (Shortkey: r)';
+  }
+
+  // [t] button: always rendered, disabled when already at top level
+  const tDisabled = !hasParent;
+  const tTooltip = tDisabled ? 'Already at top level' : 'Load parents and scroll to root (Shortkey: t)';
 
   return `
     <div class="${classes}" 
@@ -277,8 +321,8 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
         </span>
         <span class="pr-comment-controls">
           <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
-          ${showLoadReplies ? `<span class="pr-comment-action text-btn" data-action="load-descendants" title="Load all replies">[r]</span>` : ''}
-          ${hasParent ? `<span class="pr-comment-action text-btn" data-action="load-parents-and-scroll" title="Load parents and scroll to root">[t]</span>` : ''}
+          <span class="pr-comment-action text-btn ${rDisabled ? 'disabled' : ''}" data-action="load-descendants" title="${rTooltip}">[r]</span>
+          <span class="pr-comment-action text-btn ${tDisabled ? 'disabled' : ''}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
           <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
           <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
           <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>

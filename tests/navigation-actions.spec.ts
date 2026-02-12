@@ -178,11 +178,11 @@ test.describe('Comment Action Buttons', () => {
             console.log('BEFORE LOAD: initialTop:', initialTop, 'initialScrollY:', initialScrollY);
         }
 
-        const btn = page.locator('.pr-comment[data-id="c2"] [data-action="load-descendants"]');
+        const btn = page.locator('.pr-comment[data-id="c2"] > .pr-comment-meta [data-action="load-descendants"]');
         await btn.click();
 
-        // Wait for loading to finish - button should be hidden because children are now loaded
-        await expect(btn).not.toBeAttached({ timeout: 10000 });
+        // Wait for loading to finish - button should be disabled because all descendants are now loaded
+        await expect(btn).toHaveClass(/disabled/, { timeout: 10000 });
 
         await expect(page.locator('.pr-comment[data-id="c1"]')).toBeVisible();
         await expect(page.locator('.pr-comment[data-id="c3"]')).toBeVisible();
@@ -227,5 +227,81 @@ test.describe('Comment Action Buttons', () => {
         }
         expect(c1Top).toBeLessThan(500);
         await expect(c1).toHaveClass(/pr-highlight-parent/);
+    });
+
+    test('[PR-CMTBTN-01.1] [r] should resolve missing ancestors before thread fetch', async ({ page }) => {
+        const posts = [{ _id: 'p1', title: 'P1', postedAt: new Date().toISOString() }];
+        const initialComments = [
+            {
+                _id: 'c3',
+                postId: 'p1',
+                parentCommentId: 'c2',
+                topLevelCommentId: 'c1',
+                htmlBody: 'C3',
+                user: { username: 'U3' },
+                directChildrenCount: 1,
+                postedAt: new Date().toISOString()
+            }
+        ];
+
+        const c1 = {
+            _id: 'c1',
+            postId: 'p1',
+            parentCommentId: null,
+            topLevelCommentId: 'c1',
+            htmlBody: 'C1',
+            user: { username: 'U1' },
+            postedAt: new Date().toISOString()
+        };
+        const c2 = {
+            _id: 'c2',
+            postId: 'p1',
+            parentCommentId: 'c1',
+            topLevelCommentId: 'c1',
+            htmlBody: 'C2',
+            user: { username: 'U2' },
+            postedAt: new Date().toISOString()
+        };
+        const c3 = initialComments[0];
+        const c4 = {
+            _id: 'c4',
+            postId: 'p1',
+            parentCommentId: 'c3',
+            topLevelCommentId: 'c1',
+            htmlBody: 'C4',
+            user: { username: 'U4' },
+            postedAt: new Date().toISOString()
+        };
+
+        await setupMockEnvironment(page, {
+            posts,
+            comments: initialComments,
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('query GetComment')) {
+                    if (variables.id === 'c2') return { data: { comment: { result: ${JSON.stringify(c2)} } } };
+                    if (variables.id === 'c1') return { data: { comment: { result: ${JSON.stringify(c1)} } } };
+                }
+                if (query.includes('query GetThreadComments')) {
+                    if (variables.topLevelCommentId === 'c1') {
+                        return { data: { comments: { results: ${JSON.stringify([c1, c2, c3, c4])} } } };
+                    }
+                    return { data: { comments: { results: ${JSON.stringify([c3, c4])} } } };
+                }
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader', { waitUntil: 'domcontentloaded' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const btn = page.locator('.pr-comment[data-id="c3"] [data-action="load-descendants"]');
+        await expect(btn).toBeVisible();
+        await btn.click();
+
+        await expect(page.locator('.pr-comment[data-id="c1"] > .pr-comment-body')).toContainText('C1');
+        await expect(page.locator('.pr-comment[data-id="c2"] > .pr-comment-body')).toContainText('C2');
+        await expect(page.locator('.pr-comment[data-id="c4"] > .pr-comment-body')).toContainText('C4');
+        await expect(page.locator('.pr-comment[data-id="c2"][data-placeholder="1"]')).toHaveCount(0);
     });
 });

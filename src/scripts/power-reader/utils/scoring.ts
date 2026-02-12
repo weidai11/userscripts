@@ -105,7 +105,8 @@ export function calculateTreeKarma(
   cutoffDate?: string
 ): number {
   let hasUnread = !isRead;
-  let maxKarma = isRead ? -Infinity : baseScore;
+  const initialScore = Number(baseScore) || 0;
+  let maxKarma = isRead ? -Infinity : initialScore;
 
   // Search queue for BFS traversal of the tree
   const queue = [...children];
@@ -120,14 +121,16 @@ export function calculateTreeKarma(
 
     // Is it read? (Explicitly or implicitly)
     let currentIsRead = readState[current._id] === 1;
-    if (!currentIsRead && cutoffDate && current.postedAt < cutoffDate) {
+    // Check cutoff (ignore if sentinel value)
+    if (!currentIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && current.postedAt < cutoffDate) {
       currentIsRead = true;
     }
 
     if (!currentIsRead) {
       hasUnread = true;
-      if (current.baseScore > maxKarma) {
-        maxKarma = current.baseScore;
+      const score = Number(current.baseScore) || 0;
+      if (score > maxKarma) {
+        maxKarma = score;
       }
     }
 

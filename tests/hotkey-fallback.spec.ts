@@ -4,15 +4,15 @@ import { initPowerReader } from './helpers/setup';
 test.describe('Hotkey Fallback: PR-HK-07', () => {
     test('[PR-HK-07] pressing "n" over a comment triggers the [n] action on the parent post', async ({ page }) => {
         const posts = [
-            { _id: 'p1', title: 'Post 1', htmlBody: '<div style="height: 2000px">Post 1 Content</div>', postedAt: new Date(Date.now() - 1000).toISOString() },
-            { _id: 'p2', title: 'Post 2', htmlBody: '<div style="height: 2000px">Post 2 Content</div>', postedAt: new Date(Date.now() - 2000).toISOString() }
+            { _id: 'p1', title: 'Post 1', htmlBody: '<div style="height: 2000px">Post 1 Content</div>', postedAt: new Date().toISOString() },
+            { _id: 'p2', title: 'Post 2', htmlBody: '<div style="height: 2000px">Post 2 Content</div>', postedAt: new Date(Date.now() - 10000).toISOString() }
         ];
         const comments = [
             {
                 _id: 'c1',
                 postId: 'p1',
                 htmlBody: '<p>Comment over p1</p>',
-                postedAt: new Date().toISOString(),
+                postedAt: new Date(Date.now() - 20000).toISOString(),
                 user: { username: 'Author' },
                 post: { _id: 'p1', title: 'Post 1' }
             }
@@ -39,20 +39,16 @@ test.describe('Hotkey Fallback: PR-HK-07', () => {
         // We can check the scroll position or just verify the log if we use verbose
         // Better: verify that window.scrollTo was called with p2's header top.
 
-        // Find p2 header top
         const p2Header = page.locator('.pr-post[data-id="p2"] .pr-post-header');
-        const p2Box = await p2Header.boundingBox();
-        const expectedTop = p2Box?.y || 0;
 
         // Press 'n'
         await page.keyboard.press('n');
 
-        // Check scroll position (give it some time for smooth scroll or use instant in test mode)
-        await page.waitForTimeout(200);
-
         // Check if next post header is at the top of the viewport
-        const p2HeaderBoxAfter = await p2Header.boundingBox();
-        expect(p2HeaderBoxAfter?.y).toBeCloseTo(0, 0);
+        await expect.poll(async () => {
+            const box = await p2Header.boundingBox();
+            return box?.y ?? Number.NaN;
+        }).toBeCloseTo(0, 0);
     });
 
     test('[PR-HK-07] pressing "e" over a comment toggles parent post body', async ({ page }) => {

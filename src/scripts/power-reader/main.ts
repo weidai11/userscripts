@@ -25,6 +25,7 @@ import { Logger } from './utils/logger';
 
 // Features
 import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
+import { setupHeaderInjection } from './features/headerInjection';
 
 declare const __APP_VERSION__: string;
 
@@ -35,6 +36,11 @@ const initReader = async (): Promise<void> => {
   const route = getRoute();
 
   if (route.type === 'skip') {
+    return;
+  }
+
+  if (route.type === 'forum-injection') {
+    setupHeaderInjection();
     return;
   }
 

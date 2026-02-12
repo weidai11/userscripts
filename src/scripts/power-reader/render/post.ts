@@ -92,6 +92,24 @@ const withMissingParentPlaceholders = (comments: Comment[], state: ReaderState):
   return [...comments, ...placeholdersToAdd.values()];
 };
 
+const buildChildrenIndex = (comments: Comment[]): Map<string, Comment[]> => {
+  const childrenByParentId = new Map<string, Comment[]>();
+
+  comments.forEach((comment) => {
+    const parentId = comment.parentCommentId || '';
+    if (!childrenByParentId.has(parentId)) {
+      childrenByParentId.set(parentId, []);
+    }
+    childrenByParentId.get(parentId)!.push(comment);
+  });
+
+  childrenByParentId.forEach(children => {
+    children.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+  });
+
+  return childrenByParentId;
+};
+
 /**
  * Render a post's full content with truncation
  */
@@ -117,6 +135,7 @@ export const renderPostBody = (post: Post): string => {
  */
 export const renderPostGroup = (group: PostGroup, state: ReaderState): string => {
   const commentsWithPlaceholders = withMissingParentPlaceholders(group.comments, state);
+  const visibleChildrenByParentId = buildChildrenIndex(commentsWithPlaceholders);
 
   const readState = getReadState();
   const commentSet = new Set(commentsWithPlaceholders.map(c => c._id));
@@ -126,7 +145,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
 
   const cutoff = getLoadFrom();
   const isImplicitlyRead = (item: { postedAt?: string }) => {
-    return !!(cutoff && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
+    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
   };
 
   rootComments.forEach((c: any) => {
@@ -134,9 +153,9 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
       c._id,
       c.baseScore || 0,
       readState[c._id] === 1 || isImplicitlyRead(c),
-      state.childrenByParentId.get(c._id) || [],
+      visibleChildrenByParentId.get(c._id) || [],
       readState,
-      state.childrenByParentId,
+      visibleChildrenByParentId,
       cutoff
     );
   });
@@ -150,7 +169,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
   });
 
   const commentsHtml = rootComments.map(c =>
-    renderCommentTree(c, state, commentsWithPlaceholders, commentSet)
+    renderCommentTree(c, state, commentsWithPlaceholders, commentSet, visibleChildrenByParentId)
   ).join('');
 
   const isFullPost = !!(group.fullPost && group.fullPost.htmlBody);

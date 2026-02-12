@@ -18,9 +18,9 @@ const scripts: Record<string, { name: string; match: string[]; entry: string }> 
     'power-reader': {
         name: 'LW Power Reader',
         match: [
-            'https://www.lesswrong.com/reader*',
-            'https://forum.effectivealtruism.org/reader*',
-            'https://www.greaterwrong.com/reader*',
+            'https://www.lesswrong.com/*',
+            'https://forum.effectivealtruism.org/*',
+            'https://www.greaterwrong.com/*',
             'https://aistudio.google.com/*'
         ],
         entry: 'src/scripts/power-reader/main.ts',
@@ -49,7 +49,7 @@ export default defineConfig({
                 match: config.match,
                 author: 'Wei Dai',
                 grant: ['GM_addStyle', 'GM_xmlhttpRequest', 'GM_setValue', 'GM_getValue', 'GM_log'],
-                connect: ['lesswrong.com', 'forum.effectivealtruism.org'],
+                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'greaterwrong.com'],
                 'run-at': 'document-start',
             },
             build: {

@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.489
+// @version    1.2.520
 // @author     Wei Dai
-// @match      https://www.lesswrong.com/reader*
-// @match      https://forum.effectivealtruism.org/reader*
-// @match      https://www.greaterwrong.com/reader*
+// @match      https://www.lesswrong.com/*
+// @match      https://forum.effectivealtruism.org/*
+// @match      https://www.greaterwrong.com/*
 // @match      https://aistudio.google.com/*
 // @connect    lesswrong.com
 // @connect    forum.effectivealtruism.org
+// @connect    greaterwrong.com
 // @grant      GM_addStyle
 // @grant      GM_addValueChangeListener
 // @grant      GM_deleteValue
@@ -235,7 +236,7 @@ reset: () => {
       return { type: "skip" };
     }
     if (!pathname.startsWith("/reader")) {
-      return { type: "skip" };
+      return { type: "forum-injection" };
     }
     if (pathname === "/reader/reset") {
       return { type: "reader", path: "reset" };
@@ -1627,7 +1628,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.489"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.520"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3574,7 +3575,8 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   }
   function calculateTreeKarma(id, baseScore, isRead2, children, readState, childrenByParentId, cutoffDate) {
     let hasUnread = !isRead2;
-    let maxKarma = isRead2 ? -Infinity : baseScore;
+    const initialScore = Number(baseScore) || 0;
+    let maxKarma = isRead2 ? -Infinity : initialScore;
     const queue = [...children];
     const visited = new Set([id]);
     while (queue.length > 0) {
@@ -3582,13 +3584,14 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       if (visited.has(current._id)) continue;
       visited.add(current._id);
       let currentIsRead = readState[current._id] === 1;
-      if (!currentIsRead && cutoffDate && current.postedAt < cutoffDate) {
+      if (!currentIsRead && cutoffDate && cutoffDate !== "__LOAD_RECENT__" && current.postedAt < cutoffDate) {
         currentIsRead = true;
       }
       if (!currentIsRead) {
         hasUnread = true;
-        if (current.baseScore > maxKarma) {
-          maxKarma = current.baseScore;
+        const score = Number(current.baseScore) || 0;
+        if (score > maxKarma) {
+          maxKarma = score;
         }
       }
       const descendants = childrenByParentId.get(current._id);
@@ -3806,20 +3809,26 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
          data-placeholder="1">${repliesHtml}</div>
   `;
   };
-  const renderCommentTree = (comment, state2, allComments, allCommentIds) => {
+  const renderCommentTree = (comment, state2, allComments, allCommentIds, childrenByParentId) => {
     const idSet = allCommentIds ?? new Set(allComments.map((c) => c._id));
-    const replies = state2.childrenByParentId.get(comment._id) ?? [];
+    const childrenIndex = childrenByParentId ?? state2.childrenByParentId;
+    const replies = childrenIndex.get(comment._id) ?? [];
     const visibleReplies = replies.filter((r) => idSet.has(r._id));
+    const cutoff = getLoadFrom();
+    const isImplicitlyRead = (item) => {
+      return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
+    };
     if (visibleReplies.length > 0) {
       const readState = getReadState();
       visibleReplies.forEach((r) => {
         r.treeKarma = calculateTreeKarma(
           r._id,
           r.baseScore || 0,
-          readState[r._id] === 1,
-          state2.childrenByParentId.get(r._id) || [],
+          readState[r._id] === 1 || isImplicitlyRead(r),
+          childrenIndex.get(r._id) || [],
           readState,
-          state2.childrenByParentId
+          childrenIndex,
+          cutoff
         );
       });
       visibleReplies.sort((a, b) => {
@@ -3829,8 +3838,23 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
       });
     }
-    const repliesHtml = visibleReplies.length > 0 ? `<div class="pr-replies">${visibleReplies.map((r) => renderCommentTree(r, state2, allComments, idSet)).join("")}</div>` : "";
+    const repliesHtml = visibleReplies.length > 0 ? `<div class="pr-replies">${visibleReplies.map((r) => renderCommentTree(r, state2, allComments, idSet, childrenIndex)).join("")}</div>` : "";
     return renderComment(comment, state2, repliesHtml);
+  };
+  const hasAllDescendantsLoaded = (commentId, state2) => {
+    const stack = [commentId];
+    while (stack.length > 0) {
+      const id = stack.pop();
+      const comment = state2.commentById.get(id);
+      const directChildrenCount = comment ? comment.directChildrenCount || 0 : 0;
+      if (directChildrenCount <= 0) continue;
+      const loadedChildren = state2.childrenByParentId.get(id) || [];
+      if (loadedChildren.length < directChildrenCount) return false;
+      for (const child of loadedChildren) {
+        stack.push(child._id);
+      }
+    }
+    return true;
   };
   const getUnreadDescendantCount = (commentId, state2, readState) => {
     let count = 0;
@@ -3928,8 +3952,20 @@ true
     const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
     const hasParent = !!comment.parentCommentId;
     const totalChildren = comment.directChildrenCount || 0;
-    const loadedChildren = state2.childrenByParentId.get(comment._id) || [];
-    const showLoadReplies = totalChildren > 0 && loadedChildren.length < totalChildren;
+    let rDisabled;
+    let rTooltip;
+    if (totalChildren <= 0) {
+      rDisabled = true;
+      rTooltip = "No replies to load";
+    } else if (hasAllDescendantsLoaded(comment._id, state2)) {
+      rDisabled = true;
+      rTooltip = "All replies already loaded in current feed";
+    } else {
+      rDisabled = false;
+      rTooltip = "Load all replies from server (Shortkey: r)";
+    }
+    const tDisabled = !hasParent;
+    const tTooltip = tDisabled ? "Already at top level" : "Load parents and scroll to root (Shortkey: t)";
     return `
     <div class="${classes}" 
          data-id="${comment._id}" 
@@ -3952,8 +3988,8 @@ true
         </span>
         <span class="pr-comment-controls">
           <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
-          ${showLoadReplies ? `<span class="pr-comment-action text-btn" data-action="load-descendants" title="Load all replies">[r]</span>` : ""}
-          ${hasParent ? `<span class="pr-comment-action text-btn" data-action="load-parents-and-scroll" title="Load parents and scroll to root">[t]</span>` : ""}
+          <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
+          <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
           <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
           <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
           <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
@@ -4027,6 +4063,20 @@ true
     if (placeholdersToAdd.size === 0) return comments;
     return [...comments, ...placeholdersToAdd.values()];
   };
+  const buildChildrenIndex = (comments) => {
+    const childrenByParentId = new Map();
+    comments.forEach((comment) => {
+      const parentId = comment.parentCommentId || "";
+      if (!childrenByParentId.has(parentId)) {
+        childrenByParentId.set(parentId, []);
+      }
+      childrenByParentId.get(parentId).push(comment);
+    });
+    childrenByParentId.forEach((children) => {
+      children.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+    });
+    return childrenByParentId;
+  };
   const renderPostBody = (post) => {
     let bodyContent = post.htmlBody || "<i>(No content)</i>";
     bodyContent = highlightQuotes(bodyContent, post.extendedScore);
@@ -4043,6 +4093,7 @@ true
   };
   const renderPostGroup = (group, state2) => {
     const commentsWithPlaceholders = withMissingParentPlaceholders(group.comments, state2);
+    const visibleChildrenByParentId = buildChildrenIndex(commentsWithPlaceholders);
     const readState = getReadState();
     const commentSet = new Set(commentsWithPlaceholders.map((c) => c._id));
     const rootComments = commentsWithPlaceholders.filter(
@@ -4050,16 +4101,16 @@ true
     );
     const cutoff = getLoadFrom();
     const isImplicitlyRead = (item) => {
-      return !!(cutoff && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
+      return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
     };
     rootComments.forEach((c) => {
       c.treeKarma = calculateTreeKarma(
         c._id,
         c.baseScore || 0,
         readState[c._id] === 1 || isImplicitlyRead(c),
-        state2.childrenByParentId.get(c._id) || [],
+        visibleChildrenByParentId.get(c._id) || [],
         readState,
-        state2.childrenByParentId,
+        visibleChildrenByParentId,
         cutoff
       );
     });
@@ -4070,7 +4121,7 @@ true
       return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
     });
     const commentsHtml = rootComments.map(
-      (c) => renderCommentTree(c, state2, commentsWithPlaceholders, commentSet)
+      (c) => renderCommentTree(c, state2, commentsWithPlaceholders, commentSet, visibleChildrenByParentId)
     ).join("");
     const isFullPost = !!(group.fullPost && group.fullPost.htmlBody);
     const postToRender = group.fullPost || {
@@ -4744,10 +4795,15 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const unreadIds = new Set();
     const parentIds = new Set();
     const cutoff = getLoadFrom();
+    const isImplicitlyRead = (item) => {
+      return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
+    };
     sortedComments.forEach((c) => {
       const isContext = c.isContext;
       const isLocallyRead = isRead(c._id, readState, c.postedAt);
-      if (isContext || !isLocallyRead) {
+      const implicit = isImplicitlyRead(c);
+      const commentIsRead = isLocallyRead || implicit;
+      if (isContext || !commentIsRead) {
         if (!isContext) unreadIds.add(c._id);
         let currentId = c._id;
         const visited = new Set();
@@ -4763,7 +4819,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const idsToShow = new Set([...unreadIds, ...parentIds]);
     const unreadPostIds = new Set();
     posts.forEach((p) => {
-      const readStatus = isRead(p._id, readState, p.postedAt);
+      const readStatus = isRead(p._id, readState, p.postedAt) || isImplicitlyRead(p);
       if (!readStatus) {
         unreadPostIds.add(p._id);
       }
@@ -4795,21 +4851,11 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       postGroups.get(postId).comments.push(comment);
     });
     let groupsList = Array.from(postGroups.values());
-    groupsList = groupsList.filter((g) => {
-      const postRecord = state2.postById.get(g.postId);
-      const post = postRecord || g.fullPost || { _id: g.postId };
-      const isPostRead = isRead(g.postId, readState, post.postedAt);
-      const hasUnreadComment = g.comments.some((c) => unreadIds.has(c._id));
-      if (isPostRead && !hasUnreadComment) {
-        return false;
-      }
-      return true;
-    });
     groupsList.forEach((g) => {
       const postRecord = state2.postById.get(g.postId);
       const post = postRecord || g.fullPost || { _id: g.postId, baseScore: 0 };
-      const isPostRead = isRead(g.postId, readState, post.postedAt);
-      const rootCommentsOfPost = (state2.childrenByParentId.get("") || []).filter((c) => c.postId === g.postId);
+      const isPostRead = isRead(g.postId, readState, post.postedAt) || isImplicitlyRead(post);
+      const rootCommentsOfPost = g.comments.filter((c) => !c.parentCommentId || !state2.commentById.has(c.parentCommentId));
       g.treeKarma = calculateTreeKarma(
         g.postId,
         post.baseScore || 0,
@@ -4820,7 +4866,13 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         cutoff
       );
       g.postedAt = post.postedAt || ( new Date()).toISOString();
+      if (g.treeKarma === -Infinity) {
+        Logger.warn(`Post group ${g.postId} has Tree-Karma -Infinity (no unread items found in its tree).`);
+      }
     });
+    groupsList = groupsList.filter((g) => g.treeKarma !== -Infinity);
+    const visiblePostIds = new Set(groupsList.map((g) => g.postId));
+    const finalUnreadPostIds = new Set([...unreadPostIds].filter((id) => visiblePostIds.has(id)));
     groupsList.sort((a, b) => {
       const tkA = a.treeKarma;
       const tkB = b.treeKarma;
@@ -4831,7 +4883,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     groupsList.forEach((g) => sortedGroups.set(g.postId, g));
     return {
       groups: sortedGroups,
-      unreadItemCount: unreadIds.size + unreadPostIds.size
+      unreadItemCount: unreadIds.size + finalUnreadPostIds.size
     };
   };
   const renderHelpSection = (showHelp) => {
@@ -4880,6 +4932,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
             <li><strong>[^]</strong> Find parent · <strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
+            <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
           </ul>
         </div>
 
@@ -4939,7 +4992,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const showHelp = !helpCollapsed;
     let html = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.489"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
       <div class="pr-status">
         Loaded: ${state2.comments.length} comments & ${state2.primaryPostsCount}/${state2.posts.length} posts | 
         Unread Items: <span id="pr-unread-count">${unreadItemCount}</span> | 
@@ -5080,7 +5133,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.489"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -5209,6 +5262,20 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       });
       updateVoteUI(commentId, response);
       refreshReactions(commentId, state2);
+      refreshCommentBody(commentId, state2);
+    }
+  };
+  const refreshCommentBody = (commentId, state2) => {
+    const comment = state2.commentById.get(commentId);
+    if (!comment) return;
+    const el = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
+    if (!el) return;
+    const bodyEl = el.querySelector(".pr-comment-body");
+    if (bodyEl && comment.htmlBody) {
+      bodyEl.innerHTML = highlightQuotes(
+        comment.htmlBody,
+        comment.extendedScore
+      );
     }
   };
   const refreshReactions = (commentId, state2) => {
@@ -5710,10 +5777,20 @@ currentCommentId = null;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
     if (!post) return;
     const isFromSticky = !!target.closest(".pr-sticky-header");
+    let headerTop = null;
     if (isFromSticky) {
-      handleScrollToPostTop(target, state2);
+      const postHeader = post.querySelector(".pr-post-header");
+      if (postHeader) {
+        headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+      }
     }
     collapsePost(post);
+    if (headerTop !== null) {
+      window.scrollTo({
+        top: headerTop,
+        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    }
   };
   const handlePostExpand = (target, state2) => {
     const postId = getPostIdFromTarget(target);
@@ -5721,10 +5798,17 @@ currentCommentId = null;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
     if (!post) return;
     const isFromSticky = !!target.closest(".pr-sticky-header");
-    if (isFromSticky) {
-      handleScrollToPostTop(target, state2);
-    }
     expandPost(post);
+    if (isFromSticky) {
+      const postHeader = post.querySelector(".pr-post-header");
+      if (postHeader) {
+        const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+        window.scrollTo({
+          top: headerTop,
+          behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+        });
+      }
+    }
   };
   const handleCommentCollapse = (target) => {
     const comment = target.closest(".pr-comment");
@@ -6015,9 +6099,6 @@ currentCommentId = null;
     if (!postEl) return;
     const eBtn = postEl.querySelector('[data-action="toggle-post-body"]');
     const isFromSticky = !!target.closest(".pr-sticky-header");
-    if (isFromSticky) {
-      handleScrollToPostTop(target, state2);
-    }
     let container = postEl.querySelector(".pr-post-body-container");
     if (!container) {
       if (eBtn) eBtn.textContent = "[...]";
@@ -6049,6 +6130,17 @@ currentCommentId = null;
           newBtn.textContent = "[e]";
           newBtn.title = "Collapse post body";
         }
+        if (isFromSticky) {
+          const freshPostEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+          const postHeader = freshPostEl?.querySelector(".pr-post-header");
+          if (postHeader) {
+            const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+            window.scrollTo({
+              top: newHeaderTop,
+              behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+            });
+          }
+        }
         Logger.info(`Loaded and expanded post body for ${postId}`);
         return;
       } catch (err) {
@@ -6069,6 +6161,16 @@ currentCommentId = null;
       const overlay = container.querySelector(".pr-read-more-overlay");
       if (overlay) overlay.style.display = "flex";
       if (eBtn) eBtn.title = "Expand post body";
+    }
+    if (isFromSticky) {
+      const postHeader = postEl.querySelector(".pr-post-header");
+      if (postHeader) {
+        const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+        window.scrollTo({
+          top: newHeaderTop,
+          behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+        });
+      }
     }
   };
   const handleLoadAllComments = async (target, state2) => {
@@ -6104,7 +6206,13 @@ currentCommentId = null;
       if (Math.abs(headerTop - currentScroll) < 5) {
         const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]');
         if (eBtn && !eBtn.classList.contains("disabled")) {
-          handleTogglePostBody(eBtn, state2);
+          handleTogglePostBody(eBtn, state2).then(() => {
+            const refreshedTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+            window.scrollTo({
+              top: refreshedTop,
+              behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+            });
+          });
           return;
         }
       }
@@ -6144,7 +6252,14 @@ currentCommentId = null;
       target.textContent = "[...]";
       try {
         let currentParentId = comment.parentCommentId;
-        while (currentParentId && !state2.commentById.has(currentParentId)) {
+        const visited = new Set();
+        while (currentParentId && !visited.has(currentParentId)) {
+          visited.add(currentParentId);
+          const existing = state2.commentById.get(currentParentId);
+          if (existing) {
+            currentParentId = existing.parentCommentId || null;
+            continue;
+          }
           const res = await queryGraphQL(GET_COMMENT, { id: currentParentId });
           const parent = res?.comment?.result;
           if (!parent) break;
@@ -6248,21 +6363,58 @@ currentCommentId = null;
     if (!commentId) return;
     const comment = state2.commentById.get(commentId);
     if (!comment) return;
-    let topLevelId = findTopLevelAncestorId(commentId, state2);
-    if (!topLevelId) topLevelId = commentId;
     const originalText = target.textContent;
     target.textContent = "[...]";
     try {
+      let topLevelId = findTopLevelAncestorId(commentId, state2);
+      if (!topLevelId && comment.parentCommentId) {
+        let currentParentId = comment.parentCommentId;
+        const visited = new Set();
+        while (currentParentId && !visited.has(currentParentId)) {
+          visited.add(currentParentId);
+          const existing = state2.commentById.get(currentParentId);
+          if (existing) {
+            currentParentId = existing.parentCommentId || null;
+            continue;
+          }
+          const parentRes = await queryGraphQL(GET_COMMENT, { id: currentParentId });
+          const parent = parentRes?.comment?.result;
+          if (!parent) break;
+          parent.isContext = true;
+          state2.comments.push(parent);
+          rebuildIndexes(state2);
+          currentParentId = parent.parentCommentId || null;
+        }
+        topLevelId = findTopLevelAncestorId(commentId, state2);
+      }
+      if (!topLevelId) topLevelId = commentId;
       const res = await queryGraphQL(GET_THREAD_COMMENTS, {
         topLevelCommentId: topLevelId,
         limit: CONFIG.loadMax
       });
-      const comments = res?.comments?.results || [];
-      const added = mergeComments(comments, state2);
-      Logger.info(`Load descendants for ${commentId}: ${comments.length} fetched, ${added} new`);
-      if (added > 0 && comment.postId) {
+      const fetchedComments = res?.comments?.results || [];
+      fetchedComments.forEach((c) => {
+        c.forceVisible = true;
+        c.justRevealed = true;
+      });
+      const added = mergeComments(fetchedComments, state2);
+      fetchedComments.forEach((c) => {
+        const inState = state2.commentById.get(c._id);
+        if (inState) {
+          inState.forceVisible = true;
+          inState.justRevealed = true;
+        }
+      });
+      Logger.info(`Load descendants for ${commentId}: ${fetchedComments.length} fetched, ${added} new`);
+      if ((added > 0 || fetchedComments.length > 0) && comment.postId) {
         reRenderPostGroup(comment.postId, state2, commentId);
       }
+      setTimeout(() => {
+        fetchedComments.forEach((c) => {
+          const inState = state2.commentById.get(c._id);
+          if (inState) inState.justRevealed = false;
+        });
+      }, 2e3);
     } catch (err) {
       Logger.error("Failed to load descendants", err);
     } finally {
@@ -6311,6 +6463,7 @@ currentCommentId = null;
           rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
         }
         if (!rootEl) return;
+        await new Promise((resolve) => requestAnimationFrame(resolve));
         const isVisible = isElementFullyVisible(rootEl);
         if (!isVisible) {
           smartScrollTo(rootEl, false);
@@ -6636,49 +6789,6 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       } else if (action === "open-picker") {
         e.stopPropagation();
         openReactionPicker(target, state2);
-      } else if (action === "collapse" && target.classList.contains("pr-post-toggle")) {
-        e.stopPropagation();
-        handlePostCollapse(target, state2);
-      } else if (action === "expand" && target.classList.contains("pr-post-toggle")) {
-        e.stopPropagation();
-        handlePostExpand(target, state2);
-      } else if (action === "author-up") {
-        e.stopPropagation();
-        handleAuthorUp(target, state2);
-      } else if (action === "author-down") {
-        e.stopPropagation();
-        handleAuthorDown(target, state2);
-      } else if (action === "read-more") {
-        e.stopPropagation();
-        handleReadMore(target);
-      } else if (action === "load-post") {
-        e.preventDefault();
-        e.stopPropagation();
-        const post = target.closest(".pr-post");
-        const postId = post?.dataset.postId || target.closest(".pr-post-header")?.getAttribute("data-post-id");
-        if (postId) {
-          handleLoadPost(postId, target, state2);
-        }
-      } else if (action === "toggle-post-body") {
-        e.stopPropagation();
-        handleTogglePostBody(target, state2);
-      } else if (action === "load-all-comments") {
-        e.stopPropagation();
-        handleLoadAllComments(target, state2);
-      } else if (action === "scroll-to-post-top") {
-        e.stopPropagation();
-        const rawTarget = e.target;
-        if (rawTarget instanceof Element && isHeaderInteractive(rawTarget)) return;
-        handleScrollToPostTop(target, state2);
-      } else if (action === "scroll-to-comments") {
-        e.stopPropagation();
-        handleScrollToComments(target);
-      } else if (action === "scroll-to-next-post") {
-        e.stopPropagation();
-        handleScrollToNextPost(target);
-      } else if (action === "send-to-ai-studio") {
-        e.stopPropagation();
-        handleSendToAIStudio(state2, e.shiftKey);
       }
     });
     document.addEventListener("click", (e) => {
@@ -6693,10 +6803,53 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       if (!actionTarget) return;
       const action = actionTarget.dataset.action;
       if (actionTarget.classList.contains("disabled")) return;
-      if (action === "collapse" && target.classList.contains("pr-collapse")) {
-        handleCommentCollapse(target);
-      } else if (action === "expand" && target.classList.contains("pr-expand")) {
-        handleCommentExpand(target);
+      if (action === "collapse" && actionTarget.classList.contains("pr-post-toggle")) {
+        e.stopPropagation();
+        handlePostCollapse(actionTarget);
+      } else if (action === "expand" && actionTarget.classList.contains("pr-post-toggle")) {
+        e.stopPropagation();
+        handlePostExpand(actionTarget);
+      } else if (action === "author-up") {
+        e.stopPropagation();
+        handleAuthorUp(actionTarget, state2);
+      } else if (action === "author-down") {
+        e.stopPropagation();
+        handleAuthorDown(actionTarget, state2);
+      } else if (action === "read-more") {
+        e.stopPropagation();
+        handleReadMore(actionTarget);
+      } else if (action === "load-post") {
+        e.preventDefault();
+        e.stopPropagation();
+        const post = actionTarget.closest(".pr-post");
+        const postId = post?.dataset.postId || actionTarget.closest(".pr-post-header")?.getAttribute("data-post-id");
+        if (postId) {
+          handleLoadPost(postId, actionTarget, state2);
+        }
+      } else if (action === "toggle-post-body") {
+        e.stopPropagation();
+        handleTogglePostBody(actionTarget, state2);
+      } else if (action === "load-all-comments") {
+        e.stopPropagation();
+        handleLoadAllComments(actionTarget, state2);
+      } else if (action === "scroll-to-post-top") {
+        e.stopPropagation();
+        const rawTarget = e.target;
+        if (rawTarget instanceof Element && isHeaderInteractive(rawTarget)) return;
+        handleScrollToPostTop(actionTarget, state2);
+      } else if (action === "scroll-to-comments") {
+        e.stopPropagation();
+        handleScrollToComments(actionTarget);
+      } else if (action === "scroll-to-next-post") {
+        e.stopPropagation();
+        handleScrollToNextPost(actionTarget);
+      } else if (action === "send-to-ai-studio") {
+        e.stopPropagation();
+        handleSendToAIStudio(state2, e.shiftKey);
+      } else if (action === "collapse" && actionTarget.classList.contains("pr-collapse")) {
+        handleCommentCollapse(actionTarget);
+      } else if (action === "expand" && actionTarget.classList.contains("pr-expand")) {
+        handleCommentExpand(actionTarget);
       } else if (action === "expand-placeholder") {
         e.preventDefault();
         e.stopPropagation();
@@ -6741,9 +6894,103 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }, { passive: true });
     attachHotkeyListeners(state2);
   };
+  const injectReaderLink = () => {
+    const container = document.querySelector(".Header-rightHeaderItems");
+    if (!container) return;
+    if (document.getElementById("pr-header-link")) return;
+    if (!document.getElementById("pr-header-injection-styles")) {
+      GM_addStyle(`
+      #pr-header-link {
+        transition: opacity 0.2s !important;
+      }
+      #pr-header-link:hover {
+        opacity: 0.7 !important;
+        text-decoration: none !important;
+      }
+    `);
+      const styleMarker = document.createElement("div");
+      styleMarker.id = "pr-header-injection-styles";
+      styleMarker.style.display = "none";
+      document.head.appendChild(styleMarker);
+    }
+    const link = document.createElement("a");
+    link.id = "pr-header-link";
+    link.href = "/reader";
+    link.className = "MuiButtonBase-root MuiButton-root MuiButton-text UsersMenu-userButtonRoot";
+    link.style.marginRight = "12px";
+    link.style.textDecoration = "none";
+    link.style.color = "inherit";
+    link.style.display = "inline-flex";
+    link.style.alignItems = "center";
+    link.innerHTML = `
+    <span class="MuiButton-label">
+      <span class="UsersMenu-userButtonContents" style="display: flex; align-items: center; gap: 6px;">
+        <span style="
+          background: #333; 
+          color: #fff; 
+          padding: 2px 5px; 
+          border-radius: 3px; 
+          font-size: 0.75em; 
+          font-weight: 900;
+          letter-spacing: 0.5px;
+          line-height: 1;
+        ">POWER</span>
+        <span style="font-weight: 500;">Reader</span>
+      </span>
+    </span>
+  `;
+    const searchBar = container.querySelector(".SearchBar-root");
+    if (searchBar) {
+      searchBar.after(link);
+    } else {
+      container.prepend(link);
+    }
+    Logger.debug("Header Injection: Reader link injected");
+  };
+  const setupHeaderInjection = () => {
+    let isHydrated = false;
+    const detectHydration = () => {
+      if (document.querySelector(".Header-rightHeaderItems")) {
+        isHydrated = true;
+        injectReaderLink();
+        return;
+      }
+    };
+    if (document.readyState === "complete") {
+      detectHydration();
+    } else {
+      window.addEventListener("load", detectHydration);
+    }
+    const observer = new MutationObserver(() => {
+      if (!isHydrated) {
+        if (document.querySelector(".Header-rightHeaderItems")) {
+          isHydrated = true;
+          injectReaderLink();
+        }
+        return;
+      }
+      if (!document.getElementById("pr-header-link")) {
+        injectReaderLink();
+      }
+    });
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    } else {
+      const earlyCheck = setInterval(() => {
+        if (document.documentElement) {
+          clearInterval(earlyCheck);
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+        }
+      }, 100);
+    }
+  };
   const initReader = async () => {
     const route = getRoute();
     if (route.type === "skip") {
+      return;
+    }
+    if (route.type === "forum-injection") {
+      setupHeaderInjection();
       return;
     }
     if (route.type === "ai-studio") {
@@ -6785,7 +7032,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.489"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
