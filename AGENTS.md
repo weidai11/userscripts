@@ -10,8 +10,9 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 ## 🏗 Structure & VCS
 - **VCS**: This repository uses Jujutsu. Common commands:
   - `jj st` (status), `jj log` (history), `jj diff` (changes), `jj desc -m "msg"` (set commit message)
-  - `jj bookmark move main --to "@"` (update branch — quote `@` for PowerShell)
-  - `jj git push` (sync to remote), `jj file untrack <path>` (stop tracking)
+  - `jj bookmark set main` (update branch pointer to current commit BEFORE push)
+  - `jj git push` (sync changed bookmarks to remote)
+  - **PowerShell Note**: Quote `@` if used (e.g., `jj show '@'`), as it is a reserved symbol.
 - **Folders**:
   - `src/scripts/`: `power-reader/` (main), `playground/` (experimental).
   - `src/shared/`: Shared `graphql/` logic and queries.

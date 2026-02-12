@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.532
+// @version    1.2.537
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1628,7 +1628,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.532"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.537"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -5139,7 +5139,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.537"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -5282,7 +5282,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.537"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -6335,6 +6335,15 @@ currentCommentId = null;
       const comments = res?.comments?.results || [];
       const added = mergeComments(comments, state2, false);
       Logger.info(`Load all comments for post ${postId}: ${comments.length} fetched, ${added} new`);
+      state2.comments.filter((c) => c.postId === postId).forEach((c) => {
+        c.forceVisible = true;
+        c.justRevealed = true;
+      });
+      setTimeout(() => {
+        state2.comments.filter((c) => c.postId === postId).forEach((c) => {
+          c.justRevealed = false;
+        });
+      }, 2e3);
       reRenderPostGroup(postId, state2);
       if (added === 0) {
         Logger.info(`No new comments found for post ${postId}`);
@@ -7181,7 +7190,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.537"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

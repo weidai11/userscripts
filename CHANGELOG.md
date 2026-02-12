@@ -2,7 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.532] - 2026-02-12
+## [1.2.536] - 2026-02-12
+
+### Fixed
+- **Load All Comments ([a])**: Fixed a bug where comments loaded via the `[a]` hotkey (or button) would sometimes appear as blank placeholders if they were older than the session's "Load From" date. These comments are now correctly marked as `forceVisible` to ensure they are fully displayed regardless of their read status.
+
+### Added
+- **Regression Test**: Added `tests/repro-a-hotkey.spec.ts` to verify visibility of comments loaded via `[a]`.
+
+## [1.2.535] - 2026-02-12
 
 ### Added
 - **Test Coverage**: Achieved 100% requirements coverage in the Power Reader test suite, adding tests for:

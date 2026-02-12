@@ -638,9 +638,23 @@ export const handleLoadAllComments = async (target: HTMLElement, state: ReaderSt
       postId,
       limit: CONFIG.loadMax,
     });
-    const comments = res?.comments?.results || [];
-    const added = mergeComments(comments as Comment[], state, false); // Load all should show them full
+    const comments = (res?.comments?.results || []) as Comment[];
+    const added = mergeComments(comments, state, false); // Load all should show them full
     Logger.info(`Load all comments for post ${postId}: ${comments.length} fetched, ${added} new`);
+
+    // [PR-POSTBTN-02] Mark all comments in this post as forceVisible so they are not 
+    // collapsed into placeholders even if they are already read.
+    state.comments.filter(c => c.postId === postId).forEach(c => {
+      (c as any).forceVisible = true;
+      (c as any).justRevealed = true;
+    });
+
+    // Clear reveal animation state after the highlight window.
+    setTimeout(() => {
+      state.comments.filter(c => c.postId === postId).forEach(c => {
+        (c as any).justRevealed = false;
+      });
+    }, 2000);
 
     // Always re-render or at least refresh buttons to clear loading state
     reRenderPostGroup(postId, state);
