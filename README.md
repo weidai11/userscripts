@@ -1,79 +1,43 @@
 # LessWrong Userscripts Workspace
 
-This workspace is designed for fast, modern development of Tampermonkey userscripts, specifically focused on enhancing the **LessWrong** and **Effective Altruism Forum** experience.
+High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 
-## 🚀 Projects
+## 🚀 Key Project: LW Power Reader
+A modern reimagining of the classic chronological reader, built for speed and context.
 
-- **[LW Power Reader](./src/scripts/power-reader/)**: A modern reimagining of the classic LW Power Reader.
-  - *Goal*: High-speed, threaded comment reading with advanced filtering (author favoring, karma thresholds, recency highlighting).
-  - *Features*:
-    - **Agreement Voting**: Compare/Vote on Agreement vs Karma independently.
-    - **Pro Reactions**: Full support for "Insightful", "Crux", etc., including a rich picker and search.
-    - **Inline Reactions**: Select text to "react" to specific parts of a comment (yellow highlight).
-    - **Author Preferences**: Boost or penalize authors to adjust their visibility.
-    - **Smart Loading**: Heuristic-based loading that intelligently switches between "walking" the comment tree and fetching full threads to optimize performance and data usage.
-    - **Recursive Ancestor Context**: Automatically fetches and displays missing parent comments when navigating deep links, ensuring full context is always available.
-    - **Navigation Shortcodes**: Quick-action buttons for power users: `[a]` (Load All), `[c]` (Scroll to Comments), `[n]` (Next Post), `[r]` (Load Replies), `[t]` (Load Parents & Scroll to Root).
-    - **Linear Comment Loading**: Uses `allRecentComments` with `sortBy: "oldest"` and date-based pagination for a reliable, gap-free chronological reading experience.
-    - **Junk Filtering**: Automatically collapses and highlights "rejected" (moderated) comments with a red border.
-    - **Local Read Tracking**: Marks comments as read on scroll; persisted locally without server sync.
-    - **Setup UI**: First-time users pick a starting date via calendar, or load most recent 800 comments.
-  - *Context*: Based on the original [1.0.8 script](./src/scripts/power-reader/old_power_reader.js) by Wei Dai.
-- **[Playground](./src/scripts/playground/)**: A space for experimental helpers (e.g., GraphQL query testing).
+- **Chronological Density**: Uses `allRecentComments` with date-based pagination for a gap-free experience.
+- **Deep Thread Context**: Auto-fetches missing parent chains for deep links.
+- **Power Navigation**: Hotkeys like `[e]` (expand), `[a]` (load all), `[r]` (replies), `[t]` (trace to root).
+- **Rich Reactions**: Independent Agreement voting and full "Pro" reaction (Insightful, Crux, etc.) support.
+- **Advanced Filtering**: Author favoring, karma thresholds, and "Fully Read" thread hiding.
+- **Local State**: Persistence for read tracking and preferences in browser storage.
 
-## 🛠 Tech Stack
-
-- **Vite**: Ultra-fast build tool and dev server.
-- **TypeScript**: Type-safe userscript development.
-- **[vite-plugin-monkey](https://github.com/lisonge/vite-plugin-monkey)**: Handles userscript header generation, asset injection, and HMR.
-- **Shared Code**: Utilities and documentation (like [GRAPHQL_API.md](./src/shared/GRAPHQL_API.md)) are shared across scripts.
-
-## 📖 Development Workflow
-
-### 1. Start the Dev Server
-Run the dev command for the script you are working on:
+## 🏗 VCS & Workflow
+This repository uses **Jujutsu**. Use `jj` for all version control operations.
 
 ```bash
-# For Power Reader
-npm run dev:power-reader
-
-# For Playground
-npm run dev:playground
+# Common jj commands
+jj status
+jj git push --bookmark main
 ```
 
-### 2. Install the Loader
-After starting the server, visit:
-`http://localhost:5173/` (or the specific script port)
+### Development Workflow
+1.  **Start Dev Server**: `npm run dev:power-reader` (PowerReader) or `npm run dev:playground`.
+2.  **Install Loader**: Visit `http://localhost:5173/` and install the Tampermonkey loader script.
+3.  **Visit Site**: Go to [lesswrong.com/reader](https://www.lesswrong.com/reader). The script takes over the `/reader` URL.
+4.  **Edit & Reload**: Changes to `src/` trigger automatic reloads via HMR.
 
-Tampermonkey will prompt you to install the "loader" script. You only need to do this **once**.
+## 🛠 Tech Stack
+- **Vite** + **TypeScript** + **[vite-plugin-monkey](https://github.com/lisonge/vite-plugin-monkey)**.
+- **GraphQL**: Type-safe queries with `graphql-codegen` (runs automatically on `dev`/`build`).
+- **Playwright**: Robust E2E testing suite (100% mocked by default).
 
-### 3. Visit the Reader
-The Power Reader is available at a dedicated URL that we take over:
-[https://www.lesswrong.com/reader](https://www.lesswrong.com/reader)
+## 📜 Documentation & Guides
+- **[GEMINI.md](./GEMINI.md)**: AI-friendly guide to architecture, commands, and conventions.
+- **[TESTING.md](./TESTING.md)**: Workflows for running and debugging the test suite.
+- **[SPEC.md](./src/scripts/power-reader/SPEC.md)**: Detailed feature requirements and UI specifications.
+- **[GRAPHQL_API.md](./src/shared/GRAPHQL_API.md)**: Guide to the LessWrong and EA Forum API.
+- **[NOTES.md](./NOTES.md)**: Technical "gotchas" and environment-specific solutions.
 
-### 3. Fast Iteration
-Leave the dev server running. Files changed in `src/scripts/` will trigger an automatic browser reload (or HMR) via the loader script.
-
-### 4. GraphQL Codegen
-The project uses `graphql-codegen` to generate TypeScript types from your queries.
-- **Automatic**: Runs automatically before `dev` and `build` commands if `queries.ts` or the schema has changed.
-- **Manual**: Run `npm run codegen` to force regeneration.
-- **Schema Update**: Run `npm run update-schema` to fetch the latest API definition from LessWrong.
-
-## 📂 Structure
-
-- `src/scripts/`: Individual userscript projects.
-- `src/shared/`: Shared TypeScript logic, types, and references.
-- `vite.config.ts`: Dynamic configuration that switches the build target based on the `VITE_SCRIPT` environment variable.
-
-## 📜 Development Conventions
-- **No `&&` in PowerShell**: The environment uses PowerShell 5.1 which does not support the `&&` operator. Use `;` or separate command calls instead.
-- **Paths**: Use backslashes `\` for local file paths on Windows, or forward slashes `/` if the tool handles them.
-- **ESM Only**: The project uses `type: "module"`. Avoid `__dirname`; use `import.meta.url` instead.
-- **Live Server Policy**: ONLY `tests/api-sanity.spec.ts` is allowed to hit the live LessWrong/EA Forum servers. All other tests MUST be 100% mocked using `page.route` and `page.addInitScript` to prevent unintended external network requests and 429 errors.
-
-## 📜 References
-- [LessWrong GraphQL API Guide](./src/shared/GRAPHQL_API.md)
-- [LessWrong GraphQL Tutorial](./src/shared/GraphQL_tutorial.md)
-- [Old Power Reader Documentation](./src/scripts/power-reader/old_power_reader_doc.md)
-- [Old Power Reader Source](./src/scripts/power-reader/old_power_reader.js) (Historical reference from 2012)
+## 🔗 References
+[CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./src/scripts/power-reader/old_power_reader_doc.md) | [Old Source](./src/scripts/power-reader/old_power_reader.js)
