@@ -50,6 +50,7 @@ test_server.js
 *.code-workspace
 
 # Temporary and backup files
+GEMINI.md
 *.tmp
 *.bak
 *.old
