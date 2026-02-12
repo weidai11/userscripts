@@ -1,0 +1,285 @@
+import {
+    markAsRead,
+    getReadState,
+    setReadState,
+    getLoadFrom,
+    setLoadFrom,
+} from '../utils/storage';
+import type { AllRecentCommentsResponse } from '../../../shared/graphql/queries';
+import { GET_ALL_RECENT_COMMENTS } from '../../../shared/graphql/queries';
+import { queryGraphQL } from '../../../shared/graphql/client';
+import { Logger } from '../utils/logger';
+
+/**
+ * Service to track read status via scrolling
+ */
+export class ReadTracker {
+    private scrollMarkDelay: number;
+    private commentsDataGetter: () => { postedAt: string, _id: string }[];
+    private postsDataGetter: () => { postedAt?: string, _id: string }[];
+    private initialBatchNewestDateGetter: () => string | null;
+    private pendingReadTimeouts: Record<string, number> = {};
+    private scrollTimeout: number | null = null;
+    private scrollListenerAdded: boolean = false;
+    private isCheckingForMore: boolean = false;
+    private lastCheckedIso: string | null = null;
+    private recheckTimer: number | null = null;
+    private countdownSeconds: number = 0;
+    private hasAdvancedThisBatch: boolean = false;
+
+    constructor(
+        scrollMarkDelay: number,
+        commentsDataGetter: () => { postedAt: string, _id: string }[],
+        postsDataGetter: () => { postedAt?: string, _id: string }[] = () => [],
+        initialBatchNewestDateGetter: () => string | null = () => null
+    ) {
+        this.scrollMarkDelay = scrollMarkDelay;
+        this.commentsDataGetter = commentsDataGetter;
+        this.postsDataGetter = postsDataGetter;
+        this.initialBatchNewestDateGetter = initialBatchNewestDateGetter;
+    }
+
+    public init() {
+        if (this.scrollListenerAdded) return;
+        window.addEventListener('scroll', () => this.handleScroll(), { passive: true });
+        this.scrollListenerAdded = true;
+        this.hasAdvancedThisBatch = false;
+
+        // Initial check: if there are no unread items at startup, check for more immediately
+        setTimeout(() => this.checkInitialState(), 1000);
+    }
+
+    private checkInitialState() {
+        const unreadCountEl = document.getElementById('pr-unread-count');
+        const unreadCount = parseInt(unreadCountEl?.textContent || '0', 10);
+
+        if (unreadCount === 0) {
+            const currentComments = this.commentsDataGetter();
+            if (currentComments.length > 0) {
+                this.advanceAndCheck(currentComments);
+            }
+        }
+    }
+
+    private handleScroll() {
+        if (this.scrollTimeout) {
+            return;
+        }
+
+        this.scrollTimeout = window.setTimeout(() => {
+            this.scrollTimeout = null;
+            this.processScroll();
+        }, 200) as unknown as number;
+    }
+
+    private processScroll() {
+        const items = document.querySelectorAll('.pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)');
+        const readThreshold = 0;
+        const isAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 50;
+
+        Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
+
+        items.forEach(el => {
+            const id = el.getAttribute('data-id');
+            if (!id) return;
+
+            const rect = el.getBoundingClientRect();
+
+            // For posts and comments, we only care if the BODY is scrolled past, not the children/comments below it.
+            let checkRect = rect;
+            if (el.classList.contains('pr-post')) {
+                const body = el.querySelector('.pr-post-content');
+                if (body && !body.classList.contains('collapsed')) {
+                    checkRect = body.getBoundingClientRect();
+                } else {
+                    const header = el.querySelector('.pr-post-header');
+                    if (header) checkRect = header.getBoundingClientRect();
+                }
+            } else if (el.classList.contains('pr-comment')) {
+                const body = el.querySelector('.pr-comment-body');
+                if (body && !el.classList.contains('collapsed')) {
+                    checkRect = body.getBoundingClientRect();
+                } else {
+                    const meta = el.querySelector('.pr-comment-meta');
+                    if (meta) checkRect = meta.getBoundingClientRect();
+                }
+            }
+
+            const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+            const shouldMark = checkRect.bottom < readThreshold || (isAtBottom && isVisible);
+
+            if (shouldMark) {
+                if (!this.pendingReadTimeouts[id]) {
+                    Logger.debug(`processScroll: marking ${id} as read`);
+                    this.pendingReadTimeouts[id] = window.setTimeout(() => {
+                        delete this.pendingReadTimeouts[id];
+                        const currentEl = document.querySelector(`.pr-comment[data-id="${id}"], .pr-item[data-id="${id}"]`);
+                        if (currentEl && !currentEl.classList.contains('read')) {
+                            markAsRead({ [id]: 1 });
+                            currentEl.classList.add('read');
+
+                            // Fixed race condition: Recalculate count from DOM instead of decrementing
+                            const allRemainingUnread = document.querySelectorAll('.pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)');
+                            const newCount = allRemainingUnread.length;
+
+                            const unreadCountEl = document.getElementById('pr-unread-count');
+                            if (unreadCountEl) {
+                                unreadCountEl.textContent = newCount.toString();
+                                Logger.debug(`processScroll: ${id} read, recalculated unread count=${newCount}`);
+
+                                // If we just hit 0 unread while at bottom, trigger server check
+                                const isNowAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
+                                if (newCount === 0 && isNowAtBottom) {
+                                    Logger.debug('processScroll: hit 0 unread at bottom, checking server');
+                                    this.checkInitialState();
+                                }
+                            }
+                        }
+                    }, this.scrollMarkDelay);
+                }
+            } else {
+                if (this.pendingReadTimeouts[id]) {
+                    window.clearTimeout(this.pendingReadTimeouts[id]);
+                    delete this.pendingReadTimeouts[id];
+                }
+            }
+        });
+
+        // Auto-advance session if at bottom
+        const currentComments = this.commentsDataGetter();
+        if (isAtBottom && currentComments.length > 0) {
+            Logger.debug('processScroll: at bottom, advancing');
+            this.advanceAndCheck(currentComments);
+        }
+    }
+
+    private advanceAndCheck(currentComments: { postedAt: string, _id: string }[]) {
+        if (this.hasAdvancedThisBatch) return;
+
+        const initialNewest = this.initialBatchNewestDateGetter();
+        let newestDateStr: string;
+        if (initialNewest) {
+            newestDateStr = initialNewest;
+        } else {
+            const newestComment = currentComments.reduce((prev, current) => {
+                return (new Date(current.postedAt) > new Date(prev.postedAt)) ? current : prev;
+            });
+            newestDateStr = newestComment.postedAt;
+        }
+
+        const date = new Date(newestDateStr);
+        date.setMilliseconds(date.getMilliseconds() + 1);
+        const nextLoadFrom = date.toISOString();
+
+        const currentLoadFrom = getLoadFrom();
+        if (nextLoadFrom !== currentLoadFrom) {
+            Logger.info(`Advancing session start to ${nextLoadFrom}`);
+            setLoadFrom(nextLoadFrom);
+            this.hasAdvancedThisBatch = true;
+
+            // [PR-READ-06] Cleanup: remove read IDs older than the new loadFrom.
+            // Items older than loadFrom will never appear again, so their read marks are stale.
+            const readState = getReadState();
+            const dateByItemId = new Map<string, string | undefined>();
+            currentComments.forEach(c => dateByItemId.set(c._id, c.postedAt));
+            this.postsDataGetter().forEach(p => dateByItemId.set(p._id, p.postedAt));
+
+            const cleanupCutoffTime = new Date(currentLoadFrom).getTime();
+            let removedCount = 0;
+
+            for (const id of Object.keys(readState)) {
+                if (dateByItemId.has(id)) continue; // Keep if in current batch regardless of date
+
+                const postedAt = dateByItemId.get(id);
+                // remove if: 
+                // 1. Not in current batch AND we don't know its date (likely an orphan from previous session)
+                // 2. OR its date is strictly older than the PREVIOUS loadFrom
+                if (!postedAt || new Date(postedAt).getTime() < cleanupCutoffTime) {
+                    delete readState[id];
+                    removedCount++;
+                }
+            }
+
+            if (removedCount > 0) {
+                setReadState(readState);
+                Logger.info(`Cleaned up read state: removed ${removedCount} items older than ${nextLoadFrom}`);
+            }
+        }
+
+        this.checkServerForMore(nextLoadFrom);
+    }
+
+    private startRecheckTimer(afterIso: string) {
+        if (this.recheckTimer) clearInterval(this.recheckTimer);
+
+        this.countdownSeconds = 60;
+        this.updateCountdownMessage(afterIso);
+
+        this.recheckTimer = window.setInterval(() => {
+            this.countdownSeconds--;
+            if (this.countdownSeconds <= 0) {
+                clearInterval(this.recheckTimer!);
+                this.recheckTimer = null;
+                this.checkServerForMore(afterIso, true);
+            } else {
+                this.updateCountdownMessage(afterIso);
+            }
+        }, 1000) as unknown as number;
+    }
+
+    private updateCountdownMessage(afterIso: string) {
+        const msgEl = document.getElementById('pr-bottom-message');
+        if (!msgEl) return;
+        msgEl.style.display = 'block';
+        msgEl.textContent = `All comments have been marked read. No more comments on server. Waiting ${this.countdownSeconds}s for next check, or click here to check again.`;
+        msgEl.onclick = () => {
+            if (this.recheckTimer) clearInterval(this.recheckTimer);
+            this.recheckTimer = null;
+            this.checkServerForMore(afterIso, true);
+        };
+    }
+
+    private async checkServerForMore(afterIso: string, force: boolean = false) {
+        if (this.isCheckingForMore && !force) return;
+        if (this.lastCheckedIso === afterIso && !force) return;
+
+        if (this.recheckTimer && !force) return;
+
+        this.isCheckingForMore = true;
+        this.lastCheckedIso = afterIso;
+
+        const msgEl = document.getElementById('pr-bottom-message');
+        if (!msgEl) return;
+
+        msgEl.style.display = 'block';
+        msgEl.textContent = 'Checking for more comments...';
+        msgEl.className = 'pr-bottom-message';
+        msgEl.onclick = null;
+
+        try {
+            const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
+                after: afterIso,
+                limit: 1,
+                sortBy: 'oldest'
+            }) as AllRecentCommentsResponse;
+
+            const hasMore = (res?.comments?.results?.length || 0) > 0;
+
+            if (hasMore) {
+                msgEl.textContent = 'New comments available! Click here to reload.';
+                msgEl.classList.add('has-more');
+                msgEl.onclick = () => window.location.reload();
+                if (this.recheckTimer) clearInterval(this.recheckTimer);
+                this.recheckTimer = null;
+            } else {
+                this.startRecheckTimer(afterIso);
+            }
+        } catch (e) {
+            Logger.error('Failed to check for more comments:', e);
+            msgEl.textContent = 'Failed to check server. Click to retry.';
+            msgEl.onclick = () => this.checkServerForMore(afterIso, true);
+        } finally {
+            this.isCheckingForMore = false;
+        }
+    }
+}

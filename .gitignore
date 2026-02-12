@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.jj/
+
+# Test reports and results
+playwright-report/
+test-results/
+test_logs/
+last-test-report.json
+
+# Local configuration
+.env
+.env.*
+.env.local
+
+# Tool-specific / Accidental
+-p/
+power_reader_screenshot.png
+reactions_update.txt
+
+# Generated GraphQL files
+src/shared/graphql/lw_schema.json
+src/shared/graphql/lw_schema.graphql
+
+# Local development helpers
+test_server.js
+*.code-workspace
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.old

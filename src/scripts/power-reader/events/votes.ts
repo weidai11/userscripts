@@ -1,0 +1,242 @@
+/**
+ * Vote interaction handling for Power Reader
+ * Unified handling for karma and agreement voting with click/hold differentiation
+ */
+
+import type { ReaderState } from '../state';
+import { syncCommentInState } from '../state';
+import {
+  castKarmaVote,
+  castAgreementVote,
+  calculateNextVoteState,
+  updateVoteUI,
+  type KarmaVote,
+  type AgreementVote,
+  type VoteResponse,
+} from '../utils/voting';
+import type { Comment } from '../../../shared/graphql/queries';
+import { renderComment } from '../render/comment';
+import { renderReactions } from '../utils/rendering';
+import { Logger } from '../utils/logger';
+
+type VoteKind = 'karma' | 'agreement';
+type VoteDir = 'up' | 'down';
+
+interface VoteActionConfig {
+  kind: VoteKind;
+  dir: VoteDir;
+}
+
+const ACTION_TO_VOTE: Record<string, VoteActionConfig> = {
+  'karma-up': { kind: 'karma', dir: 'up' },
+  'karma-down': { kind: 'karma', dir: 'down' },
+  'agree': { kind: 'agreement', dir: 'up' },
+  'disagree': { kind: 'agreement', dir: 'down' },
+};
+
+/**
+ * Handle vote interaction with click/hold differentiation
+ */
+export const handleVoteInteraction = (
+  target: HTMLElement,
+  action: string,
+  state: ReaderState
+): void => {
+  const config = ACTION_TO_VOTE[action];
+  if (!config) return;
+
+  const commentId = target.dataset.commentId;
+  if (!commentId) return;
+
+  const comment = state.commentById.get(commentId);
+  if (!comment) return;
+
+  // Determine current vote state
+  const currentVote = config.kind === 'karma'
+    ? (comment.currentUserVote || 'neutral')
+    : (comment.currentUserExtendedVote?.agreement || 'neutral');
+
+  // Map direction for state calculation
+  const direction = config.kind === 'karma'
+    ? config.dir
+    : (config.dir === 'up' ? 'agree' : 'disagree');
+
+  // Calculate targets
+  const currentVoteStr = String(currentVote ?? 'neutral');
+  const clickTargetState = calculateNextVoteState(currentVoteStr, direction, false);
+  const holdTargetState = calculateNextVoteState(currentVoteStr, direction, true);
+
+  // Optimistic UI Update (immediate mousedown state)
+  applyOptimisticVoteUI(target, currentVoteStr, config.dir);
+
+  let committed = false;
+
+  const cleanup = () => {
+    target.removeEventListener('mouseup', mouseUpHandler);
+    target.removeEventListener('mouseleave', mouseLeaveHandler);
+  };
+
+  // Timer for hold (500ms)
+  const timer = window.setTimeout(async () => {
+    committed = true;
+    cleanup();
+
+    // Apply hold visual state
+    if (holdTargetState.startsWith('big')) {
+      target.classList.add('strong-vote');
+    } else if (holdTargetState === 'neutral') {
+      clearVoteClasses(target);
+    }
+
+    // Execute hold vote
+    const res = await executeVote(commentId, holdTargetState, config.kind, state, comment);
+    if (res) {
+      updateVoteUI(commentId, res);
+      syncVoteToState(state, commentId, res);
+    }
+  }, 500);
+
+  const mouseUpHandler = async () => {
+    if (committed) return;
+    clearTimeout(timer);
+    cleanup();
+
+    // Reset optimistic styles
+    clearVoteClasses(target);
+
+    // Execute click vote
+    const res = await executeVote(commentId, clickTargetState, config.kind, state, comment);
+    if (res) {
+      updateVoteUI(commentId, res);
+      syncVoteToState(state, commentId, res);
+    }
+  };
+
+  const mouseLeaveHandler = () => {
+    if (committed) return;
+    clearTimeout(timer);
+    cleanup();
+
+    // Revert optimistic styles - just clear classes, original state is preserved in DOM
+    clearVoteClasses(target);
+  };
+
+  target.addEventListener('mouseup', mouseUpHandler);
+  target.addEventListener('mouseleave', mouseLeaveHandler);
+};
+
+/**
+ * Apply optimistic vote UI during mousedown
+ */
+const applyOptimisticVoteUI = (target: HTMLElement, currentVote: string, dir: VoteDir): void => {
+  if (currentVote?.startsWith('big')) {
+    target.classList.remove('strong-vote');
+  } else {
+    if (dir === 'up') {
+      target.classList.add('active-up');
+      target.classList.add('agree-active');
+    } else {
+      target.classList.add('active-down');
+      target.classList.add('disagree-active');
+    }
+  }
+};
+
+/**
+ * Clear all vote-related classes from target
+ */
+const clearVoteClasses = (target: HTMLElement): void => {
+  target.classList.remove('active-up', 'active-down', 'agree-active', 'disagree-active', 'strong-vote');
+};
+
+/**
+ * Execute the appropriate vote mutation
+ */
+const executeVote = async (
+  commentId: string,
+  targetState: string,
+  kind: VoteKind,
+  state: ReaderState,
+  comment: any
+): Promise<VoteResponse | null> => {
+  const isLoggedIn = !!state.currentUserId;
+
+  if (kind === 'karma') {
+    return castKarmaVote(
+      commentId,
+      targetState as KarmaVote,
+      isLoggedIn,
+      comment.currentUserExtendedVote
+    );
+  } else {
+    return castAgreementVote(
+      commentId,
+      targetState as AgreementVote,
+      isLoggedIn,
+      comment.currentUserVote as KarmaVote
+    );
+  }
+};
+
+/**
+ * Sync vote response to state and re-render comment
+ */
+export const syncVoteToState = (
+  state: ReaderState,
+  commentId: string,
+  response: VoteResponse
+): void => {
+  const comment = state.commentById.get(commentId);
+  if (comment && response.performVoteComment?.document) {
+    const doc = response.performVoteComment.document;
+    syncCommentInState(state, commentId, {
+      baseScore: doc.baseScore ?? 0,
+      voteCount: doc.voteCount ?? 0,
+      currentUserVote: doc.currentUserVote,
+      extendedScore: doc.extendedScore,
+      afExtendedScore: doc.afExtendedScore,
+      currentUserExtendedVote: doc.currentUserExtendedVote,
+    } as Partial<Comment>);
+
+    // Use updateVoteUI for fine-grained DOM changes to preserve children
+    updateVoteUI(commentId, response);
+
+    // Also re-render reactions if they might have changed
+    refreshReactions(commentId, state);
+  }
+};
+
+/**
+ * Re-render reactions for a single comment
+ */
+export const refreshReactions = (commentId: string, state: ReaderState): void => {
+  const comment = state.commentById.get(commentId);
+  if (!comment) return;
+
+  const el = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
+  if (!el) return;
+
+  const container = el.querySelector('.pr-reactions-container');
+  if (container) {
+    container.innerHTML = renderReactions(
+      comment._id,
+      comment.extendedScore as any,
+      comment.currentUserExtendedVote as any
+    );
+  }
+};
+
+/**
+ * Re-render a single comment in place - DEPRECATED
+ * Use updateVoteUI or specific sub-renders to preserve DOM children
+ */
+export const restyleComment = (commentId: string, state: ReaderState): void => {
+  Logger.warn(`restyleComment called for ${commentId} - this replaces outerHTML and kills children!`);
+  const comment = state.commentById.get(commentId);
+  if (!comment) return;
+
+  const el = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
+  if (!el) return;
+
+  el.outerHTML = renderComment(comment, state);
+};
