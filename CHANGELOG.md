@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.532] - 2026-02-12
+
+### Added
+- **Test Coverage**: Achieved 100% requirements coverage in the Power Reader test suite, adding tests for:
+  - Fully Read Filter (`[PR-POST-12]`)
+  - Ancestor Continuity (`[PR-NEST-06]`)
+  - Automatic Expansion on Navigation (`[PR-NAV-11]`)
+  - Forum Header Injection (`[PR-INJECT-01]`)
+
+### Fixed
+- **Test Infrastructure (EA Forum)**: Updated `setupMockEnvironment` to correctly handle domain-specific storage keys (e.g. `ea-` prefix for EA Forum). This resolves failures in tests using the EA Forum origin, such as wiki tag previews, where the app would previously fail to initialize properly.
+
+## [1.2.531] - 2026-02-12
+
+### Fixed
+- **Cross-Site Preview Safety**: Link previews now validate the domain (LessWrong, EA Forum, or GreaterWrong) before attempting to fetch content, preventing wasteful GraphQL calls for non-forum links found in comments.
+- **SPEC Organization**: Renumbered all 25 sections of `SPEC.md` to be sequential and consistent, resolving long-standing numbering jumps and orphans.
+- **Link Detection Robustness**: Integrated centralized `is*Url` validators into `linkPreviews.ts` for consistent behavior across absolute and relative links.
+- **TypeScript & Codegen Optimization**: Resolved all pre-existing TypeScript errors, including unused variables in `navigation.ts` and duplicate identifiers in `generated/graphql.ts` (optimized by enabling `onlyOperationTypes` in codegen).
+
+## [1.2.526] - 2026-02-12
+
+### Fixed
+- **Intra-Site Link Previews**: Restored functionality for hover previews on intra-site links (posts, authors, and wiki tags) found within comment bodies.
+- **Relative URL Support**: Link detection now robustly handles relative URLs (e.g., `/posts/...`, `/users/...`) which are common in forum comments.
+- **Author-by-Slug Previews**: Added support for previewing author profile links using their username/slug instead of internal ID.
+
+## [1.2.523] - 2026-02-12
+
+### Changed
+- **Documentation Sync**: Synchronized `@src/shared/GRAPHQL_API.md` with the base ForumMagnum documentation, adding missing `af` and `excludeEvents` post filters and the `profileComments` view.
+
+## [1.2.522] - 2026-02-12
+
+### Added
+- **Detailed Status Line**: Status line now shows date range (from `loadFrom` to newest comment), comment breakdown (new · context · hidden), post count with filtered indicator, and user display in a single row with emoji icons.
+- **`StatusStats` Interface**: Exported from `render/index.ts` for type-safe status line data.
+- **Status Line Tests**: New `tests/status-line.spec.ts` with 4 E2E tests covering date range, hidden comments, filtered posts, and recent mode.
+
 ## [1.2.515] - 2026-02-12
 
 ### Added

@@ -30,7 +30,6 @@ test.describe('Coverage Gap Filling', () => {
             { _id: 'c2', postId: 'p1', htmlBody: 'Extra', user: { username: 'B' }, postedAt: new Date().toISOString() }
         ];
 
-        let gqlCalled = false;
         await initPowerReader(page, {
             posts,
             comments: initialComments,
@@ -48,7 +47,6 @@ test.describe('Coverage Gap Filling', () => {
 
         // Wait for it to be ready
         await expect(btn).toBeVisible();
-        const title = await btn.getAttribute('title');
 
         // If it's still disabled, we have a logic bug
         await expect(btn).not.toHaveClass(/disabled/);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.520
+// @version    1.2.532
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1628,7 +1628,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.520"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.532"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2037,6 +2037,20 @@ reset: () => {
         karma
         htmlBio
       }
+    }
+  }
+`
+  );
+  const GET_USER_BY_SLUG = (
+`
+  query GetUserBySlug($slug: String!) {
+    user: GetUserBySlug(slug: $slug) {
+      _id
+      username
+      displayName
+      slug
+      karma
+      htmlBio
     }
   }
 `
@@ -2999,20 +3013,84 @@ hoverDelay: 300,
     div.textContent = str;
     return div.innerHTML;
   }
+  function parseUrl(raw) {
+    try {
+      return new URL(raw, window.location.origin);
+    } catch {
+      return null;
+    }
+  }
+  function isAllowedForumHostname(hostname) {
+    const host = hostname.toLowerCase();
+    return host === "lesswrong.com" || host.endsWith(".lesswrong.com") || host === "forum.effectivealtruism.org" || host.endsWith(".forum.effectivealtruism.org") || host === "greaterwrong.com" || host.endsWith(".greaterwrong.com");
+  }
+  function parseForumUrl(raw) {
+    const u = parseUrl(raw);
+    if (!u) return null;
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!isAllowedForumHostname(u.hostname)) return null;
+    return u;
+  }
   function extractCommentIdFromUrl(url) {
-    const commentIdMatch = url.match(/[?&]commentId=([a-zA-Z0-9]+)/);
-    if (commentIdMatch) return commentIdMatch[1];
-    const hashMatch = url.match(/#([a-zA-Z0-9]+)$/);
-    if (hashMatch) return hashMatch[1];
+    const parsed = parseUrl(url);
+    if (!parsed) return null;
+    const queryId = parsed.searchParams.get("commentId");
+    if (queryId && /^[a-zA-Z0-9_-]+$/.test(queryId)) return queryId;
+    const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
+    if (hash && /^[a-zA-Z0-9_-]+$/.test(hash)) return hash;
     return null;
   }
+  function isCommentUrl(url) {
+    const parsed = parseForumUrl(url);
+    if (!parsed) return false;
+    const hasCommentParam = parsed.searchParams.has("commentId");
+    const hash = parsed.hash.startsWith("#") ? parsed.hash.slice(1) : parsed.hash;
+    const hasCommentHash = /^[a-zA-Z0-9_-]{10,}$/.test(hash);
+    return hasCommentParam || hasCommentHash;
+  }
+  function isPostUrl(url) {
+    const parsed = parseForumUrl(url);
+    if (!parsed) return false;
+    const hasPostPath = /\/posts\/[a-zA-Z0-9_-]+(?:\/|$)/.test(parsed.pathname);
+    if (!hasPostPath) return false;
+    return !isCommentUrl(url);
+  }
+  function isWikiUrl(url) {
+    const parsed = parseForumUrl(url);
+    if (!parsed) return false;
+    const hasWikiPath = /\/(tag|wiki)\/[a-zA-Z0-9-]+(?:\/|$)/.test(parsed.pathname);
+    if (!hasWikiPath) return false;
+    return true;
+  }
+  function isAuthorUrl(url) {
+    const parsed = parseForumUrl(url);
+    if (!parsed) return false;
+    const hasUserPath = /\/users\/[a-zA-Z0-9_-]+(?:\/|$)/.test(parsed.pathname);
+    if (!hasUserPath) return false;
+    return true;
+  }
+  function extractPostIdFromUrl(url) {
+    const parsed = parseUrl(url);
+    if (!parsed) return null;
+    const match = parsed.pathname.match(/\/posts\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  }
+  function extractAuthorSlugFromUrl(url) {
+    const parsed = parseUrl(url);
+    if (!parsed) return null;
+    const match = parsed.pathname.match(/\/users\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  }
   function extractWikiSlugFromUrl(url) {
-    const match = url.match(/\/(tag|wiki)\/([a-zA-Z0-9-]+)/);
+    const parsed = parseUrl(url);
+    if (!parsed) return null;
+    const match = parsed.pathname.match(/\/(tag|wiki)\/([a-zA-Z0-9-]+)/);
     return match ? match[2] : null;
   }
   function createWikiPreviewFetcher(slug) {
     return async () => {
-      const url = `https://www.lesswrong.com/tag/${slug}`;
+      const forumOrigin = parseForumUrl(window.location.href)?.origin || "https://www.lesswrong.com";
+      const url = new URL(`/tag/${slug}`, forumOrigin).toString();
       try {
         const response = await fetch(url);
         const html = await response.text();
@@ -3043,18 +3121,31 @@ hoverDelay: 300,
       if (!user) {
         return '<div class="pr-preview-loading">User not found</div>';
       }
-      return `
-      <div class="pr-preview-header">
-        <strong>${escapeHtml$1(user.displayName || user.username || "Unknown")}</strong>
-        <span style="color: #666; margin-left: 10px;">
-          ${user.karma} karma · @${escapeHtml$1(user.username || "")}
-        </span>
-      </div>
-      <div class="pr-preview-content">
-        ${user.htmlBio || "<i>(No bio provided)</i>"}
-      </div>
-    `;
+      return renderUserPreview(user);
     };
+  }
+  function createAuthorBySlugPreviewFetcher(slug) {
+    return async () => {
+      const response = await queryGraphQL(GET_USER_BY_SLUG, { slug });
+      const user = response.user;
+      if (!user) {
+        return '<div class="pr-preview-loading">User not found</div>';
+      }
+      return renderUserPreview(user);
+    };
+  }
+  function renderUserPreview(user) {
+    return `
+    <div class="pr-preview-header">
+      <strong>${escapeHtml$1(user.displayName || user.username || "Unknown")}</strong>
+      <span style="color: #666; margin-left: 10px;">
+        ${Math.round(user.karma)} karma · @${escapeHtml$1(user.username || "")}
+      </span>
+    </div>
+    <div class="pr-preview-content">
+      ${user.htmlBio || "<i>(No bio provided)</i>"}
+    </div>
+  `;
   }
   const LOGIN_URL = `${window.location.origin}/auth/auth0`;
   async function castKarmaVote(commentId, voteType, isLoggedIn, currentAgreement = null) {
@@ -4203,22 +4294,48 @@ baseScore: 0,
     commentLinks.forEach((link) => {
       const href = link.getAttribute("href");
       if (!href) return;
-      const commentId = extractCommentIdFromUrl(href);
-      if (commentId) {
-        setupHoverPreview(
-          link,
-          createCommentPreviewFetcher(commentId, comments),
-          { type: "comment" }
-        );
-        return;
+      if (isCommentUrl(href)) {
+        const commentId = extractCommentIdFromUrl(href);
+        if (commentId) {
+          setupHoverPreview(
+            link,
+            createCommentPreviewFetcher(commentId, comments),
+            { type: "comment" }
+          );
+          return;
+        }
       }
-      const wikiSlug = extractWikiSlugFromUrl(href);
-      if (wikiSlug) {
-        setupHoverPreview(
-          link,
-          createWikiPreviewFetcher(wikiSlug),
-          { type: "wiki" }
-        );
+      if (isPostUrl(href)) {
+        const postId = extractPostIdFromUrl(href);
+        if (postId) {
+          setupHoverPreview(
+            link,
+            createPostPreviewFetcher(postId),
+            { type: "post" }
+          );
+          return;
+        }
+      }
+      if (isAuthorUrl(href)) {
+        const authorSlug = extractAuthorSlugFromUrl(href);
+        if (authorSlug) {
+          setupHoverPreview(
+            link,
+            createAuthorBySlugPreviewFetcher(authorSlug),
+            { type: "author" }
+          );
+          return;
+        }
+      }
+      if (isWikiUrl(href)) {
+        const wikiSlug = extractWikiSlugFromUrl(href);
+        if (wikiSlug) {
+          setupHoverPreview(
+            link,
+            createWikiPreviewFetcher(wikiSlug),
+            { type: "wiki" }
+          );
+        }
       }
     });
     const parentLinks = document.querySelectorAll(".pr-find-parent");
@@ -4787,6 +4904,16 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       updateNextPostButton(stickyHeader2, stickyPostEl);
     }
   };
+  const formatStatusDate = (iso) => {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const mon = months[d.getMonth()];
+    const day = d.getDate();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${mon} ${day} ${hh}:${mm}`;
+  };
   const buildPostGroups = (comments, posts, state2) => {
     const readState = getReadState();
     const sortedComments = [...comments].sort(
@@ -4870,7 +4997,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         Logger.warn(`Post group ${g.postId} has Tree-Karma -Infinity (no unread items found in its tree).`);
       }
     });
+    const totalGroupsBeforeFilter = groupsList.length;
     groupsList = groupsList.filter((g) => g.treeKarma !== -Infinity);
+    const hiddenPosts = totalGroupsBeforeFilter - groupsList.length;
     const visiblePostIds = new Set(groupsList.map((g) => g.postId));
     const finalUnreadPostIds = new Set([...unreadPostIds].filter((id) => visiblePostIds.has(id)));
     groupsList.sort((a, b) => {
@@ -4881,9 +5010,23 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     });
     const sortedGroups = new Map();
     groupsList.forEach((g) => sortedGroups.set(g.postId, g));
+    const batchCommentIds = new Set(comments.map((c) => c._id));
+    const batchUnreadCount = Array.from(unreadIds).filter((id) => batchCommentIds.has(id)).length;
+    const batchContextCount = Array.from(parentIds).filter((id) => batchCommentIds.has(id) && !unreadIds.has(id)).length;
+    const batchHiddenCount = comments.length - batchUnreadCount - batchContextCount;
+    const stats = {
+      totalComments: comments.length,
+      unreadComments: batchUnreadCount,
+      contextComments: batchContextCount,
+      hiddenComments: batchHiddenCount,
+      totalPosts: posts.length,
+      visiblePosts: groupsList.length,
+      hiddenPosts
+    };
     return {
       groups: sortedGroups,
-      unreadItemCount: unreadIds.size + finalUnreadPostIds.size
+      unreadItemCount: unreadIds.size + finalUnreadPostIds.size,
+      stats
     };
   };
   const renderHelpSection = (showHelp) => {
@@ -4983,20 +5126,26 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   const renderUI = (state2) => {
     const root = document.getElementById("power-reader-root");
     if (!root) return;
-    const { groups: postGroups, unreadItemCount } = buildPostGroups(
+    const { groups: postGroups, unreadItemCount, stats } = buildPostGroups(
       state2.comments,
       state2.posts,
       state2
     );
     const helpCollapsed = GM_getValue("helpCollapsed", false);
     const showHelp = !helpCollapsed;
+    const loadFrom = getLoadFrom();
+    const startDate = loadFrom && loadFrom !== "__LOAD_RECENT__" ? formatStatusDate(loadFrom) : "?";
+    const endDate = state2.initialBatchNewestDate ? formatStatusDate(state2.initialBatchNewestDate) : "now";
+    const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
       <div class="pr-status">
-        Loaded: ${state2.comments.length} comments & ${state2.primaryPostsCount}/${state2.posts.length} posts | 
-        Unread Items: <span id="pr-unread-count">${unreadItemCount}</span> | 
-        ${state2.currentUsername ? `Logged in as: ${state2.currentUsername}` : "Not logged in"}
+        📆 ${startDate} → ${endDate}
+        · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
+        · 💬 ${stats.totalComments} comments (${stats.unreadComments} new · ${stats.contextComments} context · ${stats.hiddenComments} hidden)
+        · 📄 ${stats.visiblePosts} posts${stats.hiddenPosts > 0 ? ` (${stats.hiddenPosts} filtered)` : ""}
+        · ${userLabel}
       </div>
     </div>
     ${renderHelpSection(showHelp)}
@@ -5133,7 +5282,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -5771,7 +5920,7 @@ currentCommentId = null;
       if (expandBtn) expandBtn.style.display = isCollapsed ? "inline" : "none";
     });
   };
-  const handlePostCollapse = (target, state2) => {
+  const handlePostCollapse = (target, _state) => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
@@ -5792,7 +5941,7 @@ currentCommentId = null;
       });
     }
   };
-  const handlePostExpand = (target, state2) => {
+  const handlePostExpand = (target, _state) => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
@@ -6323,7 +6472,7 @@ currentCommentId = null;
         target.textContent = originalText;
         return;
       }
-      let fetched = [];
+      const fetched = [];
       while (missingIds.length > 0) {
         const batch = missingIds.splice(0, 50);
         const res = await queryGraphQL(GET_COMMENTS_BY_IDS, { commentIds: batch });
@@ -7032,7 +7181,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.520"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.532"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

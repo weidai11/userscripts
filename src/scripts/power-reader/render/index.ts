@@ -27,6 +27,33 @@ declare const GM_setValue: (key: string, value: any) => void;
 declare const __APP_VERSION__: string;
 
 /**
+ * Stats returned by buildPostGroups for the status line
+ */
+export interface StatusStats {
+  totalComments: number;
+  unreadComments: number;
+  contextComments: number;
+  hiddenComments: number;
+  totalPosts: number;
+  visiblePosts: number;
+  hiddenPosts: number;
+}
+
+/**
+ * Format an ISO date string for the status line (e.g. "Jan 10 08:30")
+ */
+const formatStatusDate = (iso: string): string => {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const mon = months[d.getMonth()];
+  const day = d.getDate();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${mon} ${day} ${hh}:${mm}`;
+};
+
+/**
  * Build post groups from comments and posts
  * Groups comments by their parent post
  */
@@ -34,7 +61,7 @@ export const buildPostGroups = (
   comments: Comment[],
   posts: Post[],
   state: ReaderState
-): { groups: Map<string, PostGroup>; unreadItemCount: number } => {
+): { groups: Map<string, PostGroup>; unreadItemCount: number; stats: StatusStats } => {
   const readState = getReadState();
 
   // Sort comments newest first
@@ -155,7 +182,9 @@ export const buildPostGroups = (
 
   // [PR-FILTER-01] Filter out "Fully Read" posts:
   // - A post is fully read if its Tree-Karma is -Infinity (no unread items in tree)
+  const totalGroupsBeforeFilter = groupsList.length;
   groupsList = groupsList.filter(g => (g as any).treeKarma !== -Infinity);
+  const hiddenPosts = totalGroupsBeforeFilter - groupsList.length;
 
   // Final unread post count based on visible groups
   const visiblePostIds = new Set(groupsList.map(g => g.postId));
@@ -173,9 +202,26 @@ export const buildPostGroups = (
   const sortedGroups = new Map<string, PostGroup>();
   groupsList.forEach(g => sortedGroups.set(g.postId, g));
 
+  // Compute detailed stats - strictly within the current comments batch
+  const batchCommentIds = new Set(comments.map(c => c._id));
+  const batchUnreadCount = Array.from(unreadIds).filter(id => batchCommentIds.has(id)).length;
+  const batchContextCount = Array.from(parentIds).filter(id => batchCommentIds.has(id) && !unreadIds.has(id)).length;
+  const batchHiddenCount = comments.length - batchUnreadCount - batchContextCount;
+
+  const stats: StatusStats = {
+    totalComments: comments.length,
+    unreadComments: batchUnreadCount,
+    contextComments: batchContextCount,
+    hiddenComments: batchHiddenCount,
+    totalPosts: posts.length,
+    visiblePosts: groupsList.length,
+    hiddenPosts,
+  };
+
   return {
     groups: sortedGroups,
-    unreadItemCount: unreadIds.size + finalUnreadPostIds.size
+    unreadItemCount: unreadIds.size + finalUnreadPostIds.size,
+    stats,
   };
 };
 
@@ -284,7 +330,7 @@ export const renderUI = (state: ReaderState): void => {
   const root = document.getElementById('power-reader-root');
   if (!root) return;
 
-  const { groups: postGroups, unreadItemCount } = buildPostGroups(
+  const { groups: postGroups, unreadItemCount, stats } = buildPostGroups(
     state.comments,
     state.posts,
     state
@@ -294,14 +340,22 @@ export const renderUI = (state: ReaderState): void => {
   const helpCollapsed = GM_getValue('helpCollapsed', false);
   const showHelp = !helpCollapsed;
 
+  // Format date range
+  const loadFrom = getLoadFrom();
+  const startDate = loadFrom && loadFrom !== '__LOAD_RECENT__' ? formatStatusDate(loadFrom) : '?';
+  const endDate = state.initialBatchNewestDate ? formatStatusDate(state.initialBatchNewestDate) : 'now';
+  const userLabel = state.currentUsername ? `👤 ${state.currentUsername}` : '👤 not logged in';
+
   // Build HTML
   let html = `
     <div class="pr-header">
       <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
       <div class="pr-status">
-        Loaded: ${state.comments.length} comments & ${state.primaryPostsCount}/${state.posts.length} posts | 
-        Unread Items: <span id="pr-unread-count">${unreadItemCount}</span> | 
-        ${state.currentUsername ? `Logged in as: ${state.currentUsername}` : 'Not logged in'}
+        📆 ${startDate} → ${endDate}
+        · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
+        · 💬 ${stats.totalComments} comments (${stats.unreadComments} new · ${stats.contextComments} context · ${stats.hiddenComments} hidden)
+        · 📄 ${stats.visiblePosts} posts${stats.hiddenPosts > 0 ? ` (${stats.hiddenPosts} filtered)` : ''}
+        · ${userLabel}
       </div>
     </div>
     ${renderHelpSection(showHelp)}

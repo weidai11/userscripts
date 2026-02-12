@@ -249,7 +249,19 @@ if (normalized < -0.51) HideItem(x);
 
 ---
 
-### 11. Link Behavior
+### 9. Status Line Display
+
+The status line at the top of the reader provides a summary of the current session and loaded data.
+
+- **[PR-STATUS-01]** **Layout**: Displays date range, unread count, comment breakdown, post count, and user information in a single row with emoji icons.
+- **[PR-STATUS-02]** **Date Range**: Shows the range from the `loadFrom` starting point to the newest comment in the initial batch.
+- **[PR-STATUS-03]** **Comment Breakdown**: Shows total comments loaded, with a breakdown of `new` (unread), `context` (read but shown for structure), and `hidden` (read/collapsed).
+- **[PR-STATUS-04]** **Post Count**: Shows the number of visible post groups and an indicator if any posts were filtered out (fully read).
+- **[PR-STATUS-05]** **Logged-in User**: Displays the username of the current authenticated user or a "not logged in" indicator.
+
+---
+
+### 10. Link Behavior
 
 - **[PR-LINK-01]** All external links automatically get `target="_blank"`.
 - **[PR-LINK-02]** Internal anchor links (`#...`) are preserved for in-page navigation.
@@ -257,7 +269,7 @@ if (normalized < -0.51) HideItem(x);
 
 ---
 
-### 12. Sticky Post Header
+### 11. Sticky Post Header
 
 - **[PR-STICKY-01]** When the post header scrolls above viewport but comments are visible, a sticky header appears.
 - **[PR-STICKY-02]** Only one sticky header shows at a time.
@@ -270,7 +282,7 @@ if (normalized < -0.51) HideItem(x);
 
 ---
 
-### 21. Post Header Action Buttons
+### 12. Post Header Action Buttons
 
 Action buttons are displayed in the post header (both sticky and regular), positioned to the **left** of the existing collapse `[−]`/`[+]` buttons.
 
@@ -323,7 +335,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 
 ---
 
-### 22. Comment Header Action Buttons
+### 13. Comment Header Action Buttons
 
 Action buttons are displayed in the comment header's `.pr-comment-controls` span, positioned to the **left** of the existing `[−]`/`[+]`/`[^]` buttons.
 
@@ -406,7 +418,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 13. Quick Help Panel (Collapsible)
+### 14. Quick Help Panel (Collapsible)
 
 - **[PR-HELP-01]** Collapsible panel at top explaining features.
 - **[PR-HELP-02]** First visit: **Expanded** by default.
@@ -417,7 +429,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 14. Logged-In User Detection
+### 15. Logged-In User Detection
 
 - **[PR-USER-01]** Detect current logged-in user via GraphQL `currentUser` query.
 - **[PR-USER-02]** Used to identify "replies to you" (comments where parent author = logged-in user).
@@ -446,6 +458,9 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 #### 17c. Comment Link Preview
 - **[PR-PREV-07]** Detects comment URLs in body and shows full content preview.
+- **[PR-PREV-08]** Detects post URLs in comment body and shows preview.
+- **[PR-PREV-09]** Detects author URLs in comment body and shows preview.
+- [PR-PREV-10] **Wiki Tag Fetch Origin**: Wiki tag previews (e.g. `/tag/alignment`) MUST fetch content from the current forum's origin (`forum.effectivealtruism.org` or `lesswrong.com`) to ensure consistency and correct content resolution.
 
 ---
 
@@ -494,7 +509,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 23. Keyboard Shortcuts (Hotkeys)
+### 22. Keyboard Shortcuts (Hotkeys)
 
 **[PR-HK-01]** **Hover-Triggered Actions**: Pressing a shortcut key while hovering over a post or comment triggers the corresponding action button for that specific item.
 - **[PR-HK-02]** **Post Hotkeys**:
@@ -521,13 +536,13 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 24. GraphQL Codegen & Developer Workflow
+### 23. GraphQL Codegen & Developer Workflow
 
 - **[PR-DEV-01]** **Automated Codegen**: The project uses `tooling/maybe-codegen.js` to automatically run `graphql-codegen` during `dev` and `build` tasks, but ONLY if `queries.ts` or the schema has changed. This maintains type safety while minimizing build overhead.
 
 ---
 
-### 25. Tree-Karma Sorting
+### 24. Tree-Karma Sorting
 
 - **[PR-SORT-01]** **Tree-Karma Definition**: For any item (Post or Comment), its **Tree-Karma** is the maximum `baseScore` among all **unread** items (including the root itself) in the tree rooted at that item.
     - An item is considered "unread" if its ID is not present in the local `ReadTracker` dictionary.
@@ -538,7 +553,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 26. Forum Header Injection
+### 25. Forum Header Injection
 
 **[PR-INJECT-01]** The userscript injects a link to the Power Reader into the main site header on all forum pages (matching `*`).
 

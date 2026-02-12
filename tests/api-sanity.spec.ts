@@ -21,6 +21,7 @@ type GraphQLResponse = {
 };
 
 const clip = (s: string, max = 800): string => (s.length > max ? `${s.slice(0, max)}...` : s);
+const formatErrors = (errors?: GraphQLError[]): string => JSON.stringify(errors ?? [], null, 2);
 
 const postGraphQL = async (
   request: any,
@@ -52,7 +53,7 @@ const postGraphQL = async (
   }
 
   if (json.errors?.length) {
-    console.error(`[api-sanity] ${label} GraphQL errors: ${JSON.stringify(json.errors, null, 2)}`);
+    console.error(`[api-sanity] ${label} GraphQL errors: ${formatErrors(json.errors)}`);
   }
 
   return json;
@@ -273,6 +274,9 @@ test.describe('Live API Sanity (batched)', () => {
     const fieldErrors = json.errors!.filter((e: GraphQLError) =>
       String(e.message || '').includes('Cannot query field'),
     );
-    expect(fieldErrors).toHaveLength(0);
+    expect(
+      fieldErrors,
+      `[api-sanity] VoteMutation schema error. Full server errors:\n${formatErrors(json.errors)}`,
+    ).toHaveLength(0);
   });
 });

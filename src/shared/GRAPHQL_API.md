@@ -138,6 +138,8 @@ Most post views (e.g., `new`, `top`, `magic`) support standard filtering terms h
 - **`before`**: ISO 8601 Date String. Select posts created **strictly before** this date (`$lt`).
 - **`karmaThreshold`**: `Int`. Filter by minimum `baseScore`.
 - **`userId`**: `String`. Filter by author ID.
+- **`af`**: `Boolean`. Filter for Alignment Forum posts.
+- **`excludeEvents`**: `Boolean`. Exclude event posts.
 
 **Example: Fetch New Posts After Date**
 ```graphql
@@ -324,6 +326,7 @@ The `input.terms` object supports these parameters (though support varies by vie
 *   **`recentComments`**: Optimized for recent activity (`score > 0`, `deletedPublic: false`). **Supports `after` and `before`**.
 *   **`allRecentComments`**: Like `recentComments` but without score filter. **Supports `after` and `before`**.
 *   **`postsItemComments`**: For post feeds. **Supports `after`**. Requires `postId`.
+*   **`profileComments`**: Comments by a specific `userId`.
 *   **`postCommentsTop` / `New` / `Old`**: Specialized sorts for a specific `postId`.
 *   **`topShortform`**: Top-rated shortform. **Supports `after` and `before`**.
 

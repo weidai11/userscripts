@@ -37,7 +37,7 @@ test.describe('Power Reader User Detection', () => {
     test('[PR-USER-01] Detect current logged-in user via GraphQL', async ({ page }) => {
         await page.addInitScript(() => {
             (window as any).GM_getValue = () => '__LOAD_RECENT__';
-            (window as any).GM_setValue = () => {};
+            (window as any).GM_setValue = () => { };
             (window as any).GM_xmlhttpRequest = (o: any) => {
                 const body = JSON.parse(o.data || '{}');
                 if (body.query?.includes('GetCurrentUser')) {
@@ -53,6 +53,6 @@ test.describe('Power Reader User Detection', () => {
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         const status = page.locator('.pr-status');
-        await expect(status).toContainText('Logged in as: TestLoggedUser');
+        await expect(status).toContainText('👤 TestLoggedUser');
     });
 });

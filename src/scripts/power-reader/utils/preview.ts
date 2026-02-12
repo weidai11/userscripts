@@ -5,7 +5,7 @@
 
 import { Logger } from './logger';
 import { queryGraphQL } from '../../../shared/graphql/client';
-import { GET_POST, GET_COMMENT, GET_USER } from '../../../shared/graphql/queries';
+import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
 import type {
   GetPostQuery,
@@ -13,7 +13,9 @@ import type {
   GetCommentQuery,
   GetCommentQueryVariables,
   GetUserQuery,
-  GetUserQueryVariables
+  GetUserQueryVariables,
+  GetUserBySlugQuery,
+  GetUserBySlugQueryVariables
 } from '../../../generated/graphql';
 
 const HOVER_DELAY = 300; // ms
@@ -674,17 +676,54 @@ function escapeHtml(str: string): string {
 }
 
 /**
+ * Parse URL safely with current origin as base.
+ */
+function parseUrl(raw: string): URL | null {
+  try {
+    return new URL(raw, window.location.origin);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True if hostname belongs to supported forum domains.
+ */
+function isAllowedForumHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === 'lesswrong.com' ||
+    host.endsWith('.lesswrong.com') ||
+    host === 'forum.effectivealtruism.org' ||
+    host.endsWith('.forum.effectivealtruism.org') ||
+    host === 'greaterwrong.com' ||
+    host.endsWith('.greaterwrong.com')
+  );
+}
+
+/**
+ * Parse and validate URL for forum-domain + http(s) protocol.
+ */
+function parseForumUrl(raw: string): URL | null {
+  const u = parseUrl(raw);
+  if (!u) return null;
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  if (!isAllowedForumHostname(u.hostname)) return null;
+  return u;
+}
+
+/**
  * Extract comment ID from a URL
  */
 export function extractCommentIdFromUrl(url: string): string | null {
-  // Patterns:
-  // /posts/xxx/slug?commentId=yyy
-  // /posts/xxx/slug#yyy
-  const commentIdMatch = url.match(/[?&]commentId=([a-zA-Z0-9]+)/);
-  if (commentIdMatch) return commentIdMatch[1];
+  const parsed = parseUrl(url);
+  if (!parsed) return null;
 
-  const hashMatch = url.match(/#([a-zA-Z0-9]+)$/);
-  if (hashMatch) return hashMatch[1];
+  const queryId = parsed.searchParams.get('commentId');
+  if (queryId && /^[a-zA-Z0-9_-]+$/.test(queryId)) return queryId;
+
+  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash;
+  if (hash && /^[a-zA-Z0-9_-]+$/.test(hash)) return hash;
 
   return null;
 }
@@ -693,32 +732,65 @@ export function extractCommentIdFromUrl(url: string): string | null {
  * Check if URL is a LessWrong/EA Forum comment link
  */
 export function isCommentUrl(url: string): boolean {
-  return /lesswrong\.com.*commentId=/.test(url) ||
-    /effectivealtruism\.org.*commentId=/.test(url) ||
-    /#[a-zA-Z0-9]{10,}$/.test(url);
+  const parsed = parseForumUrl(url);
+  if (!parsed) return false;
+
+  const hasCommentParam = parsed.searchParams.has('commentId');
+  const hash = parsed.hash.startsWith('#') ? parsed.hash.slice(1) : parsed.hash;
+  const hasCommentHash = /^[a-zA-Z0-9_-]{10,}$/.test(hash);
+  return hasCommentParam || hasCommentHash;
 }
 
 /**
  * Check if URL is a LessWrong/EA Forum post link (not a comment)
  */
 export function isPostUrl(url: string): boolean {
-  // Match /posts/xxx/slug but exclude URLs with commentId or hash
-  return /(lesswrong\.com|effectivealtruism\.org)\/posts\/[a-zA-Z0-9]+/.test(url) &&
-    !isCommentUrl(url);
+  const parsed = parseForumUrl(url);
+  if (!parsed) return false;
+  const hasPostPath = /\/posts\/[a-zA-Z0-9_-]+(?:\/|$)/.test(parsed.pathname);
+  if (!hasPostPath) return false;
+  return !isCommentUrl(url);
 }
 
 /**
  * Check if URL is a LessWrong/EA Forum wiki/tag link
  */
 export function isWikiUrl(url: string): boolean {
-  return /(lesswrong\.com|effectivealtruism\.org)\/(tag|wiki)\/[a-zA-Z0-9-]+/.test(url);
+  const parsed = parseForumUrl(url);
+  if (!parsed) return false;
+  const hasWikiPath = /\/(tag|wiki)\/[a-zA-Z0-9-]+(?:\/|$)/.test(parsed.pathname);
+  if (!hasWikiPath) return false;
+  return true;
+}
+
+/**
+ * Check if URL is a LessWrong/EA Forum author profile link
+ */
+export function isAuthorUrl(url: string): boolean {
+  const parsed = parseForumUrl(url);
+  if (!parsed) return false;
+  const hasUserPath = /\/users\/[a-zA-Z0-9_-]+(?:\/|$)/.test(parsed.pathname);
+  if (!hasUserPath) return false;
+  return true;
 }
 
 /**
  * Extract post ID from a URL
  */
 export function extractPostIdFromUrl(url: string): string | null {
-  const match = url.match(/\/posts\/([a-zA-Z0-9]+)/);
+  const parsed = parseUrl(url);
+  if (!parsed) return null;
+  const match = parsed.pathname.match(/\/posts\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Extract author slug from a URL
+ */
+export function extractAuthorSlugFromUrl(url: string): string | null {
+  const parsed = parseUrl(url);
+  if (!parsed) return null;
+  const match = parsed.pathname.match(/\/users\/([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
 }
 
@@ -726,7 +798,9 @@ export function extractPostIdFromUrl(url: string): string | null {
  * Extract wiki/tag slug from a URL
  */
 export function extractWikiSlugFromUrl(url: string): string | null {
-  const match = url.match(/\/(tag|wiki)\/([a-zA-Z0-9-]+)/);
+  const parsed = parseUrl(url);
+  if (!parsed) return null;
+  const match = parsed.pathname.match(/\/(tag|wiki)\/([a-zA-Z0-9-]+)/);
   return match ? match[2] : null;
 }
 
@@ -735,7 +809,8 @@ export function extractWikiSlugFromUrl(url: string): string | null {
  */
 export function createWikiPreviewFetcher(slug: string): () => Promise<string> {
   return async () => {
-    const url = `https://www.lesswrong.com/tag/${slug}`;
+    const forumOrigin = parseForumUrl(window.location.href)?.origin || 'https://www.lesswrong.com';
+    const url = new URL(`/tag/${slug}`, forumOrigin).toString();
     try {
       const response = await fetch(url);
       const html = await response.text();
@@ -778,16 +853,39 @@ export function createAuthorPreviewFetcher(userId: string): () => Promise<string
       return '<div class="pr-preview-loading">User not found</div>';
     }
 
-    return `
-      <div class="pr-preview-header">
-        <strong>${escapeHtml(user.displayName || user.username || 'Unknown')}</strong>
-        <span style="color: #666; margin-left: 10px;">
-          ${user.karma} karma · @${escapeHtml(user.username || '')}
-        </span>
-      </div>
-      <div class="pr-preview-content">
-        ${user.htmlBio || '<i>(No bio provided)</i>'}
-      </div>
-    `;
+    return renderUserPreview(user);
   };
+}
+
+/**
+ * Create author preview fetcher by slug
+ */
+export function createAuthorBySlugPreviewFetcher(slug: string): () => Promise<string> {
+  return async () => {
+    const response = await queryGraphQL<GetUserBySlugQuery, GetUserBySlugQueryVariables>(GET_USER_BY_SLUG, { slug });
+    const user = response.user;
+
+    if (!user) {
+      return '<div class="pr-preview-loading">User not found</div>';
+    }
+
+    return renderUserPreview(user);
+  };
+}
+
+/**
+ * Helper to render user preview html
+ */
+function renderUserPreview(user: any): string {
+  return `
+    <div class="pr-preview-header">
+      <strong>${escapeHtml(user.displayName || user.username || 'Unknown')}</strong>
+      <span style="color: #666; margin-left: 10px;">
+        ${Math.round(user.karma)} karma · @${escapeHtml(user.username || '')}
+      </span>
+    </div>
+    <div class="pr-preview-content">
+      ${user.htmlBio || '<i>(No bio provided)</i>'}
+    </div>
+  `;
 }

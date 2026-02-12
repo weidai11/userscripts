@@ -342,6 +342,19 @@ export const GET_USER = /* GraphQL */ `
   }
 `;
 
+export const GET_USER_BY_SLUG = /* GraphQL */ `
+  query GetUserBySlug($slug: String!) {
+    user: GetUserBySlug(slug: $slug) {
+      _id
+      username
+      displayName
+      slug
+      karma
+      htmlBio
+    }
+  }
+`;
+
 export const GET_POST_BY_ID = GET_POST;
 
 export const GET_COMMENT = /* GraphQL */ `

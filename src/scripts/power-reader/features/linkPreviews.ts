@@ -10,8 +10,15 @@ import {
   createCommentPreviewFetcher,
   createWikiPreviewFetcher,
   createAuthorPreviewFetcher,
+  createAuthorBySlugPreviewFetcher,
   extractCommentIdFromUrl,
+  extractPostIdFromUrl,
+  extractAuthorSlugFromUrl,
   extractWikiSlugFromUrl,
+  isCommentUrl,
+  isPostUrl,
+  isAuthorUrl,
+  isWikiUrl,
   cancelHoverTimeout,
   isElementFullyVisible,
 } from '../utils/preview';
@@ -77,22 +84,55 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
     const href = link.getAttribute('href');
     if (!href) return;
 
-    const commentId = extractCommentIdFromUrl(href);
-    if (commentId) {
-      setupHoverPreview(
-        link,
-        createCommentPreviewFetcher(commentId, comments),
-        { type: 'comment' }
-      );
-      return;
+    // 1. Comment links
+    if (isCommentUrl(href)) {
+      const commentId = extractCommentIdFromUrl(href);
+      if (commentId) {
+        setupHoverPreview(
+          link,
+          createCommentPreviewFetcher(commentId, comments),
+          { type: 'comment' }
+        );
+        return;
+      }
     }
-    const wikiSlug = extractWikiSlugFromUrl(href);
-    if (wikiSlug) {
-      setupHoverPreview(
-        link,
-        createWikiPreviewFetcher(wikiSlug),
-        { type: 'wiki' }
-      );
+
+    // 2. Post links
+    if (isPostUrl(href)) {
+      const postId = extractPostIdFromUrl(href);
+      if (postId) {
+        setupHoverPreview(
+          link,
+          createPostPreviewFetcher(postId),
+          { type: 'post' }
+        );
+        return;
+      }
+    }
+
+    // 3. Author links
+    if (isAuthorUrl(href)) {
+      const authorSlug = extractAuthorSlugFromUrl(href);
+      if (authorSlug) {
+        setupHoverPreview(
+          link,
+          createAuthorBySlugPreviewFetcher(authorSlug),
+          { type: 'author' }
+        );
+        return;
+      }
+    }
+
+    // 4. Wiki links
+    if (isWikiUrl(href)) {
+      const wikiSlug = extractWikiSlugFromUrl(href);
+      if (wikiSlug) {
+        setupHoverPreview(
+          link,
+          createWikiPreviewFetcher(wikiSlug),
+          { type: 'wiki' }
+        );
+      }
     }
   });
 

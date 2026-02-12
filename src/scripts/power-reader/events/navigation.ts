@@ -82,7 +82,7 @@ const syncPostToggleButtons = (post: Element, isCollapsed: boolean): void => {
 /**
  * Handle post collapse from click event (finds post from target)
  */
-export const handlePostCollapse = (target: HTMLElement, state: ReaderState): void => {
+export const handlePostCollapse = (target: HTMLElement, _state: ReaderState): void => {
   const postId = getPostIdFromTarget(target);
   if (!postId) return;
   const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
@@ -111,7 +111,7 @@ export const handlePostCollapse = (target: HTMLElement, state: ReaderState): voi
 /**
  * Handle post expand from click event (finds post from target)
  */
-export const handlePostExpand = (target: HTMLElement, state: ReaderState): void => {
+export const handlePostExpand = (target: HTMLElement, _state: ReaderState): void => {
   const postId = getPostIdFromTarget(target);
   if (!postId) return;
   const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
@@ -669,12 +669,12 @@ export const handleScrollToPostTop = (target: HTMLElement, state: ReaderState): 
       const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
       if (eBtn && !eBtn.classList.contains('disabled')) {
         handleTogglePostBody(eBtn, state).then(() => {
-           // Re-scroll to ensure we are still at the top after expansion/load
-           const refreshedTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
-           window.scrollTo({
-             top: refreshedTop,
-             behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
-           });
+          // Re-scroll to ensure we are still at the top after expansion/load
+          const refreshedTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+          window.scrollTo({
+            top: refreshedTop,
+            behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+          });
         });
         return;
       }
@@ -803,7 +803,7 @@ export const handleLoadParents = async (target: HTMLElement, state: ReaderState)
       return;
     }
 
-    let fetched: Comment[] = [];
+    const fetched: Comment[] = [];
     while (missingIds.length > 0) {
       const batch = missingIds.splice(0, 50);
       const res = await queryGraphQL<GetCommentsByIdsQuery, GetCommentsByIdsQueryVariables>(GET_COMMENTS_BY_IDS, { commentIds: batch });

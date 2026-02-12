@@ -12,6 +12,7 @@ const config: CodegenConfig = {
                 withHooks: false,
                 withHOC: false,
                 withComponent: false,
+                onlyOperationTypes: true,
             }
         },
         "src/shared/graphql/lw_schema.graphql": {
