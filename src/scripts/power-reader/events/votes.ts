@@ -45,8 +45,8 @@ export const handleVoteInteraction = (
   const config = ACTION_TO_VOTE[action];
   if (!config) return;
 
-  // data-comment-id attribute carries the document ID for both comments and posts
-  const documentId = target.dataset.commentId;
+  // data-id attribute carries the document ID for both comments and posts
+  const documentId = target.dataset.id;
   if (!documentId) return;
 
   const comment = state.commentById.get(documentId);

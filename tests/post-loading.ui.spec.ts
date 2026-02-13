@@ -212,7 +212,7 @@ test.describe('Power Reader Post Loading', () => {
         });
 
         // Verify post body is not visible yet
-        const postBody = page.locator('.pr-post-body');
+        const postBody = page.locator('.pr-post-body-container');
         await expect(postBody).not.toBeVisible();
 
         // Click the [e] button

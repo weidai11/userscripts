@@ -7,6 +7,7 @@ import { handleAIStudio } from './utils/ai-studio-handler';
 
 export type RouteResult =
   | { type: 'reader'; path: 'main' | 'reset' }
+  | { type: 'archive'; username: string }
   | { type: 'ai-studio' }
   | { type: 'forum-injection' }
   | { type: 'skip' };
@@ -17,6 +18,7 @@ export type RouteResult =
 export const getRoute = (): RouteResult => {
   const host = window.location.hostname;
   const pathname = window.location.pathname;
+  const params = new URLSearchParams(window.location.search);
 
   // AI Studio domain
   if (host === 'aistudio.google.com') {
@@ -44,6 +46,14 @@ export const getRoute = (): RouteResult => {
 
   if (!pathname.startsWith('/reader')) {
     return { type: 'forum-injection' };
+  }
+
+  // /reader?view=archive&username=...
+  if (params.get('view') === 'archive') {
+    const username = params.get('username');
+    if (username) {
+      return { type: 'archive', username };
+    }
   }
 
   // /reader/reset - clear state and show setup

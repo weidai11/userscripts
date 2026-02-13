@@ -121,11 +121,11 @@ test.describe('Power Reader Threading', () => {
         });
 
         // Case A assertions
-        const parentAReplies = page.locator('.pr-comment[data-id="parent-a"] > .pr-replies');
+        const parentAReplies = page.locator('.pr-comment[data-id="parent-a"] .pr-replies');
         await expect(parentAReplies.locator('.pr-comment[data-id="child-a1"]')).toBeAttached();
         await expect(parentAReplies.locator('.pr-comment[data-id="child-a2"]')).toBeAttached();
 
-        const childA1Replies = parentAReplies.locator('.pr-comment[data-id="child-a1"] > .pr-replies');
+        const childA1Replies = parentAReplies.locator('.pr-comment[data-id="child-a1"] .pr-replies');
         await expect(childA1Replies.locator('.pr-comment[data-id="grand-a1"]')).toBeAttached();
 
         // Case B assertions
@@ -133,21 +133,21 @@ test.describe('Power Reader Threading', () => {
         await expect(placeholderB).toBeAttached();
         await expect(page.locator('.pr-comment[data-id="missing-b"][data-placeholder="1"]')).toHaveCount(1);
 
-        const placeholderBReplies = placeholderB.locator('> .pr-replies');
+        const placeholderBReplies = placeholderB.locator('.pr-replies');
         await expect(placeholderBReplies.locator('.pr-comment[data-id="child-b1"]')).toBeAttached();
         await expect(placeholderBReplies.locator('.pr-comment[data-id="child-b2"]')).toBeAttached();
 
-        const childB1Replies = placeholderBReplies.locator('.pr-comment[data-id="child-b1"] > .pr-replies');
+        const childB1Replies = placeholderBReplies.locator('.pr-comment[data-id="child-b1"] .pr-replies');
         await expect(childB1Replies.locator('.pr-comment[data-id="grand-b1"]')).toBeAttached();
 
         // Case C assertions
         const placeholderC = page.locator('.pr-comment[data-id="missing-c"][data-placeholder="1"]');
         await expect(placeholderC).toBeAttached();
 
-        const placeholderCReplies = placeholderC.locator('> .pr-replies');
+        const placeholderCReplies = placeholderC.locator('.pr-replies');
         await expect(placeholderCReplies.locator('.pr-comment[data-id="parent-c"]')).toBeAttached();
 
-        const parentCReplies = placeholderCReplies.locator('.pr-comment[data-id="parent-c"] > .pr-replies');
+        const parentCReplies = placeholderCReplies.locator('.pr-comment[data-id="parent-c"] .pr-replies');
         await expect(parentCReplies.locator('.pr-comment[data-id="child-c1"]')).toBeAttached();
     });
 });

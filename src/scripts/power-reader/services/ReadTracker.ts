@@ -88,9 +88,9 @@ export class ReadTracker {
             // For posts and comments, we only care if the BODY is scrolled past, not the children/comments below it.
             let checkRect = rect;
             if (el.classList.contains('pr-post')) {
-                const body = el.querySelector('.pr-post-content');
-                if (body && !body.classList.contains('collapsed')) {
-                    checkRect = body.getBoundingClientRect();
+                const bodyContainer = el.querySelector('.pr-post-body-container');
+                if (bodyContainer && !bodyContainer.classList.contains('collapsed')) {
+                    checkRect = bodyContainer.getBoundingClientRect();
                 } else {
                     const header = el.querySelector('.pr-post-header');
                     if (header) checkRect = header.getBoundingClientRect();
@@ -110,7 +110,6 @@ export class ReadTracker {
 
             if (shouldMark) {
                 if (!this.pendingReadTimeouts[id]) {
-                    Logger.debug(`processScroll: marking ${id} as read`);
                     this.pendingReadTimeouts[id] = window.setTimeout(() => {
                         delete this.pendingReadTimeouts[id];
                         const currentEl = document.querySelector(`.pr-comment[data-id="${id}"], .pr-item[data-id="${id}"]`);
@@ -125,12 +124,9 @@ export class ReadTracker {
                             const unreadCountEl = document.getElementById('pr-unread-count');
                             if (unreadCountEl) {
                                 unreadCountEl.textContent = newCount.toString();
-                                Logger.debug(`processScroll: ${id} read, recalculated unread count=${newCount}`);
-
                                 // If we just hit 0 unread while at bottom, trigger server check
                                 const isNowAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
                                 if (newCount === 0 && isNowAtBottom) {
-                                    Logger.debug('processScroll: hit 0 unread at bottom, checking server');
                                     this.checkInitialState();
                                 }
                             }

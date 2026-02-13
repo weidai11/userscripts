@@ -56,5 +56,49 @@ jj git push
 - **[GRAPHQL_API.md](./src/shared/GRAPHQL_API.md)**: Guide to the LessWrong and EA Forum API.
 - **[NOTES.md](./NOTES.md)**: Technical "gotchas" and environment-specific solutions.
 
+## 🔮 Roadmap: User Archive 2.0
+We are planning a major feature to integrate and supercharge the functionality of legacy user archives (e.g., `lw_user_archive.html`) directly into Power Reader.
+
+**For full technical details and implementation plan, see [ARCH_USER_ARCHIVE.md](./ARCH_USER_ARCHIVE.md).**
+
+### The Vision
+Turn any user profile into a powerful, searchable, and analyzable database of their *entire* intellectual history (Posts & Comments).
+
+### Phase 1: Foundation & Data
+- **Bulk Ingestion**: Implement robust GraphQL batching to fetch 10,000+ items (posts + comments) in seconds.
+- **Smart Caching**: Store history in IndexedDB. Subsequent visits only fetch *new* items since the last sync.
+- **Threaded Context**: Option to group the user's comments by thread, showing surrounding context (parent/child comments) from other users for a coherent conversation view.
+- **Unified Feed**: A single chronological stream of everything a user has written, merging posts and comments seamlessly.
+
+### Phase 2: Parity & Search (The "Legacy" Features)
+- **Power Reader Core Features**:
+  - **Interactive UI**: Fully functional voting, collapsing, and "Load Context" buttons on every item.
+  - **Hotkeys**: Standard `[J]/[K]` navigation, `[G]` for AI, and threading shortcuts.
+  - **Sticky Header**: Persistent metadata and actions for long archive entries.
+- **Reader Integration**:
+  - **Quick Access**: "View in Archive" button next to every author name in the main feed.
+  - **Shareable Views**: URL parameters for all filters (e.g., `?user=Wei_Dai&score=>50`) for easy sharing.
+- **Regex Filter**: Instant client-side filtering of body text.
+- **Sorting**:
+  - **Karma**: Surface high-impact contributions (Best/Worst).
+  - **Date**: Traverse history chronologically (Oldest/Newest).
+  - **"Reply To"**: Group comments by the user they were replying to.
+- **View Modes**: Toggle between "Card View" (full content) and "Index View" (titles/snippets only).
+
+### Phase 3: Advanced Intelligence
+- **Deep Filtering Engine**:
+  - `score: >50`: Filter by karma threshold.
+  - `date: 2020..2023`: Specific date ranges.
+  - `length: long`: Find essays vs. quick remarks.
+  - `tag: "AI Alignment"`: Context-aware filtering.
+- **Analytics Dashboard**:
+  - **Karma Graph**: Visual timeline of user reception.
+  - **Heatmap**: GitHub-style activity visualization.
+  - **Word Cloud**: Recurring themes and terminology.
+- **AI Synthesis**:
+  - **"Chat with Archive"**: Ask questions like "What is this user's stance on decision theory?" backed by their actual comment history.
+  - **Contradiction Checker**: Highlight evolving views or inconsistencies over time.
+- **Export**: Download full history as **JSON**, **Markdown**, or **HTML** for personal backups or LLM fine-tuning.
+
 ## 🔗 References
 [CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./src/scripts/power-reader/old_power_reader_doc.md) | [Old Source](./src/scripts/power-reader/old_power_reader.js)

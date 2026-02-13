@@ -43,7 +43,8 @@ import { isElementFullyVisible } from '../utils/preview';
  */
 export const collapsePost = (post: Element): void => {
   post.querySelector('.pr-post-comments')?.classList.add('collapsed');
-  post.querySelector('.pr-post-content')?.classList.add('collapsed');
+  // Use container to hide entire body including overlay/read-more
+  post.querySelector('.pr-post-body-container')?.classList.add('collapsed');
 
   syncPostToggleButtons(post, true);
 };
@@ -53,7 +54,8 @@ export const collapsePost = (post: Element): void => {
  */
 export const expandPost = (post: Element): void => {
   post.querySelector('.pr-post-comments')?.classList.remove('collapsed');
-  post.querySelector('.pr-post-content')?.classList.remove('collapsed');
+  // Use container to show entire body
+  post.querySelector('.pr-post-body-container')?.classList.remove('collapsed');
 
   syncPostToggleButtons(post, false);
 };
@@ -350,6 +352,16 @@ export const handleReadMore = (target: HTMLElement): void => {
     container.style.maxHeight = 'none';
     const overlay = container.querySelector('.pr-read-more-overlay');
     if (overlay) (overlay as HTMLElement).style.display = 'none';
+
+    const btn = container.querySelector('.pr-post-read-more');
+    if (btn) (btn as HTMLElement).style.display = 'none';
+
+    // Refresh [e] button state
+    const postEl = container.closest('.pr-post') as HTMLElement;
+    if (postEl) {
+      const postId = postEl.dataset.id;
+      if (postId) refreshPostActionButtons(postId);
+    }
   }
 };
 
@@ -374,6 +386,10 @@ const reRenderPostGroup = (
   const postComments = state.comments.filter(c => c.postId === postId);
   Logger.info(`reRenderPostGroup: p=${postId}, comments=${postComments.length}`);
 
+  // Detect current expansion state
+  const bodyContainer = postContainer.querySelector('.pr-post-body-container');
+  const wasExpanded = bodyContainer && !bodyContainer.classList.contains('truncated');
+
   const group = {
     postId,
     title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
@@ -381,6 +397,21 @@ const reRenderPostGroup = (
     fullPost: post,
   };
   postContainer.outerHTML = renderPostGroup(group, state);
+
+  // If it was expanded, it might have been re-rendered as truncated (default).
+  // renderPostGroup now detects DOM, but we should double check or force it here
+  // if state.posts was updated with full post but renderPostGroup was called before it.
+  const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+  if (wasExpanded && newPostContainer) {
+    const newBody = newPostContainer.querySelector('.pr-post-body-container') as HTMLElement;
+    if (newBody && newBody.classList.contains('truncated')) {
+      newBody.classList.remove('truncated');
+      newBody.style.maxHeight = 'none';
+      const overlay = newBody.querySelector('.pr-read-more-overlay') as HTMLElement;
+      if (overlay) overlay.style.display = 'none';
+    }
+  }
+
   setupLinkPreviews(state.comments);
   refreshPostActionButtons(postId);
 
@@ -558,17 +589,21 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
         state.posts.push(post as Post);
       }
 
-      // Re-render just this post group
+      // Re-render just this post group with full post data.
+      // reRenderPostGroup internal logic will now detect that it's in fullPost mode
+      // and should preserve the "was expanded" state if we just clicked to expand.
       reRenderPostGroup(postId, state);
 
-      // Get the newly rendered container
-      container = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-body-container`) as HTMLElement;
-      if (container) {
-        // Expand it immediately
-        container.classList.remove('truncated');
-        container.style.maxHeight = 'none';
-        const overlay = container.querySelector('.pr-read-more-overlay') as HTMLElement;
+      // First [e] click should load and expand the body immediately.
+      const newContainer = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-body-container`) as HTMLElement;
+      if (newContainer) {
+        newContainer.classList.remove('truncated');
+        newContainer.style.maxHeight = 'none';
+
+        const overlay = newContainer.querySelector('.pr-read-more-overlay') as HTMLElement;
         if (overlay) overlay.style.display = 'none';
+        const readMoreBtn = newContainer.querySelector('.pr-post-read-more') as HTMLElement;
+        if (readMoreBtn) readMoreBtn.style.display = 'none';
       }
 
       // Update button state
@@ -603,14 +638,24 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
   if (container.classList.contains('truncated')) {
     container.classList.remove('truncated');
     container.style.maxHeight = 'none';
+
+    // Hide overlay and read-more button
     const overlay = container.querySelector('.pr-read-more-overlay') as HTMLElement;
     if (overlay) overlay.style.display = 'none';
+    const readMoreBtn = container.querySelector('.pr-post-read-more') as HTMLElement;
+    if (readMoreBtn) readMoreBtn.style.display = 'none';
+
     if (eBtn) eBtn.title = 'Collapse post body';
   } else {
     container.classList.add('truncated');
     container.style.maxHeight = CONFIG.maxPostHeight;
+
+    // Show overlay and read-more button
     const overlay = container.querySelector('.pr-read-more-overlay') as HTMLElement;
     if (overlay) overlay.style.display = 'flex';
+    const readMoreBtn = container.querySelector('.pr-post-read-more') as HTMLElement;
+    if (readMoreBtn) readMoreBtn.style.display = 'block';
+
     if (eBtn) eBtn.title = 'Expand post body';
   }
 

@@ -1,7 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const specArgs = process.argv.filter(arg => /\.spec\.ts(:\d+)?$/.test(arg));
-process.env.PW_SINGLE_FILE_RUN = specArgs.length === 1 ? 'true' : 'false';
+if (!process.env.PW_SINGLE_FILE_RUN) {
+    process.env.PW_SINGLE_FILE_RUN = specArgs.length === 1 ? 'true' : 'false';
+}
 
 /**
  * See https://playwright.dev/docs/test-configuration.

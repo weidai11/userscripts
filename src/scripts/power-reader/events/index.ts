@@ -7,7 +7,8 @@ import type { ReaderState } from '../state';
 import { handleVoteInteraction } from './votes';
 import { handleReactionVote, openReactionPicker } from './reactions';
 import { attachHotkeyListeners } from './hotkeys';
-import { handlePostCollapse,
+import {
+  handlePostCollapse,
   handlePostExpand,
   handleCommentCollapse,
   handleCommentExpand,
@@ -68,7 +69,7 @@ export const attachEventListeners = (state: ReaderState): void => {
     // - Thread Integrity With Placeholders: Thread structure must remain correct whether or not placeholders exist. Replies should nest under their true parent if loaded, or under the placeholder if the parent is missing.
     // Reaction vote
     else if (action === 'reaction-vote') {
-      const commentId = target.dataset.commentId;
+      const commentId = target.dataset.id;
       const reactName = target.dataset.reactionName;
       if (commentId && reactName) {
         handleReactionVote(commentId, reactName, state);

@@ -334,7 +334,7 @@ export const STYLES = `
     padding: 10px;
   }
 
-  .pr-post-comments.collapsed, .pr-post-content.collapsed {
+  .pr-post-comments.collapsed, .pr-post-content.collapsed, .pr-post-body-container.collapsed {
     display: none;
   }
 
@@ -1292,5 +1292,12 @@ export const STYLES = `
     background-color: #ffe066 !important;
     outline: 2px solid orange !important;
     transition: background-color 0.2s;
+  }
+
+  /* Archive Mode */
+  .pr-archive-item-body {
+    padding: 10px 15px;
+    background: white;
+    border-top: 1px solid #eee;
   }
 `;

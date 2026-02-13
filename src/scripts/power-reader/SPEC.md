@@ -468,7 +468,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 - **[PR-VOTE-01]** Two-axis voting (karma + agreement) for posts and comments.
 - **[PR-VOTE-02]** **Karma voting**: `[▲]` `[▼]` buttons.
-- **[PR-VOTE-03]** **Agreement voting**: `[✓]` `[✗]` buttons.
+- **[PR-VOTE-03]** **Agreement voting**: `[✓]` `[✗]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
 - **[PR-VOTE-05]** If not logged in: Open login page in new tab.
 
@@ -562,6 +562,19 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **Placement**: Positioned after the search bar (if present) or at the start of the right-side items.
 - **Hydration Safety**: Injection is delayed by 2 seconds after page load or SPA navigation to avoid React hydration mismatches (Error #418).
 - **Mutation Observer**: A `MutationObserver` ensures the link persists during client-side navigation within the forum.
+
+---
+
+### 26. User Archive Mode
+The Power Reader supports a dedicated "User Archive" mode for browsing a user's entire history (posts and comments) in a unified, searchable feed.
+
+- **URL Pattern**: `/reader?view=archive&username=[username]`
+- **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for the complete feature specification, architecture, and implementation plan.
+- **Key Features**:
+  - Offline-first storage (IndexedDB).
+  - Bulk ingestion of full user history.
+  - Client-side filtering and sorting.
+  - Threaded context reconstruction.
 
 ---
 

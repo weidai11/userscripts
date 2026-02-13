@@ -54,14 +54,14 @@ test.describe('Voting Bug: Descendants Disappearing', () => {
         });
 
         // 3. Perform vote on c1
-        const voteUp = page.locator('.pr-comment[data-id="c1"] > .pr-comment-meta [data-action="karma-up"]');
+        const voteUp = page.locator('[data-action="karma-up"][data-id="c1"]');
         await voteUp.click();
 
         // 4. Verify descendant still exists
         await expect(childComment).toBeVisible();
 
-        const parentEl = page.locator('.pr-comment[data-id="c1"]');
-        const hasRepliesDiv = await parentEl.locator('> .pr-replies').count();
+        const parentEl = page.locator('.pr-comment[data-id="c1"]').first();
+        const hasRepliesDiv = await parentEl.locator('.pr-replies').first().count();
         expect(hasRepliesDiv).toBe(1);
 
         const childText = await childComment.locator('.pr-comment-body').innerText();

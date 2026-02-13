@@ -90,7 +90,7 @@ test.describe('Power Reader Highlight Visibility', () => {
         const parentEl = page.locator('.pr-comment[data-id="parent2"]');
         await expect(parentEl).toBeVisible();
         await expect(parentEl).toContainText('Tall parent content');
-        
+
         const findParentBtn = page.locator('.pr-comment[data-id="child2"] .pr-find-parent');
         await expect(findParentBtn).toBeVisible();
     });
@@ -126,7 +126,7 @@ test.describe('Power Reader Highlight Visibility', () => {
         });
 
         // Expand the post content naturally by clicking "Read More"
-        const readMoreBtn = page.locator('.pr-read-more-btn').first();
+        const readMoreBtn = page.locator('[data-action="read-more"]').first();
         if (await readMoreBtn.isVisible()) {
             await readMoreBtn.click();
         }

@@ -71,7 +71,7 @@ export const refreshPostActionButtons = (postId?: string): void => {
         const eBtn = post.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
 
         if (container && eBtn) {
-            const isFullPost = !!container.querySelector('.pr-post-body');
+            const isFullPost = container.classList.contains('pr-post-body');
 
             if (container.classList.contains('truncated')) {
                 // If it's hidden (collapsed), we can't measure it accurately

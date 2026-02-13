@@ -42,7 +42,7 @@ export const setupInlineReactions = (state: ReaderState): void => {
       btn.id = 'pr-inline-react-btn';
       btn.className = 'pr-inline-react-btn';
       btn.textContent = 'React';
-      btn.dataset.commentId = commentBody.closest('.pr-comment')?.getAttribute('data-id') || '';
+      btn.dataset.id = commentBody.closest('.pr-comment')?.getAttribute('data-id') || '';
       document.body.appendChild(btn);
 
       const rect = range.getBoundingClientRect();
@@ -52,7 +52,7 @@ export const setupInlineReactions = (state: ReaderState): void => {
       const rect = range.getBoundingClientRect();
       existingBtn.style.top = `${rect.top - 30 + window.scrollY}px`;
       existingBtn.style.left = `${rect.left + (rect.width / 2)}px`;
-      existingBtn.dataset.commentId = commentBody.closest('.pr-comment')?.getAttribute('data-id') || '';
+      existingBtn.dataset.id = commentBody.closest('.pr-comment')?.getAttribute('data-id') || '';
     }
   });
 };

@@ -52,7 +52,7 @@ export class ReactionPicker {
     }
 
     public open(button: HTMLElement, initialSearchText: string = '') {
-        const commentId = button.dataset.commentId;
+        const commentId = button.dataset.id;
         if (!commentId) return;
 
         // Toggle Logic: If clicking the same button, close and return
@@ -127,7 +127,7 @@ export class ReactionPicker {
                 return `
             <div class="pr-reaction-list-item ${voted ? 'active' : ''}" 
                  data-action="reaction-vote" 
-                 data-comment-id="${this.currentCommentId}" 
+                 data-id="${this.currentCommentId}" 
                  data-reaction-name="${reaction.name}"
                  ${labelAttr} ${descAttr}>
               <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
@@ -140,7 +140,7 @@ export class ReactionPicker {
             return `
         <div class="pr-reaction-picker-item ${voted ? 'active' : ''}" 
              data-action="reaction-vote" 
-             data-comment-id="${this.currentCommentId}" 
+             data-id="${this.currentCommentId}" 
              data-reaction-name="${reaction.name}"
              ${labelAttr} ${descAttr}>
           <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
@@ -283,7 +283,7 @@ export class ReactionPicker {
             e.stopPropagation();
             const target = (e.target as HTMLElement).closest('[data-action="reaction-vote"]') as HTMLElement;
             if (target) {
-                const commentId = target.dataset.commentId;
+                const commentId = target.dataset.id;
                 const reactionName = target.dataset.reactionName;
                 if (commentId && reactionName) {
                     Logger.info(`Picker: Clicked reaction ${reactionName} on comment ${commentId}`);

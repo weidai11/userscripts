@@ -91,9 +91,9 @@ test.describe('Comment Lookup Contract Tests', () => {
     }
   });
 
-  test('setVoteComment mutation returns expected fields (not "Cannot query field")', async ({ request }) => {
+  test('performVoteComment mutation returns expected fields (not "Cannot query field")', async ({ request }) => {
     const mock = await createMockGraphQLServer((body) => {
-      if (body.query.includes('setVoteComment')) {
+      if (body.query.includes('performVoteComment')) {
         return {
           errors: [{ message: 'You need to log in before you can vote.' }],
         };
@@ -104,7 +104,7 @@ test.describe('Comment Lookup Contract Tests', () => {
     try {
       const query = `
         mutation TestVoteStructure($documentId: String!, $voteType: String!) {
-          setVoteComment(documentId: $documentId, voteType: $voteType) {
+          performVoteComment(documentId: $documentId, voteType: $voteType) {
             _id
             baseScore
             voteCount

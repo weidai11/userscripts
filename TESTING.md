@@ -46,7 +46,8 @@ We use **Playwright** to inject the compiled userscript into a headless browser 
 | Scope | Command | Description |
 |-------|---------|-------------|
 | **Power Reader (Full)** | `npm run test:power-reader` | Builds the script and runs the main E2E suite (`power-reader.spec.ts`). |
-| **All Tests** | `npm test` | Runs all spec files in the `tests/` directory. |
+| **All Tests** | `npm test` | Runs all spec files in the `tests/` directory. (Uses 4 workers by default). |
+| **Archive Mode** | `npx playwright test tests/archive-route.spec.ts` | Verifies the User Archive 2.0 view, data loading, and rendering. |
 | **UI-Only** | `npx playwright test tests/power-reader.ui.spec.ts` | Tests interactive features like Picker Toggle, Read Marking, and Parent Nav. |
 | **Voting Logic** | `npx playwright test tests/voting.*` | Runs unit (`voting.unit.spec.ts`) and E2E (`voting.e2e.spec.ts`, uses mocked responses) voting tests. |
 | **Live API** | `npx playwright test tests/api-sanity.spec.ts` | **Hits real LessWrong API**. Comprehensively checks all GraphQL fields used by the power-reader. |
@@ -60,6 +61,12 @@ The primary integration test.
 - **Mocks**: `GM_xmlhttpRequest`, `GM_setValue`/`getValue`, and GraphQL responses.
 - **Verifies**: Script injection, page takeover, rendering of comments, and "Reply to You" styling.
 - **Exclusion**: Ensures script does *not* run on non-target pages (e.g., Homepage).
+
+#### 🟣 User Archive (`archive-route.spec.ts`)
+Validates the new User Archive 2.0 subsystem.
+- **Routing**: Verifies that `?view=archive&username=...` triggers the archive takeover.
+- **Bulk Loading**: Mocks the paginated `GetUserPosts` and `GetUserComments` queries.
+- **Rendering**: Ensures unified chronological feed displays both posts and comments correctly.
 
 #### 🔵 UI Interactions (`power-reader.ui.spec.ts`)
 Focuses on user interactions within the rendered Power Reader interface.

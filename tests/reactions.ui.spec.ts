@@ -2,7 +2,6 @@ import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
 test.describe('Power Reader Reactions UI', () => {
-
     test('[PR-REACT-03][PR-REACT-06][PR-REACT-08] Reaction UI: Displays, opens picker, and votes', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,
@@ -27,27 +26,27 @@ test.describe('Power Reader Reactions UI', () => {
             }],
             onMutation: `
                 if (query.includes('mutation Vote')) {
-                  const { extendedVote, documentId } = variables;
-                  const reactsMap = {};
-                  if (extendedVote.reacts) {
-                    extendedVote.reacts.forEach(r => {
-                      reactsMap[r.react] = [{ userId: 'user-1-id', reactType: r.vote }];
-                    });
-                  }
-                  return {
-                    data: {
-                      performVoteComment: {
-                        document: {
-                          _id: documentId,
-                          baseScore: 10,
-                          extendedScore: { reacts: reactsMap },
-                          currentUserVote: variables.voteType,
-                          currentUserExtendedVote: extendedVote,
-                          afExtendedScore: { agreement: 0 }
-                        }
-                      }
+                    const { extendedVote, documentId } = variables;
+                    const reactsMap = {};
+                    if (extendedVote.reacts) {
+                        extendedVote.reacts.forEach(r => {
+                            reactsMap[r.react] = [{ userId: 'user-1-id', reactType: r.vote }];
+                        });
                     }
-                  };
+                    return {
+                        data: {
+                            performVoteComment: {
+                                document: {
+                                    _id: documentId,
+                                    baseScore: 10,
+                                    extendedScore: { reacts: reactsMap },
+                                    currentUserVote: variables.voteType,
+                                    currentUserExtendedVote: extendedVote,
+                                    afExtendedScore: { agreement: 0 }
+                                }
+                            }
+                        }
+                    };
                 }
             `
         });
@@ -113,26 +112,26 @@ test.describe('Power Reader Reactions UI', () => {
                 post: { _id: 'post-1', title: 'Test Post' }
             }],
             onMutation: `
-                if (query.includes('mutation Vote')) {
-                  if (variables.voteType === null || variables.voteType === undefined) {
-                    return {
-                      errors: [{ message: 'Variable "$voteType" of non-null type "String!" must not be null.' }]
-                    };
-                  }
-                  return {
-                    data: {
-                      performVoteComment: {
-                        document: {
-                          _id: variables.documentId,
-                          baseScore: 10,
-                          extendedScore: { reacts: { laugh: [{userId:'u1', reactType: 'created'}] } },
-                          currentUserVote: variables.voteType,
-                          currentUserExtendedVote: variables.extendedVote,
-                          afExtendedScore: { agreement: 0 }
-                        }
-                      }
+                if (query.includes('performVoteComment') || query.includes('mutation Vote')) {
+                    if (variables.voteType === undefined) {
+                        return {
+                            errors: [{ message: 'Variable "$voteType" of non-null type "String!" was not provided.' }]
+                        };
                     }
-                  };
+                    return {
+                        data: {
+                            performVoteComment: {
+                                document: {
+                                    _id: variables.documentId,
+                                    baseScore: 10,
+                                    extendedScore: { reacts: { laugh: [{ userId: 'u1', reactType: 'created' }] } },
+                                    currentUserVote: variables.voteType || 'neutral',
+                                    currentUserExtendedVote: variables.extendedVote,
+                                    afExtendedScore: { agreement: 0 }
+                                }
+                            }
+                        }
+                    };
                 }
             `
         });
@@ -166,23 +165,25 @@ test.describe('Power Reader Reactions UI', () => {
                 post: { _id: 'p1', title: 'Test Post' }
             }],
             onMutation: `
-                if (query.includes('mutation Vote')) {
-                  const extendedVote = variables.extendedVote;
-                  if (extendedVote?.reacts?.[0]?.react === 'agree') {
-                    return {
-                      data: {
-                        performVoteComment: {
-                          document: {
-                            _id: 'c1',
-                            baseScore: 6,
-                            extendedScore: { reacts: { agree: [{ userId: 'user-1-id', reactType: 'created' }] } },
-                            currentUserExtendedVote: extendedVote,
-                            afExtendedScore: { agreement: 0 }
-                          }
-                        }
-                      }
-                    };
-                  }
+                if (query.includes('performVoteComment') || query.includes('mutation Vote')) {
+                    const extendedVote = variables.extendedVote;
+                    const documentId = variables.documentId;
+                    if (extendedVote?.reacts?.some(r => r.react === 'agree')) {
+                        return {
+                            data: {
+                                performVoteComment: {
+                                    document: {
+                                        _id: documentId,
+                                        baseScore: 6,
+                                        extendedScore: { reacts: { agree: [{ userId: 'user-1-id', reactType: 'created' }] } },
+                                        currentUserVote: variables.voteType || 'neutral',
+                                        currentUserExtendedVote: extendedVote,
+                                        afExtendedScore: { agreement: 0 }
+                                    }
+                                }
+                            }
+                        };
+                    }
                 }
             `
         });

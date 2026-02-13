@@ -199,7 +199,7 @@ test.describe('Power Reader Voting UI', () => {
                 post: { _id: 'p1', title: 'P' }
             }],
             onMutation: `
-                if (query.includes('setVoteComment') || query.includes('mutation Vote')) {
+                if (query.includes('performVoteComment') || query.includes('mutation Vote')) {
                     const { voteType } = variables;
                     return {
                         data: {
@@ -258,22 +258,22 @@ test.describe('Power Reader Voting UI', () => {
 
         // Verify karma up button
         const karmaUpBtn = comment.locator('[data-action="karma-up"]');
-        await expect(karmaUpBtn).toHaveAttribute('data-comment-id', 'attr-test-comment');
+        await expect(karmaUpBtn).toHaveAttribute('data-id', 'attr-test-comment');
         await expect(karmaUpBtn).toHaveAttribute('title', 'Upvote');
 
         // Verify karma down button
         const karmaDownBtn = comment.locator('[data-action="karma-down"]');
-        await expect(karmaDownBtn).toHaveAttribute('data-comment-id', 'attr-test-comment');
+        await expect(karmaDownBtn).toHaveAttribute('data-id', 'attr-test-comment');
         await expect(karmaDownBtn).toHaveAttribute('title', 'Downvote');
 
         // Verify agree button
         const agreeBtn = comment.locator('[data-action="agree"]');
-        await expect(agreeBtn).toHaveAttribute('data-comment-id', 'attr-test-comment');
+        await expect(agreeBtn).toHaveAttribute('data-id', 'attr-test-comment');
         await expect(agreeBtn).toHaveAttribute('title', 'Agree');
 
         // Verify disagree button
         const disagreeBtn = comment.locator('[data-action="disagree"]');
-        await expect(disagreeBtn).toHaveAttribute('data-comment-id', 'attr-test-comment');
+        await expect(disagreeBtn).toHaveAttribute('data-id', 'attr-test-comment');
         await expect(disagreeBtn).toHaveAttribute('title', 'Disagree');
     });
 
@@ -292,7 +292,7 @@ test.describe('Power Reader Voting UI', () => {
                 post: { _id: 'p1', title: 'Test Post' }
             }],
             onMutation: `
-                if (query.includes('setVoteComment') || query.includes('mutation Vote')) {
+                if (query.includes('performVoteComment') || query.includes('mutation Vote')) {
                     const { documentId, voteType } = variables;
                     return {
                         data: {
@@ -317,8 +317,10 @@ test.describe('Power Reader Voting UI', () => {
         const upvoteBtn = comment.locator('[data-action="karma-up"]');
 
         // Trigger Hold
-        await upvoteBtn.dispatchEvent('mousedown');
+        await upvoteBtn.hover();
+        await page.mouse.down();
         await page.waitForTimeout(1100); // > 1000ms
+        await page.mouse.up();
 
         // Verify visual strong vote class
         await expect(upvoteBtn).toHaveClass(/strong-vote/);
@@ -338,8 +340,10 @@ test.describe('Power Reader Voting UI', () => {
         const upvoteBtn = page.locator('.pr-comment[data-id="c1"] [data-action="karma-up"]');
         await expect(upvoteBtn).toBeVisible({ timeout: 15000 });
 
-        // Click and wait for navigation/open
-        await upvoteBtn.click({ force: true });
+        // Trigger via mousedown since that's where the app listens for login status
+        await upvoteBtn.hover();
+        await page.mouse.down();
+        await page.mouse.up();
 
         // Wait for async window.open (mocked in setup.ts to set __OPENED_TAB)
         await page.waitForFunction(() => (window as any).__OPENED_TAB !== undefined, { timeout: 15000 });

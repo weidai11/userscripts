@@ -327,6 +327,45 @@ export const GET_THREAD_COMMENTS = /* GraphQL */ `
   ${COMMENT_FIELDS}
 `;
 
+export const GET_USER_POSTS = /* GraphQL */ `
+  query GetUserPosts($userId: String!, $limit: Int, $offset: Int) {
+    posts(
+      selector: {
+        userPosts: {
+          userId: $userId
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`;
+
+export const GET_USER_COMMENTS = /* GraphQL */ `
+  query GetUserComments($userId: String!, $limit: Int, $offset: Int) {
+    comments(
+      selector: {
+        profileComments: {
+          userId: $userId
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`;
+
+
 export const GET_COMMENT_REPLIES = /* GraphQL */ `
   query GetCommentReplies($parentCommentId: String!) {
     comments(

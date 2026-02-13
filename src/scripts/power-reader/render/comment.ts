@@ -2,15 +2,14 @@
  * Comment rendering for Power Reader
  */
 
-import type { Comment, NamesAttachedReactionsScore, CurrentUserExtendedVote } from '../../../shared/graphql/queries';
+import type { Comment, NamesAttachedReactionsScore } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
 import { getScoreColor, getRecencyColor } from '../utils/colors';
-import { getReadState, getAuthorPreferences, isRead, getLoadFrom } from '../utils/storage';
+import { getReadState, isRead, getLoadFrom } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
-import { renderVoteButtons, renderReactions, escapeHtml } from '../utils/rendering';
+import { escapeHtml } from '../utils/rendering';
 import { sanitizeHtml } from '../utils/sanitize';
-import { Logger } from '../utils/logger';
 
 /**
  * Highlight quotes in the comment body based on reactions
@@ -195,6 +194,9 @@ const getUnreadDescendantCount = (commentId: string, state: ReaderState, readSta
   return count;
 };
 
+import { renderMetadata } from './components/metadata';
+import { renderBody } from './components/body';
+
 export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
   if (isPlaceholderComment(comment)) {
     return renderMissingParentPlaceholder(comment, repliesHtml);
@@ -211,7 +213,6 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
 
   if (showAsPlaceholder) {
     // Render blank stub
-    // We keep data attributes for functionality (like finding parent)
     return `
       <div class="pr-comment pr-item read pr-comment-placeholder" 
            data-id="${comment._id}" 
@@ -222,19 +223,16 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
         ${repliesHtml}
       </div>
     `;
-    // Note: Including repliesHtml ensures children remain in the DOM even if the parent is minimized.
   }
 
   const authorHandle = comment.user?.username || (comment as any).author || 'Unknown Author';
-  const authorName = comment.user?.displayName || authorHandle;
-  const authorKarma = comment.user?.karma || 0;
   const postedAt = comment.postedAt || new Date().toISOString();
   const ageHours = getAgeInHours(postedAt);
   const score = comment.baseScore || 0;
+  const authorKarma = comment.user?.karma || 0;
   const normalized = calculateNormalizedScore(score, ageHours, authorHandle, authorKarma, false);
   const order = (comment as any)._order || 0;
   const isContext = (comment as any).isContext;
-  // const commentIsRead = isContext || isRead(comment._id); // Moved to top for placeholder check
 
   // Check if reply to current user
   const isReplyToYou = !!(state.currentUsername &&
@@ -243,29 +241,11 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
   // Should auto-hide?
   const autoHide = shouldAutoHide(normalized) && !commentIsRead && !isContext;
 
-  if (autoHide) {
-    Logger.debug(`Auto-hiding comment ${comment._id} (score=${normalized.toFixed(2)})`);
-  }
-
   // Calculate styles
   const clampedScore = clampScore(normalized);
   const scoreColor = normalized > 0 ? getScoreColor(clampedScore) : '';
   const recencyColor = order > 0 ? getRecencyColor(order, CONFIG.highlightLastN) : '';
   const fontSize = getFontSizePercent(score, false);
-
-  // Author preferences
-  const authorPrefs = getAuthorPreferences();
-  let authorPref = authorPrefs[authorHandle];
-
-  // Default to +1 if subscribed and no manual override
-  if (authorPref === undefined && comment.user?._id && state.subscribedAuthorIds.has(comment.user._id)) {
-    authorPref = 1;
-  }
-  authorPref = authorPref || 0;
-
-  // Format timestamp
-  const date = new Date(comment.postedAt);
-  const timeStr = date.toLocaleString().replace(/ ?GMT.*/, '');
 
   // CSS classes
   const classes = [
@@ -284,36 +264,9 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
   const bodyStyle = recencyColor ? `--pr-recency-color: ${recencyColor};` : '';
   const fontStyle = `font-size: ${fontSize}%;`;
 
-  // Vote buttons
-  const voteButtonsHtml = renderVoteButtons(
-    comment._id,
-    comment.baseScore || 0,
-    comment.currentUserVote ?? null,
-    comment.currentUserExtendedVote ?? null,
-    (comment.afExtendedScore as any)?.agreement ?? 0,
-    0, // voteCount (comments don't display total vote count in button usually, or passed as 0)
-    0, // agreementVoteCount
-    true // showAgreement (always true for comments)
-  );
-
-  const reactionsHtml = renderReactions(
-    comment._id,
-    comment.extendedScore as NamesAttachedReactionsScore,
-    comment.currentUserExtendedVote as CurrentUserExtendedVote
-  );
-
-  // Prepare HTML content with highlights
-  const bodyContent = highlightQuotes(
-    comment.htmlBody || '<i>(No content)</i>',
-    comment.extendedScore as NamesAttachedReactionsScore
-  );
-
-  const authorSlug = comment.user?.slug;
-  const authorLink = authorSlug ? `/users/${authorSlug}` : '#';
-
   const hasParent = !!comment.parentCommentId;
   const totalChildren = (comment as any).directChildrenCount || 0;
-  // [r] button: always rendered, disabled when no replies or all loaded
+
   let rDisabled: boolean;
   let rTooltip: string;
   if (totalChildren <= 0) {
@@ -327,9 +280,27 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
     rTooltip = 'Load all replies from server (Shortkey: r)';
   }
 
-  // [t] button: always rendered, disabled when already at top level
   const tDisabled = !hasParent;
   const tTooltip = tDisabled ? 'Already at top level' : 'Load parents and scroll to root (Shortkey: t)';
+
+  const controlsHtml = `
+    <span class="pr-comment-controls">
+      <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+      <span class="pr-comment-action text-btn ${rDisabled ? 'disabled' : ''}" data-action="load-descendants" title="${rTooltip}">[r]</span>
+      <span class="pr-comment-action text-btn ${tDisabled ? 'disabled' : ''}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
+      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
+      <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
+      <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
+    </span>
+  `;
+
+  const metadataHtml = renderMetadata(comment, {
+    state,
+    style: `${metaStyle} ${fontStyle}`,
+    extraClass: 'pr-comment-meta-wrapper',
+    children: controlsHtml
+  });
+  const bodyContent = renderBody(comment.htmlBody || '', comment.extendedScore as NamesAttachedReactionsScore);
 
   return `
     <div class="${classes}" 
@@ -338,28 +309,7 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
          data-parent-id="${comment.parentCommentId || ''}"
          data-post-id="${comment.postId}"
          style="${bodyStyle}">
-      <div class="pr-comment-meta" style="${metaStyle} ${fontStyle}">
-        ${voteButtonsHtml}
-        ${reactionsHtml}
-        <span class="pr-author-controls">
-          <span class="pr-author-down ${authorPref < 0 ? 'active-down' : ''}" data-action="author-down" title="Mark author as disliked (auto-hide their future comments)">↓</span>
-        </span>
-        <a href="${authorLink}" target="_blank" class="pr-author" data-author-id="${comment.user?._id || ''}">${escapeHtml(authorName)}</a>
-        <span class="pr-author-controls">
-          <span class="pr-author-up ${authorPref > 0 ? 'active-up' : ''}" data-action="author-up" title="Mark author as preferred (highlight their future comments)">↑</span>
-        </span>
-        <span class="pr-timestamp">
-          <a href="${comment.pageUrl}" target="_blank">${timeStr}</a>
-        </span>
-        <span class="pr-comment-controls">
-          <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
-          <span class="pr-comment-action text-btn ${rDisabled ? 'disabled' : ''}" data-action="load-descendants" title="${rTooltip}">[r]</span>
-          <span class="pr-comment-action text-btn ${tDisabled ? 'disabled' : ''}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
-          <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
-          <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
-          <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
-        </span>
-      </div>
+      ${metadataHtml}
       <div class="pr-comment-body">
         ${bodyContent}
       </div>
@@ -367,3 +317,4 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
     </div>
   `;
 };
+

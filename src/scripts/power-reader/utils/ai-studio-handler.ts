@@ -1,4 +1,5 @@
 import { Logger } from './logger';
+import { sanitizeHtml } from './sanitize';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -217,16 +218,10 @@ async function waitForResponse(timeoutMs: number = 180000): Promise<string> {
                 if (!editIcon) return setTimeout(checkCompletion, 1000);
 
                 const container = lastTurn.querySelector('div.model-response-content, .message-content, .turn-content') || lastTurn;
-                const text = (container.textContent || '').trim();
+                const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ''));
 
-                if (text.length > 10) {
-                    const escaped = text
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;')
-                        .replace(/"/g, '&quot;')
-                        .replace(/'/g, '&#039;');
-                    return resolve(`<pre class="pr-ai-text">${escaped}</pre>`);
+                if (cleanHtml.length > 10) {
+                    return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
                 }
             }
             setTimeout(checkCompletion, 1000);

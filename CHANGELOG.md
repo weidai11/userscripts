@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.567] - 2026-02-15
+
+### Improved
+- **Post Expansion ([PR-POSTBTN-01])**: Improved the `[e]` (Expand) action to immediately expand newly loaded post bodies without requiring a second click. 
+- **Sticky Header Navigation**: Expanding or collapsing a thread from the sticky header now correctly scrolls the viewport back to the original post header, preventing the user from being stranded.
+- **AI Studio Response**: Restored rich formatting (headers, lists, blockquotes) for AI Studio responses by using `sanitizeHtml` instead of plain text escaping.
+
+## [1.2.564] - 2026-02-15
+
+### Fixed
+- **Post Read Tracking ([PR-READ-01])**: Resolved a bug where long posts were not being marked as read. The `ReadTracker` now correctly checks the visibility of the truncated `.pr-post-body-container` instead of the full (unscrolled) `.pr-post-content`.
+- **E2E Test Stability**: 
+    - Resolved widespread strict mode violations by refining Playwright locators with `.first()` and direct child selectors in `ai-studio-descendants.spec.ts`, `navigation-expansion.spec.ts`, and `parent-navigation.spec.ts`.
+    - Fixed an incorrect test assertion in `ui-requirements.spec.ts` ([PR-AUTH-05]) where sticky header state was being verified against mismatched expectation.
+- **Rendering Refactoring**: Fixed a type error in `render/post.ts` where incorrect arguments were passed to `renderPostBody`.
+
+
+## [1.2.560] - 2026-02-14
+
+### Fixed
+- **Security ([P1])**: Fixed a Reflected XSS vulnerability in the User Archive view where the username from the URL was being injected into the DOM without escaping.
+- **Post Read-More Logic ([P1])**: Resolved a regression where the "Read More" button remained visible after expanding a post via the `[e]` button or clicking "Read More".
+- **DOM Structure Mismatch ([P2])**: Fixed an issue where the post body structure (specifically the `.pr-post-body` class placement) prevented the code from correctly detecting full post content.
+    - Updated `isFullPost` check in `dom.ts`.
+    - Updated `collapsePost` logic in `navigation.ts` and `styles.ts` to correctly hide the entire post body container.
+    - Fixed `linkPreviews.ts` to correctly detect collapsed state using the new DOM structure, restoring hover previews for collapsed posts.
+
+## [1.2.559] - 2026-02-14
+
+### Fixed
+- **Post Expansion Toggle ([PR-POSTBTN-01])**: Resolved a bug where the `[e]` toggle button was erroneously disabled on initial load for long posts.
+    - Added an initial inline `max-height` (from `CONFIG.maxPostHeight`) to the post body container during rendering.
+    - This ensures that the measurement logic in `refreshPostActionButtons` correctly detects truncation (where `scrollHeight > offsetHeight`), preventing it from disabling the button on posts that "fit" only because their height limit hadn't been applied yet.
+    - Verified the fix with a robust E2E test in `navigation-actions.spec.ts`.
+
+
+## [1.2.545] - 2026-02-13
+
+### Added
+- **User Archive 2.0 (Phase 1)**: Initial foundation for the comprehensive user profile history.
+    - **Offline Storage**: Integrated IndexedDB storage (`archive/storage.ts`) for caching user posts and comments, enabling fast, offline-first browsing of user history.
+    - **Bulk Fetching**: Implemented high-performance data loader (`archive/loader.ts`) for fetching entire user histories from GraphQL with pagination and progress tracking.
+    - **Unified Feed Rendering**: Basic archive view that merges a user's posts and comments into a single, chronological feed.
+    - **Shared Data Models**: Defined `ArchiveState` in `archive/state.ts` for consistent archive management.
+
+### Changed
+- **Rendering Component Refactoring**: Major architectural cleanup of the rendering pipeline to promote reuse and modularity.
+    - **Shared Modules**: Extracted logic into `render/components/` (Metadata, Body, Actions).
+    - **Unified Metadata**: Post and comment metadata now use the same `renderMetadata` component, ensuring consistent author controls and styling.
+    - **Content Unification**: Consolidated body rendering, quote highlighting, and truncation logic into `render/components/body.ts`.
+    - **Actions Cleanup**: Moved vote and reaction rendering into a shared `actions.ts` component.
+    - **Storage Paths**: Simplified and corrected import hierarchies for better maintainability.
+
+### Fixed
+- **GraphQL Field Invalidation**: Corrected `GET_USER_POSTS` and `GET_USER_COMMENTS` to use valid schema selectors (`userPosts` and `profileComments`), resolving build-time validation errors.
+
 ## [1.2.543] - 2026-02-13
 
 ### Fixed

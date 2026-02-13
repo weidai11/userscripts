@@ -63,8 +63,8 @@ test('[PR-DATA-01][PR-DATA-02][PR-LOAD-01][PR-LOAD-02][PR-LOAD-03][PR-LOAD-04][P
 
     // Use data-id to target the specific parent comment
     const parentComment = page.locator('.pr-comment[data-id="test-id-1"]');
-    await expect(parentComment.locator('> .pr-comment-meta .pr-author')).toContainText('MockUser1');
-    await expect(parentComment.locator('> .pr-comment-body')).toContainText('This is a mock comment body.');
+    await expect(parentComment.locator('.pr-comment-meta .pr-author').first()).toContainText('MockUser1');
+    await expect(parentComment.locator('.pr-comment-body').first()).toContainText('This is a mock comment body.');
 
     // Verify "reply to you" styling (second comment replies to TestUser)
     const replyComment = page.locator('.pr-comment[data-id="test-id-2"]');

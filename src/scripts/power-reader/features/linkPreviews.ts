@@ -47,7 +47,7 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
 
             // Only skip preview if the post is COMPELTELY visible
             const body = post.querySelector('.pr-post-body-container') as HTMLElement;
-            const collapsed = post.querySelector('.pr-post-content.collapsed');
+            const collapsed = post.querySelector('.pr-post-body-container.collapsed');
 
             // If collapsed, it's not "completely visible" in the sense of seeing the content
             if (!body || collapsed) return null;
@@ -166,7 +166,7 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
 
               const header = post.querySelector('.pr-post-header') as HTMLElement;
               const body = post.querySelector('.pr-post-body-container') as HTMLElement;
-              const collapsed = post.querySelector('.pr-post-content.collapsed');
+              const collapsed = post.querySelector('.pr-post-body-container.collapsed');
 
               const targets: HTMLElement[] = [];
               if (header) targets.push(header);

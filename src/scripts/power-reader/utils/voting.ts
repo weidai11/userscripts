@@ -242,67 +242,7 @@ export function toggleAgreementVote(
   return calculateNextVoteState(currentVote, direction, false) as AgreementVote;
 }
 
-/**
- * Render vote buttons HTML
- */
-export function renderVoteButtons(
-  commentId: string,
-  karmaScore: number,
-  currentKarmaVote: string | number | null,
-  currentAgreement: Record<string, any> | null,
-  agreementScore: number = 0,
-  voteCount: number = 0,
-  agreementVoteCount: number = 0,
-  showAgreement: boolean = true,
-  showButtons: boolean = true
-): string {
-  const isUpvoted = currentKarmaVote === 'smallUpvote' || currentKarmaVote === 'bigUpvote' || currentKarmaVote === 1;
-  const isDownvoted = currentKarmaVote === 'smallDownvote' || currentKarmaVote === 'bigDownvote' || currentKarmaVote === -1;
 
-  // Parse agreement vote from extended vote
-  const agreeVote = currentAgreement?.agreement;
-  const isAgreed = agreeVote === 'smallUpvote' || agreeVote === 'bigUpvote' || agreeVote === 'agree';
-  const isDisagreed = agreeVote === 'smallDownvote' || agreeVote === 'bigDownvote' || agreeVote === 'disagree';
-
-  const agreementHtml = showAgreement ? `
-    <span class="pr-vote-controls">
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isDisagreed ? 'disagree-active' : ''} ${agreeVote === 'bigDownvote' ? 'strong-vote' : ''}" 
-            data-action="disagree" 
-            data-comment-id="${commentId}"
-            title="Disagree">✗</span>
-      ` : ''}
-      <span class="pr-agreement-score" title="Agreement votes: ${agreementVoteCount}">${agreementScore}</span>
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isAgreed ? 'agree-active' : ''} ${agreeVote === 'bigUpvote' ? 'strong-vote' : ''}" 
-            data-action="agree" 
-            data-comment-id="${commentId}"
-            title="Agree">✓</span>
-      ` : ''}
-    </span>` : '';
-
-  return `
-    <span class="pr-vote-controls">
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isDownvoted ? 'active-down' : ''} ${currentKarmaVote === 'bigDownvote' ? 'strong-vote' : ''}" 
-            data-action="karma-down" 
-            data-comment-id="${commentId}"
-            title="Downvote">▼</span>
-      ` : ''}
-      <span class="pr-karma-score" title="Total votes: ${voteCount}">${karmaScore}</span>
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isUpvoted ? 'active-up' : ''} ${currentKarmaVote === 'bigUpvote' ? 'strong-vote' : ''}" 
-            data-action="karma-up" 
-            data-comment-id="${commentId}"
-            title="Upvote">▲</span>
-      ` : ''}
-    </span>
-    ${agreementHtml}
-    <span class="pr-reactions-container" data-comment-id="${commentId}">
-      <!-- Reactions will be injected here during main render or update -->
-    </span>
-  `;
-}
 
 /**
  * Update vote UI after a vote is cast

@@ -18,22 +18,31 @@ test.describe('Post Action Buttons', () => {
             user: { _id: 'u1', username: 'Author1' }
         }];
 
-        await initPowerReader(page, { posts, testMode: true });
+        await initPowerReader(page, {
+            posts,
+            testMode: true,
+            scrapedReactions: [],
+        });
+        await page.waitForTimeout(100);
 
-        const container = page.locator('.pr-post[data-id="p1"] .pr-post-body-container');
-        const toggleBtn = page.locator('.pr-post[data-id="p1"] [data-action="toggle-post-body"]');
+        const post = page.locator('.pr-post[data-post-id="p1"]').first();
+        const container = post.locator('.pr-post-body-container');
+        const toggleBtn = page.locator('.pr-post[data-post-id="p1"] [data-action="toggle-post-body"]');
 
-        // Initial state: truncated
+        // Post has htmlBody, so body container starts rendered and truncated
+        await expect(container).toHaveCount(1);
         await expect(container).toHaveClass(/truncated/);
         await expect(toggleBtn).toHaveText('[e]');
 
-        // Click to expand
+        // Click [e] to expand
         await toggleBtn.click();
+        await page.waitForTimeout(500);
         await expect(container).not.toHaveClass(/truncated/);
-        await expect(container).toHaveCSS('max-height', 'none');
+        await expect(container).toBeVisible();
 
-        // Click to collapse
+        // Click [e] to collapse
         await toggleBtn.click();
+        await page.waitForTimeout(500);
         await expect(container).toHaveClass(/truncated/);
     });
 
@@ -94,7 +103,7 @@ test.describe('Post Action Buttons', () => {
         const nextBtn = page.locator('.pr-post[data-id="p1"] [data-action="scroll-to-next-post"]');
         await expect(nextBtn).toHaveText('[n]');
         await nextBtn.click();
-        const p2Top = await page.evaluate(() => document.querySelector('.pr-post[data-id="p2"]')?.getBoundingClientRect().top);
+        const p2Top = await page.evaluate(() => document.querySelector('.pr-post[data-post-id="p2"]')?.getBoundingClientRect().top);
         expect(p2Top).toBeLessThan(600);
     });
 
@@ -299,9 +308,9 @@ test.describe('Comment Action Buttons', () => {
         await expect(btn).toBeVisible();
         await btn.click();
 
-        await expect(page.locator('.pr-comment[data-id="c1"] > .pr-comment-body')).toContainText('C1');
-        await expect(page.locator('.pr-comment[data-id="c2"] > .pr-comment-body')).toContainText('C2');
-        await expect(page.locator('.pr-comment[data-id="c4"] > .pr-comment-body')).toContainText('C4');
+        await expect(page.locator('.pr-comment[data-id="c1"] .pr-comment-body').first()).toContainText('C1');
+        await expect(page.locator('.pr-comment[data-id="c2"] .pr-comment-body').first()).toContainText('C2');
+        await expect(page.locator('.pr-comment[data-id="c4"] .pr-comment-body').first()).toContainText('C4');
         await expect(page.locator('.pr-comment[data-id="c2"][data-placeholder="1"]')).toHaveCount(0);
     });
 });

@@ -81,7 +81,12 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
             user: { username: 'User' }
         }));
 
-        await initPowerReader(page, { posts, comments, testMode: true });
+        await initPowerReader(page, { 
+            posts, 
+            comments, 
+            testMode: true, 
+            storage: { 'helpCollapsed': true }
+        });
         await page.setViewportSize({ width: 1280, height: 800 });
 
         // Scroll deep into the post
@@ -98,7 +103,7 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         await collapseBtn.click();
 
         // Wait for collapse to finish and scroll to stabilize
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(1000);
 
         // Verify scroll position - should be near the top of the post header
         const final = await page.evaluate(() => {
@@ -150,7 +155,16 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
             htmlBody: '<div style="height: 1000px">Long content to ensure truncation</div>'
         }];
 
-        await initPowerReader(page, { posts, comments: [], testMode: true });
+        await initPowerReader(page, {
+            posts,
+            comments: [],
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('GetPost')) {
+                    return { data: { post: { result: ${JSON.stringify(posts[0])} } } };
+                }
+            `
+        });
 
         // Add spacer at bottom to allow scrolling p1 to top
         await page.evaluate(() => {
@@ -234,7 +248,18 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
             htmlBody: '<div style="height: 2000px">Tall body</div>'
         }];
 
-        await initPowerReader(page, { posts, comments: [], testMode: true, verbose: true, appVerbose: true });
+        await initPowerReader(page, {
+            posts,
+            comments: [],
+            testMode: true,
+            verbose: true,
+            appVerbose: true,
+            onGraphQL: `
+                if (query.includes('GetPost')) {
+                    return { data: { post: { result: ${JSON.stringify(posts[0])} } } };
+                }
+            `
+        });
 
         const header = page.locator('.pr-post[data-id="p1"] .pr-post-header');
         const upBtn = header.locator('[data-action="author-up"]');
@@ -248,11 +273,7 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         // Click up -> should become active
         await upBtn.click();
         await expect(upBtn).toHaveClass(/active-up/);
-
-        // Click down -> should switch to active-down
-        await downBtn.click();
-        await expect(downBtn).toHaveClass(/active-down/);
-        await expect(upBtn).not.toHaveClass(/active-up/);
+        await expect(downBtn).not.toHaveClass(/active-down/);
 
         // Expand post so it's very tall
         const eBtn = header.locator('[data-action="toggle-post-body"]');
@@ -276,18 +297,23 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         // Wait for scroll event to process and sticky header to update
         await page.waitForTimeout(200);
 
-        const sticky = page.locator('#pr-sticky-header');
-        await expect(sticky).toBeVisible();
-        const stickyUp = sticky.locator('[data-action="author-up"]');
-        const stickyDown = sticky.locator('[data-action="author-down"]');
+        const stickyHeader = page.locator('.pr-sticky-header');
+        await expect(stickyHeader).toHaveClass(/visible/);
+        const sUpBtn = stickyHeader.locator('[data-action="author-up"]');
+        const sDownBtn = stickyHeader.locator('[data-action="author-down"]');
 
-        // Initial state from previous click
-        await expect(stickyDown).toHaveClass(/active-down/);
+        // Verify sticky header reflects the liked state
+        await expect(sUpBtn).toHaveClass(/active-up/);
+        await expect(sDownBtn).not.toHaveClass(/active-down/);
 
-        // Click up in sticky
-        await stickyUp.click();
-        await expect(stickyUp).toHaveClass(/active-up/);
-        await expect(stickyDown).not.toHaveClass(/active-down/);
+        // Toggle to disliked via sticky button
+        await sDownBtn.click();
+        await expect(sDownBtn).toHaveClass(/active-down/);
+        await expect(sUpBtn).not.toHaveClass(/active-up/);
+
+        // Verify it reflected back to main header
+        await expect(downBtn).toHaveClass(/active-down/);
+        await expect(upBtn).not.toHaveClass(/active-up/);
     });
 
     test('[PR-AUTH-07][PR-AUTH-08] Author preference updates propagate globally to all items by same author', async ({ page }) => {

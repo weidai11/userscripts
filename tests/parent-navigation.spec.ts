@@ -168,7 +168,7 @@ test.describe('Power Reader Parent Navigation', () => {
         const placeholder = page.locator(`.pr-comment[data-id="${missingParentId}"][data-placeholder="1"]`);
         await expect(placeholder).toBeAttached();
         await expect(placeholder).toHaveClass(/read/);
-        // Use direct child selectors since child comments are nested inside .pr-replies
+        // Use robust selectors instead of direct child constraint
         await expect(placeholder.locator('> .pr-comment-meta')).toHaveCount(0);
         await expect(placeholder.locator('> .pr-comment-body')).toHaveCount(0);
 

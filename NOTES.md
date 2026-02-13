@@ -139,6 +139,11 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Solution**: In `ReadTracker.ts`, we perform a specialized check for `.pr-post` items. We extract the bounding box of the `.pr-post-content` (the body) instead of the whole post group. If the body has been scrolled past, the post is marked read, even if dozens of unread comments remain visible below it.
 - **Gotcha**: If the post body is collapsed or missing (header-only post), we fall back to checking the `.pr-post-header` instead. This ensures header-only posts are still marked read correctly.
 
+### Post Truncation Measurement Race
+- **Problem**: The `[e]` (toggle expansion) button is disabled on load even for very long posts.
+- **Cause**: The `refreshPostActionButtons` utility determines if a post "fits" (and thus doesn't need a toggle) by checking `scrollHeight > offsetHeight`. If the container has the `.truncated` class but no CSS-enforced `max-height` yet, the element renders at its natural full height. Thus `scrollHeight == offsetHeight`, and the utility erroneously disables the button.
+- **Solution**: Apply the `max-height` constraint as an inline style during the initial render whenever the `.truncated` class is applied. This ensures the first layout pass correctly reflects the clipped state for measurement logic.
+
 ### Forum Injection & Hydration Safety
 - **Context**: Injecting links into a live React application (like the LessWrong forum) is risky because React's "Hydration" process expects the DOM to exactly match its server-rendered state. If a userscript modifies the DOM too early, React may crash with a "Hydration Mismatch" (Error #418).
 - **Solution**: 

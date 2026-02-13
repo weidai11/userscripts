@@ -130,7 +130,7 @@ test.describe('Power Reader Parent Highlighting', () => {
         const findParentBtn = comment.locator('.pr-find-parent');
 
         // Expand the post content naturally by clicking "Read More"
-        const readMoreBtn = page.locator('.pr-read-more-btn').first();
+        const readMoreBtn = page.locator('[data-action="read-more"]').first();
         if (await readMoreBtn.isVisible()) {
             await readMoreBtn.click();
         }
@@ -159,7 +159,7 @@ test.describe('Power Reader Parent Highlighting', () => {
         await findParentBtn.dispatchEvent('mouseenter');
 
         // Expect sticky header to be highlighted inside
-        const stickyPostHeader = stickyHeader.locator('.pr-post-header');
+        const stickyPostHeader = stickyHeader.locator('.pr-post-header').first();
         await expect(stickyPostHeader).toHaveClass(/pr-parent-hover/);
         await expect(stickyPostHeader).toHaveCSS('background-color', 'rgb(255, 224, 102)');
 

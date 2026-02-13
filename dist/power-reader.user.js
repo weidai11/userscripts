@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.543
+// @version    1.2.571
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -43,2641 +43,6 @@ reset: () => {
       console.error(`${PREFIX} ❌ ${msg}`, ...args);
     }
   };
-  const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  async function handleAIStudio() {
-    const payload = GM_getValue("ai_studio_prompt_payload");
-    if (!payload) {
-      Logger.debug("AI Studio: No payload found in GM storage, skipping automation.");
-      return;
-    }
-    Logger.info("AI Studio: Automation triggered.");
-    try {
-      GM_setValue("ai_studio_status", "Configuring AI model...");
-      await automateModelSelection();
-      await automateDisableSearch();
-      await automateEnableUrlContext();
-      GM_setValue("ai_studio_status", "Injecting metadata thread...");
-      const requestId = GM_getValue("ai_studio_request_id");
-      await injectPrompt(payload);
-      await sleep$1(500);
-      GM_setValue("ai_studio_status", "Submitting prompt...");
-      await automateRun();
-      const responseText = await waitForResponse();
-      GM_setValue("ai_studio_status", "Response received!");
-      GM_setValue("ai_studio_response_payload", {
-        text: responseText,
-        requestId,
-        includeDescendants: GM_getValue("ai_studio_include_descendants", false),
-        timestamp: Date.now()
-      });
-      GM_deleteValue("ai_studio_prompt_payload");
-      GM_deleteValue("ai_studio_request_id");
-      GM_deleteValue("ai_studio_include_descendants");
-      GM_deleteValue("ai_studio_status");
-      Logger.info("AI Studio: Response sent. Tab will close in 5m if no interaction.");
-      let hasInteracted = false;
-      const markInteracted = () => {
-        if (!hasInteracted) {
-          hasInteracted = true;
-          Logger.info("AI Studio: User returned to tab. Auto-close canceled.");
-        }
-      };
-      window.addEventListener("blur", () => {
-        window.addEventListener("mousedown", markInteracted, { once: true, capture: true });
-        window.addEventListener("keydown", markInteracted, { once: true, capture: true });
-        window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
-      }, { once: true });
-      setTimeout(() => {
-        if (!hasInteracted && document.visibilityState !== "visible") {
-          Logger.info("AI Studio: Idle and backgrounded. Closing tab.");
-          window.close();
-        } else if (!hasInteracted) {
-          Logger.info("AI Studio: 5m reached but tab is currently visible. Postponing close.");
-        }
-      }, 5 * 60 * 1e3);
-    } catch (error) {
-      Logger.error("AI Studio: Automation failed", error);
-      GM_setValue("ai_studio_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  async function waitForElement(selector, timeout = 3e4) {
-    return new Promise((resolve, reject) => {
-      const check = () => {
-        const elements = document.querySelectorAll(selector);
-        if (elements.length > 0) return elements[0];
-        return null;
-      };
-      const existing = check();
-      if (existing) return resolve(existing);
-      if (window.location.href.includes("accounts.google.com") || document.body?.innerText.includes("Sign in")) {
-        return reject(new Error("Login Required"));
-      }
-      const observer = new MutationObserver((_, obs) => {
-        const el = check();
-        if (el) {
-          obs.disconnect();
-          resolve(el);
-        }
-      });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
-      setTimeout(() => {
-        observer.disconnect();
-        reject(new Error(`Timeout waiting for element: ${selector}`));
-      }, timeout);
-    });
-  }
-  async function automateModelSelection() {
-    const modelCard = await waitForElement("button.model-selector-card");
-    if (modelCard.innerText.includes("Flash 3") || modelCard.innerText.includes("Gemini 3 Flash")) {
-      return;
-    }
-    modelCard.click();
-    const flash3Btn = await waitForElement('button[id*="gemini-3-flash-preview"]');
-    flash3Btn.click();
-  }
-  async function automateDisableSearch() {
-    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
-    if (searchToggle.classList.contains("mdc-switch--checked")) {
-      searchToggle.click();
-    }
-  }
-  async function automateEnableUrlContext() {
-    Logger.debug("AI Studio: Searching for URL context toggle...");
-    const urlToggle = await waitForElement(
-      "button[aria-label='URL context'], button[aria-label='URL Context'], button[aria-label='Browse the url context'], button[aria-label='URL tool'], button[aria-label='URL Tool']",
-      5e3
-    ).catch(() => null);
-    if (urlToggle) {
-      if (urlToggle.classList.contains("mdc-switch--unselected")) {
-        Logger.info("AI Studio: Enabling URL context tool.");
-        urlToggle.click();
-      } else {
-        Logger.debug("AI Studio: URL context tool already enabled.");
-      }
-    } else {
-      Logger.warn("AI Studio: URL context toggle not found.");
-    }
-  }
-  async function injectPrompt(payload) {
-    const textarea = await waitForElement("textarea[aria-label='Enter a prompt']");
-    textarea.value = payload;
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    textarea.focus();
-    textarea.setSelectionRange(0, 0);
-  }
-  async function automateRun() {
-    const runBtn = await waitForElement("ms-run-button button");
-    runBtn.focus();
-    runBtn.click();
-  }
-  async function waitForResponse(timeoutMs = 18e4) {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      let generationStarted = false;
-      let hasRetried = false;
-      const checkCompletion = () => {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > timeoutMs) return reject(new Error("Timeout"));
-        const stopBtn = document.querySelector('button[aria-label="Stop generation"], .ms-button-spinner, mat-icon[data-icon-name="stop"], mat-icon[data-icon-name="progress_activity"]');
-        const runBtn = document.querySelector("ms-run-button button");
-        const hasResponseNodes = document.querySelector("ms-cmark-node") !== null;
-        const hasError = document.querySelector(".model-error") !== null;
-        if (stopBtn || hasResponseNodes || hasError) {
-          if (!generationStarted) {
-            generationStarted = true;
-            GM_setValue("ai_studio_status", "AI is thinking...");
-          }
-        }
-        if (generationStarted && !stopBtn && runBtn && runBtn.textContent?.includes("Run")) {
-          const turnList = document.querySelectorAll("ms-chat-turn");
-          const lastTurn = turnList[turnList.length - 1];
-          if (!lastTurn) return setTimeout(checkCompletion, 1e3);
-          const errorEl = lastTurn.querySelector(".model-error");
-          if (errorEl) {
-            if (!hasRetried) {
-              const rerunBtn = document.querySelector('button[name="rerun-button"], .rerun-button');
-              if (rerunBtn) {
-                GM_setValue("ai_studio_status", "Retrying...");
-                hasRetried = true;
-                generationStarted = false;
-                rerunBtn.click();
-                return setTimeout(checkCompletion, 2e3);
-              }
-            }
-            return resolve(`<div class="pr-ai-error">Error: ${errorEl.textContent}</div>`);
-          }
-          const editIcon = Array.from(lastTurn.querySelectorAll(".material-symbols-outlined")).find((el) => el.textContent?.trim() === "edit");
-          if (!editIcon) return setTimeout(checkCompletion, 1e3);
-          const container = lastTurn.querySelector("div.model-response-content, .message-content, .turn-content") || lastTurn;
-          const text2 = (container.textContent || "").trim();
-          if (text2.length > 10) {
-            const escaped = text2.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-            return resolve(`<pre class="pr-ai-text">${escaped}</pre>`);
-          }
-        }
-        setTimeout(checkCompletion, 1e3);
-      };
-      checkCompletion();
-    });
-  }
-  const getRoute = () => {
-    const host = window.location.hostname;
-    const pathname = window.location.pathname;
-    if (host === "aistudio.google.com") {
-      if (!pathname.startsWith("/prompts")) {
-        Logger.debug(`AI Studio Router: Skipping non-prompt path: ${pathname}`);
-        return { type: "skip" };
-      }
-      if (window.self !== window.top) {
-        Logger.debug("AI Studio Router: Skipping iframe");
-        return { type: "skip" };
-      }
-      return { type: "ai-studio" };
-    }
-    const isForumDomain = host.includes("lesswrong.com") || host.includes("forum.effectivealtruism.org") || host.includes("greaterwrong.com");
-    if (!isForumDomain) {
-      return { type: "skip" };
-    }
-    if (!pathname.startsWith("/reader")) {
-      return { type: "forum-injection" };
-    }
-    if (pathname === "/reader/reset") {
-      return { type: "reader", path: "reset" };
-    }
-    return { type: "reader", path: "main" };
-  };
-  const runAIStudioMode = async () => {
-    Logger.info("AI Studio: Main domain detected, initializing automation...");
-    await handleAIStudio();
-  };
-  const STYLES = `
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: #FFFFFF;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: #000;
-    min-height: 100%;
-    line-height: 1.35;
-  }
-
-  p {
-    margin-block-start: .6em;
-    margin-block-end: .6em;
-  }
-
-  #power-reader-root {
-    margin: 0 auto;
-    padding: 20px;
-    position: relative;
-    box-sizing: border-box;
-  }
-
-  /* Resize handles */
-  .pr-resize-handle {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    width: 8px;
-    cursor: ew-resize;
-    z-index: 1000;
-    opacity: 0;
-    transition: opacity 0.2s;
-    background: linear-gradient(to right, transparent, rgba(0,0,0,0.1), transparent);
-  }
-
-  .pr-resize-handle:hover,
-  .pr-resize-handle.dragging {
-    opacity: 1;
-    background: linear-gradient(to right, transparent, rgba(0,120,255,0.3), transparent);
-  }
-
-  .pr-resize-handle.left {
-    left: 0;
-  }
-
-  .pr-resize-handle.right {
-    right: 0;
-  }
-
-  .pr-header {
-    margin-bottom: 20px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid #ddd;
-  }
-
-  .pr-header h1 {
-    margin: 0 0 10px 0;
-  }
-
-  .pr-status {
-    color: #666;
-    font-size: 0.9em;
-  }
-
-  /* Sticky AI status indicator */
-  .pr-sticky-ai-status {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: rgba(40, 167, 69, 0.9);
-    color: white;
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 0.85em;
-    font-weight: bold;
-    z-index: 6000;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    display: none; /* Hidden by default */
-    pointer-events: none;
-    transition: opacity 0.3s;
-  }
-
-  .pr-sticky-ai-status.visible {
-    display: block;
-  }
-
-  @keyframes parentHighlight {
-    0% { background-color: #ffe066; }
-    100% { background-color: transparent; }
-  }
-
-  /* Navigation flash (animation) */
-  .pr-highlight-parent {
-    animation: parentHighlight 2s ease-out forwards;
-  }
-  .pr-post-header.pr-highlight-parent {
-    background: #ffe066 !important;
-    animation: parentHighlight 2s ease-out forwards;
-  }
-
-
-
-  /* Highlight for inline reactions */
-  .pr-highlight {
-    background-color: #fffacd;
-    border-bottom: 2px solid #ffd700;
-    cursor: help;
-  }
-
-  .pr-warning {
-    background: #fff3cd;
-    border: 1px solid #ffc107;
-    color: #856404;
-    padding: 12px 16px;
-    border-radius: 4px;
-    margin-bottom: 20px;
-  }
-
-  .pr-setup {
-    max-width: 500px;
-    margin: 40px auto;
-    padding: 30px;
-    background: #f9f9f9;
-    border-radius: 8px;
-    border: 1px solid #ddd;
-  }
-
-  .pr-setup p {
-    margin: 0 0 20px 0;
-    color: #444;
-  }
-
-  .pr-setup-form {
-    margin-bottom: 20px;
-  }
-
-  .pr-setup-form label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 500;
-  }
-
-  .pr-setup-form input[type="date"] {
-    width: 100%;
-    padding: 10px;
-    font-size: 16px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-sizing: border-box;
-  }
-
-  .pr-btn {
-    display: inline-block;
-    padding: 12px 24px;
-    background: #0078ff;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    font-size: 16px;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-
-  .pr-btn:hover {
-    background: #0056cc;
-  }
-
-  /* Animation for newly revealed context */
-  @keyframes pr-fade-in-glow {
-    0% { background-color: #fff3e0; } /* Material Orange 50 */
-    100% { background-color: transparent; }
-  }
-
-  .pr-just-revealed {
-    animation: pr-fade-in-glow 2s ease-out;
-  }
-
-  .pr-help {
-    background: #f9f9f9;
-    margin-bottom: 20px;
-    border-radius: 4px;
-    font-size: 0.85em;
-    border: 1px solid #e0e0e0;
-  }
-
-  .pr-help summary {
-    padding: 10px 15px;
-    cursor: pointer;
-    background: #f0f0f0;
-    border-radius: 4px 4px 0 0;
-    font-weight: bold;
-    user-select: none;
-  }
-
-  .pr-help summary:hover {
-    background: #e8e8e8;
-  }
-
-  /* When collapsed, keep bottom rounded */
-  .pr-help:not([open]) summary {
-    border-radius: 4px;
-  }
-
-  .pr-help-content {
-    padding: 15px;
-    border-top: 1px solid #e0e0e0;
-  }
-
-  .pr-help-columns {
-    column-count: 3;
-    column-gap: 20px;
-  }
-
-  @media (max-width: 1200px) {
-    .pr-help-columns { column-count: 2; }
-  }
-
-  @media (max-width: 800px) {
-    .pr-help-columns { column-count: 1; }
-  }
-
-  .pr-help-section {
-    break-inside: avoid;
-    margin-bottom: 8px;
-  }
-
-
-  .pr-help ul {
-    margin: 0;
-    padding-left: 20px;
-  }
-
-  .pr-help li {
-    margin: 4px 0;
-  }
-
-  .pr-help h4 {
-    margin: 12px 0 6px 0;
-    font-size: 1em;
-  }
-
-  .pr-help h4:first-child {
-    margin-top: 0;
-  }
-
-  /* Post containers */
-  .pr-post {
-    margin-bottom: 12px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    background: #fafafa;
-  }
-
-  .pr-post-header {
-    padding: 10px 15px;
-    background: #f0f0f0;
-    border-bottom: 1px solid #ddd;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .pr-post-header h2 {
-    margin: 0;
-    flex: 1;
-    min-width: 0; /* Allow title to shrink if needed */
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 1.2em;
-  }
-
-  .pr-post-meta {
-    margin-bottom: 0 !important;
-    gap: 8px !important;
-    flex-shrink: 0; /* Keep metadata from shrinking */
-  }
-
-  .pr-post-header.header-clickable {
-    cursor: pointer;
-  }
-
-  .pr-post-header.header-clickable:hover {
-    background: #e8e8e8;
-  }
-
-  .pr-post-header h2 .pr-post-title {
-    color: #000;
-    text-decoration: none;
-  }
-
-  .pr-post-header h2 .pr-post-title:hover {
-    text-decoration: underline;
-  }
-
-  .pr-post-actions {
-    display: inline-flex;
-    gap: 2px;
-    margin-right: 6px;
-  }
-
-  /* Shared Text Button Style */
-  .text-btn {
-    cursor: pointer;
-    opacity: 0.8;
-    transition: opacity 0.2s;
-    user-select: none;
-    padding: 0 2px;
-    font-size: 13px !important;
-    font-family: monospace;
-    color: #333;
-  }
-
-  .text-btn:hover:not(.disabled) {
-    opacity: 1;
-    color: #000;
-  }
-
-  .text-btn.disabled {
-    opacity: 0.15 !important;
-    cursor: not-allowed;
-  }
-
-  .pr-post-toggle {
-    /* Styles now handled by .text-btn */
-  }
-
-  .pr-post-comments {
-    padding: 10px;
-  }
-
-  .pr-post-comments.collapsed, .pr-post-content.collapsed {
-    display: none;
-  }
-
-  /* Post body (full content) */
-  .pr-post-body-container {
-    padding: 15px 20px;
-    background: #fff;
-    border-bottom: 1px solid #eee;
-    font-family: serif;
-    line-height: 1.3;
-    overflow-wrap: break-word;
-    position: relative;
-  }
-
-  .pr-post-body-container.truncated {
-    overflow: hidden;
-    /* max-height is set dynamically from CONFIG */
-    padding-bottom: 50px; /* Space for overlay */
-  }
-
-  .pr-post-body {
-  }
-
-  .pr-post-body img {
-    max-width: min(50vw, 100%);
-    height: auto;
-  }
-
-  .pr-read-more-overlay {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 100px;
-    background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 80%);
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    padding-bottom: 15px;
-    pointer-events: none;
-  }
-
-  .pr-read-more-btn {
-    background: #0078ff;
-    color: #fff;
-    border: none;
-    padding: 8px 24px;
-    border-radius: 20px;
-    font-size: 14px;
-    font-weight: bold;
-    cursor: pointer;
-    pointer-events: auto;
-    box-shadow: 0 2px 8px rgba(0,120,255,0.3);
-  }
-
-  .pr-read-more-btn:hover {
-    background: #0056cc;
-  }
-
-  /* Shared pr-item class for read tracking */
-  .pr-item.read .pr-post-header h2 .pr-post-title {
-    color: #707070;
-  }
-
-  .pr-item.read .pr-post-body-container {
-    opacity: 0.8;
-  }
-
-  /* Comment styling */
-  .pr-comment {
-    margin: 4px 0;
-    padding: 0px 10px;
-    border: 1px solid black;
-    border-radius: 4px;
-    background: #fff;
-    position: relative; /* Context for absolute positioning */
-  }
-
-  .pr-comment.pr-missing-parent {
-    min-height: 6px;
-    padding-top: 2px;
-    padding-bottom: 2px;
-  }
-
-  .pr-comment.reply-to-you {
-    border: 2px solid #0F0;
-  }
-
-  .pr-comment.reply-to-you.read {
-    border-width: 1px;
-    border-color: #0F0; /* Override general .read border-color */
-  }
-
-  .pr-comment.being-summarized, .pr-post.being-summarized {
-    border: 2px solid #007bff !important;
-    box-shadow: 0 0 8px rgba(0,123,255,0.3);
-  }
-
-  .pr-comment.read .pr-comment-body {
-    color: #707070;
-  }
-
-  .pr-comment.read {
-    border-color: #eee;
-  }
-
-  .pr-comment.rejected {
-    border: 1px solid red;
-  }
-
-  .pr-comment-meta {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 4px;
-    min-height: 24px;
-  }
-
-  .pr-author-controls {
-    cursor: pointer;
-    user-select: none;
-    margin: 0 4px;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  .pr-author-controls span {
-    margin-right: 2px;
-    padding: 0 4px;
-    border-radius: 2px;
-    font-size: 0.9em;
-  }
-
-  .pr-author-controls span:hover {
-    background: #e0e0e0;
-  }
-
-  .pr-author-controls span.active-up {
-    font-weight: bold;
-    color: green !important;
-  }
-
-  .pr-author-controls span.active-down {
-    font-weight: bold;
-    color: red !important;
-  }
-
-  .pr-author {
-    font-weight: bold;
-    color: inherit;
-    text-decoration: none;
-  }
-
-  .pr-author:hover {
-    text-decoration: underline;
-  }
-
-  .pr-score {
-    color: #666;
-  }
-
-  .pr-timestamp {
-    color: #666;
-  }
-
-  .pr-timestamp a {
-    color: #666;
-    text-decoration: none;
-  }
-
-  .pr-timestamp a:hover {
-    text-decoration: underline;
-  }
-
-  .pr-comment-controls {
-    cursor: pointer;
-    user-select: none;
-    margin-left: auto;
-  }
-
-  .pr-comment-action {
-    /* Styles now handled by .text-btn */
-  }
-
-  .pr-comment-controls span:hover {
-    /* Hover color handled by .text-btn */
-  }
-
-  .pr-comment-body {
-    margin: 4px 0;
-    overflow-wrap: break-word;
-    line-height: 1.3;
-  }
-
-  .pr-comment-body img {
-    max-width: min(50vw, 100%);
-    height: auto;
-  }
-
-  .pr-comment-body blockquote {
-    border-left: solid 3px #e0e0e0;
-    padding-left: 10px;
-    margin: 8px 0 8px 10px;
-    color: #555;
-  }
-
-  /* Inline Highlights */
-  .pr-highlight {
-    background-color: #fff9c4; /* Material Yellow 100 */
-    cursor: pointer;
-    border-bottom: 2px solid #fbc02d; /* Material Yellow 700 */
-  }
-
-  .pr-highlight:hover {
-    background-color: #fff59d; /* Material Yellow 200 */
-  }
-
-  /* Floating Inline Reaction Button */
-  .pr-inline-react-btn {
-    position: absolute;
-    z-index: 1000;
-    background: #333;
-    color: white;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-    transform: translateX(-50%);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    pointer-events: auto;
-  }
-
-  .pr-inline-react-btn:hover {
-    background: #000;
-  }
-
-  .pr-inline-react-btn::after {
-    content: '';
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    margin-left: -5px;
-    border-width: 5px;
-    border-style: solid;
-    border-color: #333 transparent transparent transparent;
-  }
-
-
-
-  /* Nested comments */
-  .pr-replies {
-    margin-left: 20px;
-    padding-left: 10px;
-    position: relative;
-  }
-
-  /* [PR-NEST-05] Visual Indentation Line + 24px Hit Area */
-  .pr-replies::before {
-    content: '';
-    position: absolute;
-    left: -11px; /* Centered on the x=0 edge of the container */
-    top: 0;
-    bottom: 0;
-    width: 24px;
-    /* 2px solid visual line centered within the 24px hit area */
-    background: linear-gradient(to right, transparent 11px, #eee 11px, #eee 13px, transparent 13px);
-    cursor: pointer;
-    transition: background 0.2s;
-    z-index: 1; /* Below content but above container background */
-  }
-
-  .pr-replies::before:hover {
-    /* Darken line and show subtle background highlight */
-    background: linear-gradient(to right, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 11px, #bbb 11px, #bbb 13px, rgba(0,0,0,0.03) 13px, rgba(0,0,0,0.03) 24px);
-  }
-
-  /* Collapsed comment preview */
-  .pr-comment.collapsed > .pr-comment-body,
-  .pr-comment.collapsed > .pr-replies {
-    display: none;
-  }
-
-  .pr-comment.collapsed > .pr-comment-meta .pr-expand {
-    display: inline !important;
-  }
-
-  .pr-comment:not(.collapsed) > .pr-comment-meta .pr-expand {
-    display: none !important;
-  }
-
-  .pr-comment:not(.collapsed) > .pr-comment-meta .pr-collapse {
-    display: inline;
-  }
-
-  .pr-comment.collapsed > .pr-comment-meta .pr-collapse {
-    display: none;
-  }
-
-  /* Parent highlight */
-  .pr-comment.pr-highlight-parent > .pr-comment-body {
-    background-color: yellow !important;
-  }
-
-  /* First-time setup */
-  .pr-setup {
-    max-width: 600px;
-    margin: 50px auto;
-    padding: 20px;
-    background: #f9f9f9;
-    border-radius: 8px;
-  }
-
-  .pr-setup input[type="text"] {
-    width: 100%;
-    padding: 8px;
-    margin: 10px 0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
-  }
-
-  .pr-setup button {
-    padding: 8px 16px;
-    background: #007bff;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-
-  .pr-setup button:hover {
-    background: #0056b3;
-  }
-
-  /* Loading state */
-  .pr-loading {
-    text-align: center;
-    padding: 40px;
-    color: #666;
-  }
-
-  /* Error state */
-  .pr-error {
-    color: red;
-    padding: 20px;
-    text-align: center;
-  }
-
-  /* Voting buttons */
-  .pr-vote-controls {
-    display: inline-flex;
-    gap: 2px;
-    margin-right: 8px;
-    align-items: center;
-  }
-
-  .pr-vote-btn {
-    cursor: pointer;
-    padding: 0 4px;
-    border-radius: 2px;
-    user-select: none;
-    font-size: 0.9em;
-  }
-
-  .pr-vote-btn:hover {
-    background: #e0e0e0;
-  }
-
-  .pr-vote-btn.active-up {
-    color: #0a0;
-    font-weight: bold;
-  }
-
-  .pr-vote-btn.active-down {
-    color: #a00;
-    font-weight: bold;
-  }
-
-  .pr-vote-btn.agree-active {
-    color: #090;
-    font-weight: bold;
-  }
-
-  .pr-vote-btn.disagree-active {
-    color: #900;
-    font-weight: bold;
-  }
-
-  .pr-karma-score {
-    font-weight: bold;
-    margin: 0 2px;
-    min-width: 1.2em;
-    text-align: center;
-  }
-
-  .pr-agreement-score {
-    color: #666;
-    min-width: 1.2em;
-    text-align: center;
-  }
-
-  /* Reactions */
-  .pr-reactions-container {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px;
-    margin-left: 8px;
-    vertical-align: middle;
-  }
-
-  .pr-reaction-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    background: #f8f8f8;
-    font-size: 0.85em;
-    cursor: pointer;
-    user-select: none;
-    transition: all 0.2s;
-  }
-
-  .pr-reaction-chip:hover {
-    background: #eee;
-    border-color: #ccc;
-  }
-
-  .pr-reaction-chip.voted {
-    background: #e3f2fd;
-    border-color: #2196f3;
-  }
-
-  .pr-reaction-icon {
-    width: 1.1em;
-    height: 1.1em;
-    display: inline-block;
-  }
-
-  .pr-reaction-icon img {
-    width: 100%;
-    height: 100%;
-    vertical-align: top;
-  }
-
-  .pr-add-reaction-btn {
-    cursor: pointer;
-    padding: 2px 6px;
-    color: #888;
-    font-size: 1.1em;
-    line-height: 1;
-    user-select: none;
-    transition: color 0.2s;
-  }
-
-  .pr-add-reaction-btn:hover {
-    color: #333;
-  }
-
-  .pr-add-reaction-btn svg {
-    display: inline-block;
-    vertical-align: middle;
-    pointer-events: none; /* Let the click fall through to the button */
-    width: 1em;
-    height: 1em;
-  }
-
-  /* Reaction Picker */
-  .pr-reaction-picker {
-    position: absolute;
-    z-index: 3000;
-    background: white;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    padding: 0;
-    width: fit-content;
-    max-width: 95vw;
-    height: auto;
-    display: none;
-    box-sizing: border-box;
-    flex-direction: column;
-    overflow: visible;
-  }
-
-  .pr-reaction-picker.visible {
-    display: flex;
-  }
-
-  .pr-picker-header {
-    padding: 8px 12px 0 12px;
-    flex-shrink: 0;
-  }
-
-  .pr-picker-scroll-container {
-    padding: 0 12px 12px 12px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    flex-grow: 1;
-    scrollbar-width: thin;
-  }
-
-  .pr-reaction-picker * {
-    box-sizing: border-box;
-  }
-
-  .pr-picker-search {
-    margin-bottom: 8px;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  
-  .pr-picker-search input {
-    flex: 1;
-    padding: 6px 10px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    font-size: 14px;
-  }
-
-  .pr-picker-section-title {
-    font-size: 0.75em;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin: 8px 0 4px 0;
-    padding-bottom: 2px;
-    border-bottom: 1px solid #eee;
-  }
-  
-  .pr-picker-section-title:first-child {
-    margin-top: 0;
-  }
-
-  .pr-picker-grid-separator {
-    grid-column: 1 / -1;
-    height: 1px;
-    background: #bbb;
-    margin: 8px 0;
-  }
-
-  .pr-reaction-picker-grid {
-    display: grid;
-    grid-template-columns: repeat(9, 38px);
-    gap: 4px;
-    width: 100%;
-  }
-
-  .pr-reaction-picker-item {
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    cursor: pointer;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.1s;
-    position: relative; /* CRITICAL for tooltips */
-  }
-
-  .pr-reaction-picker-item:hover {
-    background: #f0f0f0;
-  }
-  
-  .pr-reaction-picker-item.active {
-    background: #e3f2fd;
-    border: 1px solid #2196f3;
-  }
-
-  .pr-reaction-picker-item img {
-    width: 24px;
-    height: 24px;
-  }
-
-  .pr-tooltip-global {
-    position: fixed;
-    z-index: 9999;
-    background: #222;
-    color: white;
-    padding: 6px 10px;
-    border-radius: 4px;
-    font-size: 11px;
-    white-space: normal;
-    min-width: 100px;
-    max-width: 180px;
-    text-align: left;
-    pointer-events: none;
-    line-height: 1.4;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    border: 1px solid #444;
-    visibility: hidden;
-    opacity: 0;
-    transition: opacity 0.1s;
-  }
-
-  .pr-tooltip-global strong {
-    display: block;
-    margin-bottom: 2px;
-    font-size: 1.1em;
-    color: #fff;
-  }
-
-  /* Hover preview */
-  .pr-preview-overlay {
-    position: fixed;
-    z-index: 2000;
-    background: #fff;
-    border: 2px solid #333;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    max-height: 80vh;
-    overflow-y: auto;
-    padding: 16px;
-    pointer-events: auto;
-  }
-
-  .pr-preview-overlay.post-preview {
-    max-width: 80vw;
-    width: 800px;
-  }
-
-  .pr-preview-overlay.comment-preview {
-    max-width: 600px;
-  }
-
-  .pr-preview-overlay.author-preview {
-    max-width: 500px;
-    border-color: #0078ff;
-  }
-
-  .pr-preview-overlay .pr-preview-header {
-    font-weight: bold;
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #ddd;
-  }
-
-  .pr-preview-overlay .pr-preview-content {
-    line-height: 1.6;
-    font-family: serif;
-  }
-
-  .pr-preview-overlay .pr-preview-content img {
-    max-width: 100%;
-  }
-
-  .pr-preview-loading {
-    text-align: center;
-    color: #666;
-    padding: 20px;
-  }
-
-  /* Sticky post header */
-  .pr-sticky-header {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1500;
-    display: none;
-  }
-
-  .pr-sticky-header.visible {
-    display: block;
-  }
-
-  .pr-sticky-header .pr-post-header {
-    margin: 0 auto;
-    border-bottom: 2px solid #333;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    cursor: pointer;
-  }
-
-  .pr-sticky-header .pr-post-header h2 .pr-post-title {
-    cursor: pointer;
-  }
-
-  /* List View Styles */
-  .pr-picker-view-toggle {
-    float: right;
-    cursor: pointer;
-    color: #888;
-    font-size: 18px;
-    user-select: none;
-    padding: 0 4px;
-  }
-  .pr-picker-view-toggle:hover {
-    color: #333;
-  }
-
-  .pr-reaction-picker-list {
-    display: flex;
-    flex-wrap: wrap;
-    width: 0;
-    min-width: 100%;
-  }
-
-  /* List Item (Icon + Label) */
-  .pr-reaction-list-item {
-    width: 50%;
-    max-width: 50%;
-    height: 32px;
-    box-sizing: border-box;
-    padding: 2px 4px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: background 0.2s;
-  }
-  .pr-reaction-list-item:hover {
-    background: #f0f0f0;
-  }
-  .pr-reaction-list-item.active {
-    background: #e3f2fd;
-    border: 1px solid #2196f3;
-  }
-  .pr-reaction-list-item img {
-    width: 20px;
-    height: 20px;
-    margin-right: 8px;
-    flex-shrink: 0;
-  }
-  .pr-reaction-list-item span {
-    font-size: 13px;
-    white-space: pre-wrap; /* Allows 
- to break lines */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .pr-reaction-list-item span.small {
-    font-size: 11px;
-  }
-
-  .pr-debug-btn {
-    padding: 6px 12px;
-    background: #6c757d;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.9em;
-    margin-right: 8px;
-  }
-
-  .pr-debug-btn:hover {
-    background: #5a6268;
-  }
-
-  /* Bottom message */
-  .pr-bottom-message {
-    margin: 10px auto;
-    padding: 15px 20px;
-    text-align: center;
-    border: 2px dashed #ccc;
-    border-radius: 8px;
-    color: #666;
-    cursor: pointer;
-    transition: all 0.2s;
-    max-width: 600px;
-  }
-
-  .pr-bottom-message:hover {
-    background: #f0f0f0;
-    border-color: #999;
-    color: #333;
-  }
-
-  .pr-bottom-message.has-more {
-    background: #e3f2fd;
-    border-color: #2196f3;
-    color: #0d47a1;
-    border-style: solid;
-  }
-
-
-  /* AI Studio Response Popup */
-  .pr-ai-popup {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    max-width: 100%;
-    max-height: 50vh;
-    background: white;
-    border-bottom: 2px solid #007bff;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    z-index: 5000;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .pr-ai-popup-header {
-    background: #f0f7ff;
-    padding: 6px 15px;
-    border-bottom: 1px solid #cce5ff;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .pr-ai-popup-header h3 {
-    margin: 0;
-    font-size: 0.9em;
-    color: #004085;
-  }
-
-  .pr-ai-popup-content {
-    padding: 12px 15px;
-    overflow-y: auto;
-    font-family: inherit;
-    font-size: 0.95em;
-    line-height: 1.4;
-    color: #333;
-  }
-
-  .pr-ai-popup-content p { margin-bottom: 0.5em; }
-  .pr-ai-popup-content ul, .pr-ai-popup-content ol { margin-bottom: 0.5em; padding-left: 1.5em; }
-  .pr-ai-popup-content li { margin-bottom: 0.3em; }
-  
-  .pr-ai-popup-content h1, 
-  .pr-ai-popup-content h2, 
-  .pr-ai-popup-content h3 {
-    margin-top: 0.8em;
-    margin-bottom: 0.3em;
-    font-size: 1.1em;
-    border-bottom: 1px solid #eee;
-    color: #111;
-  }
-
-  .pr-ai-popup-content code {
-    background: #f8f9fa;
-    padding: 2px 4px;
-    border-radius: 4px;
-    font-family: monospace;
-    font-size: 0.9em;
-    border: 1px solid #ddd;
-  }
-
-  .pr-ai-popup-content pre {
-    background: #f8f9fa;
-    padding: 10px;
-    border-radius: 6px;
-    overflow-x: auto;
-    border: 1px solid #ddd;
-    margin-bottom: 0.6em;
-  }
-
-  /* Math/KaTeX Support from AI Studio */
-  .pr-ai-popup-content .inline {
-    display: inline-block;
-    vertical-align: middle;
-  }
-  
-  .pr-ai-popup-content .display {
-    display: block;
-    text-align: center;
-    margin: 1em 0;
-  }
-
-  /* Reset pre styles when inside math containers or containing KaTeX to stay inline/clean */
-  .pr-ai-popup-content .inline pre,
-  .pr-ai-popup-content .display pre,
-  .pr-ai-popup-content pre:has(.katex),
-  .pr-ai-popup-content pre:has(.rendered) {
-    display: inline-flex;
-    flex-direction: column;
-    background: transparent;
-    padding: 0;
-    margin: 0;
-    border: none;
-    border-radius: 0;
-    overflow: visible;
-    vertical-align: middle;
-  }
-
-  .pr-ai-popup-content blockquote {
-    border-left: 4px solid #ddd;
-    padding-left: 15px;
-    margin: 1em 0;
-    color: #666;
-    font-style: italic;
-  }
-
-  /* Support for AI Studio's custom tags - must be inline to avoid breaking sentences */
-  ms-cmark-node { display: inline; }
-
-  .pr-ai-popup-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .pr-ai-popup-close, .pr-ai-popup-regen {
-    color: white;
-    border: none;
-    padding: 4px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-    font-size: 0.85em;
-    transition: background 0.2s;
-  }
-
-  .pr-ai-popup-close {
-    background: #6c757d;
-  }
-
-  .pr-ai-popup-close:hover {
-    background: #5a6268;
-  }
-
-  .pr-ai-popup-regen {
-    background: #28a745;
-  }
-
-  .pr-ai-popup-regen:hover {
-    background: #218838;
-  }
-
-  .pr-ai-popup-content hr {
-    border: 0;
-    border-top: 1px solid #ccc;
-    margin: 10px 0;
-  }
-  /* Footnote styling: force inline display */
-  /* Footnote styling: force inline display */
-  .footnote, .footnote-content {
-    display: inline !important;
-    margin-left: 4px;
-  }
-  .footnote p, .footnote-content p {
-    display: inline !important;
-    margin: 0 !important;
-  }
-
-  /* Recency highlight via CSS custom property (overridable by .pr-parent-hover) */
-  .pr-comment[style*="--pr-recency-color"] {
-    background-color: var(--pr-recency-color);
-  }
-
-  /* Hover state (static) - higher specificity to override recency */
-  .pr-comment.pr-parent-hover,
-  .pr-post-header.pr-parent-hover,
-  .pr-post-body-container.pr-parent-hover {
-    background-color: #ffe066 !important;
-    outline: 2px solid orange !important;
-    transition: background-color 0.2s;
-  }
-`;
-  const createInitialState = () => ({
-    currentUsername: null,
-    currentUserId: null,
-    currentUserPaletteStyle: null,
-    comments: [],
-    posts: [],
-    commentById: new Map(),
-    postById: new Map(),
-    childrenByParentId: new Map(),
-    subscribedAuthorIds: new Set(),
-    moreCommentsAvailable: false,
-    primaryPostsCount: 0,
-    initialBatchNewestDate: null,
-    currentSelection: null,
-    lastMousePos: { x: 0, y: 0 },
-    currentAIRequestId: null,
-    activeAIPopup: null,
-    sessionAICache: {}
-  });
-  const rebuildIndexes = (state2) => {
-    state2.commentById.clear();
-    state2.comments.forEach((c) => state2.commentById.set(c._id, c));
-    state2.postById.clear();
-    state2.posts.forEach((p) => state2.postById.set(p._id, p));
-    state2.childrenByParentId.clear();
-    state2.comments.forEach((c) => {
-      const parentId = c.parentCommentId || "";
-      if (!state2.childrenByParentId.has(parentId)) {
-        state2.childrenByParentId.set(parentId, []);
-      }
-      state2.childrenByParentId.get(parentId).push(c);
-    });
-    state2.childrenByParentId.forEach((children) => {
-      children.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
-    });
-  };
-  const syncCommentInState = (state2, commentId, updates) => {
-    const comment = state2.commentById.get(commentId);
-    if (comment) {
-      Object.assign(comment, updates);
-    }
-  };
-  const syncPostInState = (state2, postId, updates) => {
-    const post = state2.postById.get(postId);
-    if (post) {
-      Object.assign(post, updates);
-    }
-  };
-  let globalState = null;
-  const getState = () => {
-    if (!globalState) {
-      globalState = createInitialState();
-    }
-    return globalState;
-  };
-  const executeTakeover = () => {
-    window.getState = getState;
-    window.stop();
-    const originalCreateElement = document.createElement.bind(document);
-    document.createElement = function(tagName, options) {
-      if (tagName.toLowerCase() === "script") {
-        Logger.warn("Blocking script creation attempt");
-        return originalCreateElement("div");
-      }
-      return originalCreateElement(tagName, options);
-    };
-    const scriptObserver = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        mutation.addedNodes.forEach((node) => {
-          if (node instanceof HTMLScriptElement) {
-            node.remove();
-          }
-        });
-      });
-    });
-    scriptObserver.observe(document.documentElement, { childList: true, subtree: true });
-    Logger.info("Initializing...");
-    const protectionObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.type === "childList") {
-          const root = document.getElementById("power-reader-root");
-          if (document.body && !root && !document.querySelector(".pr-loading")) {
-            Logger.warn("UI cleared by site code! Re-injecting...");
-            rebuildDocument();
-          }
-        }
-      }
-    });
-    protectionObserver.observe(document.documentElement, { childList: true, subtree: true });
-  };
-  const rebuildDocument = () => {
-    const html2 = `
-    <head>
-      <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.543"}</title>
-      <style>${STYLES}</style>
-    </head>
-    <body>
-      <div id="power-reader-root">
-        <div class="pr-loading">Loading Power Reader...</div>
-      </div>
-      <div id="pr-sticky-header" class="pr-sticky-header"></div>
-      <div id="lw-power-reader-ready-signal" style="display: none;"></div>
-    </body>
-  `;
-    if (document.documentElement) {
-      document.documentElement.innerHTML = html2;
-    } else {
-      Logger.warn("document.documentElement is missing, attempting fallback write");
-      document.write(html2);
-      document.close();
-    }
-  };
-  const signalReady = () => {
-    const signal = document.getElementById("lw-power-reader-ready-signal");
-    if (signal) {
-      signal.style.display = "block";
-    }
-    window.__LW_POWER_READER_READY__ = true;
-  };
-  const getRoot = () => {
-    return document.getElementById("power-reader-root");
-  };
-  const LOG_PREFIX = "[GraphQL Client]";
-  function getGraphQLEndpoint() {
-    const hostname = window.location.hostname;
-    if (hostname === "forum.effectivealtruism.org") {
-      return "https://forum.effectivealtruism.org/graphql";
-    }
-    return "https://www.lesswrong.com/graphql";
-  }
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-  function makeRequest(url, data) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method: "POST",
-        url,
-        headers: { "Content-Type": "application/json" },
-        data,
-        timeout: 3e4,
-        onload: (response) => resolve(response),
-        onerror: (err) => reject(err),
-        ontimeout: () => reject(new Error("Request timed out"))
-      });
-    });
-  }
-  async function queryGraphQL(query, variables = {}) {
-    const url = getGraphQLEndpoint();
-    const data = JSON.stringify({ query, variables });
-    const maxAttempts = 3;
-    const delays = [1e3, 2e3];
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const response = await makeRequest(url, data);
-        if (response.status === 429 || response.status >= 500) {
-          if (attempt < maxAttempts - 1) {
-            await sleep(delays[attempt]);
-            continue;
-          }
-          throw new Error(`HTTP ${response.status} after ${maxAttempts} attempts`);
-        }
-        let res;
-        try {
-          res = JSON.parse(response.responseText);
-        } catch (parseError) {
-          const error = parseError instanceof Error ? parseError : new Error("Failed to parse response JSON");
-          console.error(LOG_PREFIX, "GraphQL response parse failed:", response.responseText);
-          throw error;
-        }
-        if (res.errors) {
-          throw new Error(res.errors[0].message);
-        }
-        return res.data;
-      } catch (err) {
-        const isRetryable = err instanceof Error && (err.message === "Request timed out" || err.message.startsWith("HTTP "));
-        if (isRetryable && attempt < maxAttempts - 1) {
-          await sleep(delays[attempt]);
-          continue;
-        }
-        if (err instanceof Error && err.message.startsWith("HTTP ")) {
-          throw err;
-        }
-        if (attempt < maxAttempts - 1 && !(err instanceof Error)) {
-          await sleep(delays[attempt]);
-          continue;
-        }
-        throw err;
-      }
-    }
-    throw new Error("Failed to execute GraphQL query");
-  }
-  const GET_CURRENT_USER = (
-`
-  query GetCurrentUser {
-    currentUser {
-      _id
-      username
-      slug
-      karma
-      reactPaletteStyle
-    }
-  }
-`
-  );
-  const GET_SUBSCRIPTIONS = (
-`
-  query GetSubscriptions($userId: String!) {
-    subscriptions(selector: { subscriptionState: { userId: $userId, collectionName: "Users" } }) {
-      results {
-        documentId
-      }
-    }
-  }
-`
-  );
-  const POST_FIELDS_LITE = (
-`
-  fragment PostFieldsLite on Post {
-    _id
-    title
-    slug
-    pageUrl
-    postedAt
-    baseScore
-    voteCount
-    commentCount
-    wordCount
-    user {
-      _id
-      username
-      displayName
-      slug
-      karma
-    }
-    extendedScore
-    afExtendedScore
-    currentUserVote
-    currentUserExtendedVote
-  }
-`
-  );
-  const POST_FIELDS_FULL = (
-`
-  fragment PostFieldsFull on Post {
-    ...PostFieldsLite
-    htmlBody
-    contents { markdown }
-  }
-  ${POST_FIELDS_LITE}
-`
-  );
-  const COMMENT_FIELDS_CORE = (
-`
-  fragment CommentFieldsCore on Comment {
-    _id
-    postedAt
-    htmlBody
-    baseScore
-    voteCount
-    descendentCount
-    directChildrenCount
-    pageUrl
-    author
-    rejected
-    topLevelCommentId
-    user {
-      _id
-      username
-      displayName
-      slug
-      karma
-      htmlBio
-    }
-    postId
-    parentCommentId
-    parentComment {
-      _id
-      parentCommentId
-      parentComment {
-        _id
-        parentCommentId
-        parentComment {
-          _id
-          parentCommentId
-          parentComment {
-            _id
-            parentCommentId
-            parentComment {
-              _id
-              parentCommentId
-            }
-          }
-        }
-      }
-      user {
-        _id
-        username
-        displayName
-      }
-    }
-    extendedScore
-    afExtendedScore
-    currentUserVote
-    currentUserExtendedVote
-  }
-`
-  );
-  const COMMENT_FIELDS_LITE = (
-`
-  fragment CommentFieldsLite on Comment {
-    ...CommentFieldsCore
-    post {
-      ...PostFieldsLite
-    }
-  }
-  ${COMMENT_FIELDS_CORE}
-  ${POST_FIELDS_LITE}
-`
-  );
-  const COMMENT_FIELDS = (
-`
-  fragment CommentFieldsFull on Comment {
-    ...CommentFieldsCore
-    contents { markdown }
-    post {
-      ...PostFieldsFull
-    }
-    latestChildren {
-      _id
-      postedAt
-      htmlBody
-      baseScore
-      voteCount
-      descendentCount
-      directChildrenCount
-      pageUrl
-      author
-      rejected
-      topLevelCommentId
-      postId
-      parentCommentId
-    }
-  }
-  ${COMMENT_FIELDS_CORE}
-  ${POST_FIELDS_FULL}
-`
-  );
-  const GET_ALL_RECENT_COMMENTS_LITE = (
-`
-  query GetAllRecentCommentsLite($limit: Int, $after: String, $before: String, $offset: Int, $sortBy: String) {
-    comments(
-      selector: {
-        allRecentComments: {
-          after: $after,
-          before: $before,
-          sortBy: $sortBy
-        }
-      },
-      limit: $limit,
-      offset: $offset
-    ) {
-      results {
-        ...CommentFieldsLite
-      }
-    }
-  }
-  ${COMMENT_FIELDS_LITE}
-`
-  );
-  const GET_ALL_RECENT_COMMENTS = (
-`
-  query GetAllRecentComments($limit: Int, $after: String, $before: String, $offset: Int, $sortBy: String) {
-    comments(
-      selector: {
-        allRecentComments: {
-          after: $after,
-          before: $before,
-          sortBy: $sortBy
-        }
-      },
-      limit: $limit,
-      offset: $offset
-    ) {
-      results {
-        ...CommentFieldsFull
-      }
-    }
-  }
-  ${COMMENT_FIELDS}
-`
-  );
-  const GET_COMMENTS_BY_IDS = (
-`
-  query GetCommentsByIds($commentIds: [String!]) {
-    comments(
-      selector: {
-        default: {
-          commentIds: $commentIds
-        }
-      }
-    ) {
-      results {
-        ...CommentFieldsFull
-      }
-    }
-  }
-  ${COMMENT_FIELDS}
-`
-  );
-  const VOTE_COMMENT_MUTATION = (
-`
-  mutation Vote($documentId: String!, $voteType: String!, $extendedVote: JSON) {
-    performVoteComment(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
-      document {
-        _id
-        baseScore
-        voteCount
-        extendedScore
-        afExtendedScore
-        currentUserVote
-        currentUserExtendedVote
-        contents { markdown }
-      }
-    }
-  }
-`
-  );
-  const VOTE_POST_MUTATION = (
-`
-  mutation VotePost($documentId: String!, $voteType: String!, $extendedVote: JSON) {
-    performVotePost(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
-      document {
-        _id
-        baseScore
-        voteCount
-        extendedScore
-        afExtendedScore
-        currentUserVote
-        currentUserExtendedVote
-        contents { markdown }
-      }
-    }
-  }
-`
-  );
-  const GET_POST = (
-`
-  query GetPost($id: String!) {
-    post(selector: { _id: $id }) {
-      result {
-        ...PostFieldsFull
-      }
-    }
-  }
-  ${POST_FIELDS_FULL}
-`
-  );
-  const GET_NEW_POSTS_FULL = (
-`
-  query GetNewPostsFull($limit: Int, $after: String, $before: String) {
-    posts(
-      selector: {
-        new: {
-          after: $after,
-          before: $before
-        }
-      },
-      limit: $limit
-    ) {
-      results {
-        ...PostFieldsFull
-      }
-    }
-  }
-  ${POST_FIELDS_FULL}
-`
-  );
-  const GET_POST_COMMENTS = (
-`
-  query GetPostComments($postId: String!, $limit: Int) {
-    comments(
-      selector: {
-        postCommentsNew: {
-          postId: $postId
-        }
-      },
-      limit: $limit
-    ) {
-      results {
-        ...CommentFieldsFull
-      }
-    }
-  }
-  ${COMMENT_FIELDS}
-`
-  );
-  const GET_THREAD_COMMENTS = (
-`
-  query GetThreadComments($topLevelCommentId: String!, $limit: Int) {
-    comments(
-      selector: {
-        repliesToCommentThreadIncludingRoot: {
-          topLevelCommentId: $topLevelCommentId
-        }
-      },
-      limit: $limit
-    ) {
-      results {
-        ...CommentFieldsFull
-      }
-    }
-  }
-  ${COMMENT_FIELDS}
-`
-  );
-  const GET_USER = (
-`
-  query GetUser($id: String!) {
-    user(selector: { _id: $id }) {
-      result {
-        _id
-        username
-        displayName
-        slug
-        karma
-        htmlBio
-      }
-    }
-  }
-`
-  );
-  const GET_USER_BY_SLUG = (
-`
-  query GetUserBySlug($slug: String!) {
-    user: GetUserBySlug(slug: $slug) {
-      _id
-      username
-      displayName
-      slug
-      karma
-      htmlBio
-    }
-  }
-`
-  );
-  const GET_POST_BY_ID = GET_POST;
-  const GET_COMMENT = (
-`
-  query GetComment($id: String!) {
-    comment(selector: { _id: $id }) {
-      result {
-        ...CommentFieldsFull
-      }
-    }
-  }
-  ${COMMENT_FIELDS}
-`
-  );
-  const STORAGE_KEYS = {
-    READ: "power-reader-read",
-    READ_FROM: "power-reader-read-from",
-    AUTHOR_PREFS: "power-reader-author-prefs",
-    VIEW_WIDTH: "power-reader-view-width",
-    AI_STUDIO_PREFIX: "power-reader-ai-studio-prefix"
-  };
-  function getKey(baseKey) {
-    const hostname = window.location.hostname;
-    if (hostname.includes("effectivealtruism.org")) {
-      return `ea-${baseKey}`;
-    }
-    return baseKey;
-  }
-  let cachedReadState = null;
-  let lastReadStateFetch = 0;
-  let cachedLoadFrom = null;
-  let lastLoadFromFetch = 0;
-  function getReadState() {
-    const now = Date.now();
-    if (cachedReadState && now - lastReadStateFetch < 100) {
-      return cachedReadState;
-    }
-    try {
-      const raw = GM_getValue(getKey(STORAGE_KEYS.READ), "{}");
-      cachedReadState = JSON.parse(raw);
-      lastReadStateFetch = now;
-      return cachedReadState;
-    } catch {
-      return {};
-    }
-  }
-  function setReadState(state2) {
-    cachedReadState = state2;
-    lastReadStateFetch = Date.now();
-    GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state2));
-  }
-  function isRead(id, state2, postedAt) {
-    const readMap = state2 || getReadState();
-    if (readMap[id] === 1) return true;
-    if (postedAt) {
-      const cutoff = getLoadFrom();
-      if (cutoff && cutoff.includes("T")) {
-        const postTime = new Date(postedAt).getTime();
-        const cutoffTime = new Date(cutoff).getTime();
-        if (!isNaN(postTime) && !isNaN(cutoffTime) && postTime < cutoffTime) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-  function markAsRead(target) {
-    const state2 = getReadState();
-    if (typeof target === "string") {
-      state2[target] = 1;
-    } else {
-      Object.assign(state2, target);
-    }
-    setReadState(state2);
-  }
-  function getLoadFrom() {
-    const now = Date.now();
-    if (cachedLoadFrom && now - lastLoadFromFetch < 100) {
-      return cachedLoadFrom;
-    }
-    const raw = GM_getValue(getKey(STORAGE_KEYS.READ_FROM), "");
-    cachedLoadFrom = raw;
-    lastLoadFromFetch = now;
-    return raw;
-  }
-  function setLoadFrom(isoDatetime) {
-    cachedLoadFrom = isoDatetime;
-    lastLoadFromFetch = Date.now();
-    GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
-  }
-  function getAuthorPreferences() {
-    try {
-      const raw = GM_getValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
-      return JSON.parse(raw);
-    } catch {
-      return {};
-    }
-  }
-  function setAuthorPreferences(prefs) {
-    GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
-  }
-  function toggleAuthorPreference(author, direction) {
-    const prefs = getAuthorPreferences();
-    const current = prefs[author] || 0;
-    let newValue;
-    if (direction === "up") {
-      newValue = current > 0 ? 0 : 1;
-    } else {
-      newValue = current < 0 ? 0 : -1;
-    }
-    prefs[author] = newValue;
-    setAuthorPreferences(prefs);
-    return newValue;
-  }
-  function clearAllStorage() {
-    GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
-    GM_setValue(getKey(STORAGE_KEYS.READ_FROM), "");
-    GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
-    GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
-  }
-  function getViewWidth() {
-    const raw = GM_getValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
-    return parseInt(raw, 10) || 0;
-  }
-  function setViewWidth(width) {
-    GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), String(width));
-  }
-  function getAIStudioPrefix() {
-    return GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
-  }
-  function setAIStudioPrefix(prefix) {
-    GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
-  }
-  async function exportState() {
-    const exportData = {};
-    for (const key of Object.values(STORAGE_KEYS)) {
-      const namespacedKey = getKey(key);
-      exportData[namespacedKey] = GM_getValue(namespacedKey, "");
-    }
-    const json = JSON.stringify(exportData, null, 2);
-    if (navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(json);
-        alert("Power Reader state copied to clipboard!");
-      } catch (e) {
-        Logger.error("Clipboard write failed:", e);
-        alert("Failed to write to clipboard. Check console.");
-      }
-    } else {
-      Logger.info("Exported State:", json);
-      alert("Clipboard API not available. State logged to console.");
-    }
-  }
-  const CONFIG = {
-    loadMax: window.PR_TEST_LIMIT || 800,
-    highlightLastN: 33,
-    scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 5e3,
-hoverDelay: 300,
-    maxPostHeight: "50vh"
-  };
-  const loadInitial = async () => {
-    const injection = window.__PR_TEST_STATE_INJECTION__;
-    if (injection) {
-      Logger.info("Using injected test state");
-      return {
-        comments: injection.comments || [],
-        posts: injection.posts || [],
-        currentUsername: injection.currentUsername || null,
-        currentUserId: injection.currentUserId || null,
-        currentUserPaletteStyle: injection.currentUserPaletteStyle || null
-      };
-    }
-    const loadFrom = getLoadFrom();
-    const afterDate = loadFrom === "__LOAD_RECENT__" ? void 0 : loadFrom;
-    Logger.info(`Initial fetch: after=${afterDate}`);
-    const start = performance.now();
-    const [userRes, commentsRes] = await Promise.all([
-      queryGraphQL(GET_CURRENT_USER),
-      queryGraphQL(GET_ALL_RECENT_COMMENTS_LITE, {
-        after: afterDate,
-        limit: CONFIG.loadMax,
-        sortBy: afterDate ? "oldest" : "newest"
-      })
-    ]);
-    const networkTime = performance.now() - start;
-    Logger.info(`Initial fetch network request took ${networkTime.toFixed(2)}ms`);
-    const comments = commentsRes?.comments?.results || [];
-    let currentUsername = null;
-    let currentUserId = null;
-    let currentUserPaletteStyle = null;
-    if (userRes?.currentUser) {
-      currentUsername = userRes.currentUser.username || "";
-      currentUserId = userRes.currentUser._id;
-      currentUserPaletteStyle = userRes.currentUser.reactPaletteStyle || null;
-    }
-    const posts = [];
-    const seenPostIds = new Set();
-    comments.forEach((c) => {
-      if (c && c.post) {
-        const postId = c.post._id;
-        if (!seenPostIds.has(postId)) {
-          seenPostIds.add(postId);
-          posts.push(c.post);
-        }
-      }
-    });
-    const result = {
-      comments,
-      posts,
-      currentUsername,
-      currentUserId,
-      currentUserPaletteStyle,
-      lastInitialCommentDate: comments.length > 0 ? comments[comments.length - 1].postedAt : void 0
-    };
-    const totalTime = performance.now() - start;
-    Logger.info(`Initial load completed in ${totalTime.toFixed(2)}ms (processing: ${(totalTime - networkTime).toFixed(2)}ms)`);
-    return result;
-  };
-  const fetchRepliesBatch = async (parentIds) => {
-    const start = performance.now();
-    if (parentIds.length === 0) return [];
-    const CHUNK_SIZE = 30;
-    const allResults = [];
-    for (let i = 0; i < parentIds.length; i += CHUNK_SIZE) {
-      const chunk = parentIds.slice(i, i + CHUNK_SIZE);
-      const query = `
-      query GetRepliesBatch(${chunk.map((_, j) => `$id${j}: String!`).join(", ")}) {
-        ${chunk.map((_, j) => `
-          r${j}: comments(selector: { commentReplies: { parentCommentId: $id${j} } }) {
-            results {
-              ${COMMENT_FIELDS}
-            }
-          }
-        `).join("\n")}
-      }
-    `;
-      const variables = {};
-      chunk.forEach((id, j) => variables[`id${j}`] = id);
-      try {
-        const res = await queryGraphQL(query, variables);
-        if (!res) continue;
-        chunk.forEach((_, j) => {
-          const results = res[`r${j}`]?.results || [];
-          allResults.push(...results);
-        });
-      } catch (e) {
-        Logger.error(`Batch reply fetch failed for chunk starting at ${i}`, e);
-      }
-    }
-    Logger.info(`Batch reply fetch for ${parentIds.length} parents took ${(performance.now() - start).toFixed(2)}ms`);
-    return allResults;
-  };
-  const fetchThreadsBatch = async (threadIds) => {
-    const start = performance.now();
-    if (threadIds.length === 0) return [];
-    const CHUNK_SIZE = 15;
-    const allResults = [];
-    for (let i = 0; i < threadIds.length; i += CHUNK_SIZE) {
-      const chunk = threadIds.slice(i, i + CHUNK_SIZE);
-      const query = `
-      query GetThreadsBatch(${chunk.map((_, j) => `$id${j}: String!`).join(", ")}) {
-        ${chunk.map((_, j) => `
-          t${j}: comments(selector: { repliesToCommentThreadIncludingRoot: { topLevelCommentId: $id${j} } }, limit: 100) {
-            results {
-              ${COMMENT_FIELDS}
-            }
-          }
-        `).join("\n")}
-      }
-    `;
-      const variables = {};
-      chunk.forEach((id, j) => variables[`id${j}`] = id);
-      try {
-        const res = await queryGraphQL(query, variables);
-        if (!res) continue;
-        chunk.forEach((_, j) => {
-          const results = res[`t${j}`]?.results || [];
-          allResults.push(...results);
-        });
-      } catch (e) {
-        Logger.error(`Batch thread fetch failed for chunk starting at ${i}`, e);
-      }
-    }
-    Logger.info(`Batch thread fetch for ${threadIds.length} threads took ${(performance.now() - start).toFixed(2)}ms`);
-    return allResults;
-  };
-  const enrichInBackground = async (state2) => {
-    const start = performance.now();
-    const injection = window.__PR_TEST_STATE_INJECTION__;
-    if (injection && injection.posts) {
-      return {
-        posts: injection.posts,
-        comments: injection.comments || state2.comments,
-        subscribedAuthorIds: new Set(),
-        moreCommentsAvailable: false,
-        primaryPostsCount: injection.posts.length
-      };
-    }
-    const currentUserId = state2.currentUserId;
-    const allComments = [...state2.comments];
-    const subsPromise = currentUserId ? queryGraphQL(GET_SUBSCRIPTIONS, { userId: currentUserId }) : Promise.resolve(null);
-    const loadFrom = getLoadFrom();
-    const isLoadRecent = loadFrom === "__LOAD_RECENT__";
-    const afterDate = isLoadRecent ? void 0 : loadFrom;
-    let startDate = afterDate;
-    let endDate = void 0;
-    if (allComments.length > 0) {
-      const commentDates = allComments.map((c) => c && c.postedAt).filter((d) => !!d).sort();
-      const oldestCommentDate = commentDates[0];
-      const newestCommentDate = commentDates[commentDates.length - 1];
-      if (isLoadRecent) {
-        startDate = oldestCommentDate;
-      } else if (allComments.length >= CONFIG.loadMax) {
-        endDate = newestCommentDate;
-      }
-    }
-    const [postsRes, subsRes] = await Promise.all([
-      queryGraphQL(GET_NEW_POSTS_FULL, {
-        after: startDate,
-        before: endDate,
-        limit: CONFIG.loadMax
-      }),
-      subsPromise
-    ]);
-    const fetchTime = performance.now() - start;
-    Logger.info(`Enrichment posts/subs fetch took ${fetchTime.toFixed(2)}ms`);
-    const batchPosts = postsRes?.posts?.results || [];
-    const primaryPostsCount = batchPosts.length;
-    const subscribedAuthorIds = new Set();
-    if (subsRes?.subscriptions?.results) {
-      subsRes.subscriptions.results.forEach((r) => {
-        if (r.documentId) subscribedAuthorIds.add(r.documentId);
-      });
-    }
-    const updatedPosts = [...batchPosts];
-    const postIdSet = new Set(batchPosts.map((p) => p._id));
-    allComments.forEach((c) => {
-      if (c && c.post) {
-        const postId = c.post._id;
-        if (!postIdSet.has(postId)) {
-          postIdSet.add(postId);
-          updatedPosts.push(c.post);
-        }
-      }
-    });
-    const loadFromValue = getLoadFrom();
-    const moreCommentsAvailable = loadFromValue !== "__LOAD_RECENT__" && allComments.length >= CONFIG.loadMax;
-    const result = {
-      posts: updatedPosts,
-      comments: allComments,
-      subscribedAuthorIds,
-      moreCommentsAvailable,
-      primaryPostsCount
-    };
-    Logger.info(`Enrichment completed in ${(performance.now() - start).toFixed(2)}ms`);
-    return result;
-  };
-  const runSmartLoading = async (state2, readState) => {
-    const allComments = [...state2.comments];
-    const moreCommentsAvailable = state2.moreCommentsAvailable;
-    const forceSmartLoading = window.PR_TEST_FORCE_SMART_LOADING === true;
-    const unreadComments = allComments.filter((c) => !readState[c._id]);
-    if (!moreCommentsAvailable && !forceSmartLoading || unreadComments.length === 0) {
-      return null;
-    }
-    const start = performance.now();
-    Logger.info(`Smart Loading: Processing ${unreadComments.length} unread comments...`);
-    const commentMap = new Map();
-    allComments.forEach((c) => commentMap.set(c._id, c));
-    const unreadByThread = new Map();
-    unreadComments.forEach((c) => {
-      const threadId = c.topLevelCommentId || c.postId || c._id;
-      if (!unreadByThread.has(threadId)) {
-        unreadByThread.set(threadId, []);
-      }
-      unreadByThread.get(threadId).push(c);
-    });
-    const mergeComment = (comment) => {
-      if (!commentMap.has(comment._id)) {
-        allComments.push(comment);
-        commentMap.set(comment._id, comment);
-        return true;
-      } else {
-        const existing = commentMap.get(comment._id);
-        if (existing.isPlaceholder) {
-          const idx = allComments.findIndex((c) => c._id === comment._id);
-          if (idx !== -1) {
-            allComments[idx] = comment;
-            commentMap.set(comment._id, comment);
-            return true;
-          }
-        }
-      }
-      return false;
-    };
-    const threadIdsToFetchFull = new Set();
-    const commentIdsToFetchReplies = new Set();
-    const childrenByParent = state2.childrenByParentId;
-    const hasMissingChildren = (commentId, directChildrenCount) => {
-      if (directChildrenCount <= 0) return false;
-      const loadedChildren = childrenByParent.get(commentId);
-      return !loadedChildren || loadedChildren.length < directChildrenCount;
-    };
-    unreadByThread.forEach((threadUnread, threadId) => {
-      const commentsWithMissingChildren = threadUnread.filter((c) => {
-        const directCount = c.directChildrenCount ?? 0;
-        return hasMissingChildren(c._id, directCount);
-      });
-      if (commentsWithMissingChildren.length >= 3) {
-        threadIdsToFetchFull.add(threadId);
-        return;
-      }
-      commentsWithMissingChildren.forEach((target) => {
-        commentIdsToFetchReplies.add(target._id);
-      });
-    });
-    const fetchPromises = [];
-    if (threadIdsToFetchFull.size > 0) {
-      Logger.info(`Smart Loading: Fetching ${threadIdsToFetchFull.size} full threads in batch...`);
-      fetchPromises.push(
-        fetchThreadsBatch(Array.from(threadIdsToFetchFull)).then((results) => {
-          results.forEach(mergeComment);
-        })
-      );
-    }
-    if (commentIdsToFetchReplies.size > 0) {
-      Logger.info(`Smart Loading: Fetching replies for ${commentIdsToFetchReplies.size} comments in batch...`);
-      fetchPromises.push(
-        fetchRepliesBatch(Array.from(commentIdsToFetchReplies)).then(async (replyResults) => {
-          const newThreadIdsToFetch = new Set();
-          const parentToChildrenCount = new Map();
-          let anyNewData = false;
-          replyResults.forEach((c) => {
-            if (mergeComment(c)) anyNewData = true;
-            if (c.parentCommentId) {
-              parentToChildrenCount.set(c.parentCommentId, (parentToChildrenCount.get(c.parentCommentId) || 0) + 1);
-            }
-          });
-          if (!anyNewData && replyResults.length > 0) return;
-          parentToChildrenCount.forEach((count, parentId) => {
-            if (count > 1) {
-              const parent = commentMap.get(parentId);
-              const threadId = parent?.topLevelCommentId || parent?.postId || parentId;
-              if (!threadIdsToFetchFull.has(threadId)) {
-                newThreadIdsToFetch.add(threadId);
-              }
-            }
-          });
-          if (newThreadIdsToFetch.size > 0) {
-            Logger.info(`Smart Loading: Dynamic Switch triggered for ${newThreadIdsToFetch.size} threads`);
-            const extraResults = await fetchThreadsBatch(Array.from(newThreadIdsToFetch));
-            extraResults.forEach(mergeComment);
-          }
-        })
-      );
-    }
-    await Promise.all(fetchPromises);
-    const newCount = allComments.length - state2.comments.length;
-    Logger.info(`Smart Loading completed in ${(performance.now() - start).toFixed(2)}ms (${newCount} new comments)`);
-    return { comments: allComments };
-  };
-  const applyEnrichment = (state2, result) => {
-    state2.posts = result.posts;
-    state2.comments = result.comments;
-    state2.subscribedAuthorIds = result.subscribedAuthorIds;
-    state2.moreCommentsAvailable = result.moreCommentsAvailable;
-    state2.primaryPostsCount = result.primaryPostsCount;
-    rebuildIndexes(state2);
-  };
-  const applySmartLoad = (state2, result) => {
-    state2.comments = result.comments;
-    rebuildIndexes(state2);
-  };
-  const applyInitialLoad = (state2, result) => {
-    state2.comments = result.comments;
-    state2.posts = result.posts;
-    state2.currentUsername = result.currentUsername;
-    state2.currentUserId = result.currentUserId;
-    state2.currentUserPaletteStyle = result.currentUserPaletteStyle;
-    state2.primaryPostsCount = 0;
-    rebuildIndexes(state2);
-    if (state2.comments.length > 0) {
-      const validComments = state2.comments.filter((c) => c.postedAt && !isNaN(new Date(c.postedAt).getTime()));
-      if (validComments.length > 0) {
-        const sorted = [...validComments].sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
-        const oldestDate = sorted[0].postedAt;
-        setLoadFrom(oldestDate);
-        Logger.info(`loader: Initial loadFrom snapshot set to ${oldestDate}`);
-      }
-    }
-  };
-  const AI_STUDIO_PROMPT_PREFIX = `* summarize the focal post or comment in this thread at 1/3 length or 5 sentences, whichever is shorter (required, no heading)
-* explain any context for the focal post or comment not already explained in the summary (optional, heading: Context)
-* explain obscure terms or references, inside jokes, etc., but assume familiarity with basic LessWrong/EA knowledge (optional, heading: Clarifications)
-* what are the most serious potential errors in the focal post or comment? (optional, heading: Potential Errors)
-* if there are 2 or more comments in the thread, summarize the whole thread and highlight the most interesting parts (optional, heading: Thread Summary)
-* note that paragraphs prefixed by > are quotes from the previous comment
-`;
-  const state$1 = {
-    isDragging: false,
-    startX: 0,
-    startWidth: 0,
-    dragSide: null
-  };
-  let rootElement = null;
-  function initResizeHandles() {
-    rootElement = document.getElementById("power-reader-root");
-    if (!rootElement) return;
-    const leftHandle = document.createElement("div");
-    leftHandle.className = "pr-resize-handle left";
-    leftHandle.dataset.side = "left";
-    const rightHandle = document.createElement("div");
-    rightHandle.className = "pr-resize-handle right";
-    rightHandle.dataset.side = "right";
-    document.body.appendChild(leftHandle);
-    document.body.appendChild(rightHandle);
-    const savedWidth = getViewWidth();
-    applyWidth(savedWidth);
-    leftHandle.addEventListener("mousedown", startDrag);
-    rightHandle.addEventListener("mousedown", startDrag);
-    document.addEventListener("mousemove", onDrag);
-    document.addEventListener("mouseup", endDrag);
-    window.addEventListener("resize", () => {
-      const currentWidth = getViewWidth();
-      applyWidth(currentWidth);
-    });
-  }
-  function startDrag(e) {
-    const handle = e.target;
-    state$1.isDragging = true;
-    state$1.startX = e.clientX;
-    state$1.dragSide = handle.dataset.side;
-    state$1.startWidth = rootElement?.offsetWidth || window.innerWidth;
-    handle.classList.add("dragging");
-    document.body.style.cursor = "ew-resize";
-    document.body.style.userSelect = "none";
-    e.preventDefault();
-  }
-  function onDrag(e) {
-    if (!state$1.isDragging || !rootElement) return;
-    const deltaX = e.clientX - state$1.startX;
-    let newWidth;
-    if (state$1.dragSide === "left") {
-      newWidth = state$1.startWidth - deltaX * 2;
-    } else {
-      newWidth = state$1.startWidth + deltaX * 2;
-    }
-    const minWidth = 400;
-    const maxWidth = window.innerWidth;
-    newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
-    applyWidth(newWidth);
-  }
-  function endDrag() {
-    if (!state$1.isDragging) return;
-    state$1.isDragging = false;
-    state$1.dragSide = null;
-    document.querySelectorAll(".pr-resize-handle").forEach((h) => {
-      h.classList.remove("dragging");
-    });
-    document.body.style.cursor = "";
-    document.body.style.userSelect = "";
-    if (rootElement) {
-      const width = rootElement.offsetWidth;
-      setViewWidth(width);
-    }
-  }
-  function applyWidth(width) {
-    if (!rootElement) return;
-    if (width <= 0 || width >= window.innerWidth) {
-      rootElement.style.maxWidth = "";
-      rootElement.style.width = "100%";
-    } else {
-      rootElement.style.maxWidth = `${width}px`;
-      rootElement.style.width = `${width}px`;
-    }
-    updateHandlePositions();
-  }
-  function updateHandlePositions() {
-    if (!rootElement) return;
-    const rect = rootElement.getBoundingClientRect();
-    const leftHandle = document.querySelector(".pr-resize-handle.left");
-    const rightHandle = document.querySelector(".pr-resize-handle.right");
-    if (leftHandle) {
-      leftHandle.style.left = `${Math.max(0, rect.left - 4)}px`;
-    }
-    if (rightHandle) {
-      rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
-    }
-  }
   const {
     entries,
     setPrototypeOf,
@@ -3686,6 +1051,2694 @@ dirty.indexOf("<") === -1) {
       USE_PROFILES: { html: true }
     });
   };
+  const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function handleAIStudio() {
+    const payload = GM_getValue("ai_studio_prompt_payload");
+    if (!payload) {
+      Logger.debug("AI Studio: No payload found in GM storage, skipping automation.");
+      return;
+    }
+    Logger.info("AI Studio: Automation triggered.");
+    try {
+      GM_setValue("ai_studio_status", "Configuring AI model...");
+      await automateModelSelection();
+      await automateDisableSearch();
+      await automateEnableUrlContext();
+      GM_setValue("ai_studio_status", "Injecting metadata thread...");
+      const requestId = GM_getValue("ai_studio_request_id");
+      await injectPrompt(payload);
+      await sleep$1(500);
+      GM_setValue("ai_studio_status", "Submitting prompt...");
+      await automateRun();
+      const responseText = await waitForResponse();
+      GM_setValue("ai_studio_status", "Response received!");
+      GM_setValue("ai_studio_response_payload", {
+        text: responseText,
+        requestId,
+        includeDescendants: GM_getValue("ai_studio_include_descendants", false),
+        timestamp: Date.now()
+      });
+      GM_deleteValue("ai_studio_prompt_payload");
+      GM_deleteValue("ai_studio_request_id");
+      GM_deleteValue("ai_studio_include_descendants");
+      GM_deleteValue("ai_studio_status");
+      Logger.info("AI Studio: Response sent. Tab will close in 5m if no interaction.");
+      let hasInteracted = false;
+      const markInteracted = () => {
+        if (!hasInteracted) {
+          hasInteracted = true;
+          Logger.info("AI Studio: User returned to tab. Auto-close canceled.");
+        }
+      };
+      window.addEventListener("blur", () => {
+        window.addEventListener("mousedown", markInteracted, { once: true, capture: true });
+        window.addEventListener("keydown", markInteracted, { once: true, capture: true });
+        window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
+      }, { once: true });
+      setTimeout(() => {
+        if (!hasInteracted && document.visibilityState !== "visible") {
+          Logger.info("AI Studio: Idle and backgrounded. Closing tab.");
+          window.close();
+        } else if (!hasInteracted) {
+          Logger.info("AI Studio: 5m reached but tab is currently visible. Postponing close.");
+        }
+      }, 5 * 60 * 1e3);
+    } catch (error) {
+      Logger.error("AI Studio: Automation failed", error);
+      GM_setValue("ai_studio_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  async function waitForElement(selector, timeout = 3e4) {
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        const elements = document.querySelectorAll(selector);
+        if (elements.length > 0) return elements[0];
+        return null;
+      };
+      const existing = check();
+      if (existing) return resolve(existing);
+      if (window.location.href.includes("accounts.google.com") || document.body?.innerText.includes("Sign in")) {
+        return reject(new Error("Login Required"));
+      }
+      const observer = new MutationObserver((_, obs) => {
+        const el = check();
+        if (el) {
+          obs.disconnect();
+          resolve(el);
+        }
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        reject(new Error(`Timeout waiting for element: ${selector}`));
+      }, timeout);
+    });
+  }
+  async function automateModelSelection() {
+    const modelCard = await waitForElement("button.model-selector-card");
+    if (modelCard.innerText.includes("Flash 3") || modelCard.innerText.includes("Gemini 3 Flash")) {
+      return;
+    }
+    modelCard.click();
+    const flash3Btn = await waitForElement('button[id*="gemini-3-flash-preview"]');
+    flash3Btn.click();
+  }
+  async function automateDisableSearch() {
+    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
+    if (searchToggle.classList.contains("mdc-switch--checked")) {
+      searchToggle.click();
+    }
+  }
+  async function automateEnableUrlContext() {
+    Logger.debug("AI Studio: Searching for URL context toggle...");
+    const urlToggle = await waitForElement(
+      "button[aria-label='URL context'], button[aria-label='URL Context'], button[aria-label='Browse the url context'], button[aria-label='URL tool'], button[aria-label='URL Tool']",
+      5e3
+    ).catch(() => null);
+    if (urlToggle) {
+      if (urlToggle.classList.contains("mdc-switch--unselected")) {
+        Logger.info("AI Studio: Enabling URL context tool.");
+        urlToggle.click();
+      } else {
+        Logger.debug("AI Studio: URL context tool already enabled.");
+      }
+    } else {
+      Logger.warn("AI Studio: URL context toggle not found.");
+    }
+  }
+  async function injectPrompt(payload) {
+    const textarea = await waitForElement("textarea[aria-label='Enter a prompt']");
+    textarea.value = payload;
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.focus();
+    textarea.setSelectionRange(0, 0);
+  }
+  async function automateRun() {
+    const runBtn = await waitForElement("ms-run-button button");
+    runBtn.focus();
+    runBtn.click();
+  }
+  async function waitForResponse(timeoutMs = 18e4) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      let generationStarted = false;
+      let hasRetried = false;
+      const checkCompletion = () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > timeoutMs) return reject(new Error("Timeout"));
+        const stopBtn = document.querySelector('button[aria-label="Stop generation"], .ms-button-spinner, mat-icon[data-icon-name="stop"], mat-icon[data-icon-name="progress_activity"]');
+        const runBtn = document.querySelector("ms-run-button button");
+        const hasResponseNodes = document.querySelector("ms-cmark-node") !== null;
+        const hasError = document.querySelector(".model-error") !== null;
+        if (stopBtn || hasResponseNodes || hasError) {
+          if (!generationStarted) {
+            generationStarted = true;
+            GM_setValue("ai_studio_status", "AI is thinking...");
+          }
+        }
+        if (generationStarted && !stopBtn && runBtn && runBtn.textContent?.includes("Run")) {
+          const turnList = document.querySelectorAll("ms-chat-turn");
+          const lastTurn = turnList[turnList.length - 1];
+          if (!lastTurn) return setTimeout(checkCompletion, 1e3);
+          const errorEl = lastTurn.querySelector(".model-error");
+          if (errorEl) {
+            if (!hasRetried) {
+              const rerunBtn = document.querySelector('button[name="rerun-button"], .rerun-button');
+              if (rerunBtn) {
+                GM_setValue("ai_studio_status", "Retrying...");
+                hasRetried = true;
+                generationStarted = false;
+                rerunBtn.click();
+                return setTimeout(checkCompletion, 2e3);
+              }
+            }
+            return resolve(`<div class="pr-ai-error">Error: ${errorEl.textContent}</div>`);
+          }
+          const editIcon = Array.from(lastTurn.querySelectorAll(".material-symbols-outlined")).find((el) => el.textContent?.trim() === "edit");
+          if (!editIcon) return setTimeout(checkCompletion, 1e3);
+          const container = lastTurn.querySelector("div.model-response-content, .message-content, .turn-content") || lastTurn;
+          const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ""));
+          if (cleanHtml.length > 10) {
+            return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
+          }
+        }
+        setTimeout(checkCompletion, 1e3);
+      };
+      checkCompletion();
+    });
+  }
+  const getRoute = () => {
+    const host = window.location.hostname;
+    const pathname = window.location.pathname;
+    const params = new URLSearchParams(window.location.search);
+    if (host === "aistudio.google.com") {
+      if (!pathname.startsWith("/prompts")) {
+        Logger.debug(`AI Studio Router: Skipping non-prompt path: ${pathname}`);
+        return { type: "skip" };
+      }
+      if (window.self !== window.top) {
+        Logger.debug("AI Studio Router: Skipping iframe");
+        return { type: "skip" };
+      }
+      return { type: "ai-studio" };
+    }
+    const isForumDomain = host.includes("lesswrong.com") || host.includes("forum.effectivealtruism.org") || host.includes("greaterwrong.com");
+    if (!isForumDomain) {
+      return { type: "skip" };
+    }
+    if (!pathname.startsWith("/reader")) {
+      return { type: "forum-injection" };
+    }
+    if (params.get("view") === "archive") {
+      const username = params.get("username");
+      if (username) {
+        return { type: "archive", username };
+      }
+    }
+    if (pathname === "/reader/reset") {
+      return { type: "reader", path: "reset" };
+    }
+    return { type: "reader", path: "main" };
+  };
+  const runAIStudioMode = async () => {
+    Logger.info("AI Studio: Main domain detected, initializing automation...");
+    await handleAIStudio();
+  };
+  const STYLES = `
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #FFFFFF;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #000;
+    min-height: 100%;
+    line-height: 1.35;
+  }
+
+  p {
+    margin-block-start: .6em;
+    margin-block-end: .6em;
+  }
+
+  #power-reader-root {
+    margin: 0 auto;
+    padding: 20px;
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  /* Resize handles */
+  .pr-resize-handle {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: ew-resize;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.2s;
+    background: linear-gradient(to right, transparent, rgba(0,0,0,0.1), transparent);
+  }
+
+  .pr-resize-handle:hover,
+  .pr-resize-handle.dragging {
+    opacity: 1;
+    background: linear-gradient(to right, transparent, rgba(0,120,255,0.3), transparent);
+  }
+
+  .pr-resize-handle.left {
+    left: 0;
+  }
+
+  .pr-resize-handle.right {
+    right: 0;
+  }
+
+  .pr-header {
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #ddd;
+  }
+
+  .pr-header h1 {
+    margin: 0 0 10px 0;
+  }
+
+  .pr-status {
+    color: #666;
+    font-size: 0.9em;
+  }
+
+  /* Sticky AI status indicator */
+  .pr-sticky-ai-status {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(40, 167, 69, 0.9);
+    color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    font-weight: bold;
+    z-index: 6000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    display: none; /* Hidden by default */
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+
+  .pr-sticky-ai-status.visible {
+    display: block;
+  }
+
+  @keyframes parentHighlight {
+    0% { background-color: #ffe066; }
+    100% { background-color: transparent; }
+  }
+
+  /* Navigation flash (animation) */
+  .pr-highlight-parent {
+    animation: parentHighlight 2s ease-out forwards;
+  }
+  .pr-post-header.pr-highlight-parent {
+    background: #ffe066 !important;
+    animation: parentHighlight 2s ease-out forwards;
+  }
+
+
+
+  /* Highlight for inline reactions */
+  .pr-highlight {
+    background-color: #fffacd;
+    border-bottom: 2px solid #ffd700;
+    cursor: help;
+  }
+
+  .pr-warning {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    color: #856404;
+    padding: 12px 16px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+  }
+
+  .pr-setup {
+    max-width: 500px;
+    margin: 40px auto;
+    padding: 30px;
+    background: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+  }
+
+  .pr-setup p {
+    margin: 0 0 20px 0;
+    color: #444;
+  }
+
+  .pr-setup-form {
+    margin-bottom: 20px;
+  }
+
+  .pr-setup-form label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+  }
+
+  .pr-setup-form input[type="date"] {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+  }
+
+  .pr-btn {
+    display: inline-block;
+    padding: 12px 24px;
+    background: #0078ff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .pr-btn:hover {
+    background: #0056cc;
+  }
+
+  /* Animation for newly revealed context */
+  @keyframes pr-fade-in-glow {
+    0% { background-color: #fff3e0; } /* Material Orange 50 */
+    100% { background-color: transparent; }
+  }
+
+  .pr-just-revealed {
+    animation: pr-fade-in-glow 2s ease-out;
+  }
+
+  .pr-help {
+    background: #f9f9f9;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    border: 1px solid #e0e0e0;
+  }
+
+  .pr-help summary {
+    padding: 10px 15px;
+    cursor: pointer;
+    background: #f0f0f0;
+    border-radius: 4px 4px 0 0;
+    font-weight: bold;
+    user-select: none;
+  }
+
+  .pr-help summary:hover {
+    background: #e8e8e8;
+  }
+
+  /* When collapsed, keep bottom rounded */
+  .pr-help:not([open]) summary {
+    border-radius: 4px;
+  }
+
+  .pr-help-content {
+    padding: 15px;
+    border-top: 1px solid #e0e0e0;
+  }
+
+  .pr-help-columns {
+    column-count: 3;
+    column-gap: 20px;
+  }
+
+  @media (max-width: 1200px) {
+    .pr-help-columns { column-count: 2; }
+  }
+
+  @media (max-width: 800px) {
+    .pr-help-columns { column-count: 1; }
+  }
+
+  .pr-help-section {
+    break-inside: avoid;
+    margin-bottom: 8px;
+  }
+
+
+  .pr-help ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .pr-help li {
+    margin: 4px 0;
+  }
+
+  .pr-help h4 {
+    margin: 12px 0 6px 0;
+    font-size: 1em;
+  }
+
+  .pr-help h4:first-child {
+    margin-top: 0;
+  }
+
+  /* Post containers */
+  .pr-post {
+    margin-bottom: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fafafa;
+  }
+
+  .pr-post-header {
+    padding: 10px 15px;
+    background: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .pr-post-header h2 {
+    margin: 0;
+    flex: 1;
+    min-width: 0; /* Allow title to shrink if needed */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 1.2em;
+  }
+
+  .pr-post-meta {
+    margin-bottom: 0 !important;
+    gap: 8px !important;
+    flex-shrink: 0; /* Keep metadata from shrinking */
+  }
+
+  .pr-post-header.header-clickable {
+    cursor: pointer;
+  }
+
+  .pr-post-header.header-clickable:hover {
+    background: #e8e8e8;
+  }
+
+  .pr-post-header h2 .pr-post-title {
+    color: #000;
+    text-decoration: none;
+  }
+
+  .pr-post-header h2 .pr-post-title:hover {
+    text-decoration: underline;
+  }
+
+  .pr-post-actions {
+    display: inline-flex;
+    gap: 2px;
+    margin-right: 6px;
+  }
+
+  /* Shared Text Button Style */
+  .text-btn {
+    cursor: pointer;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+    user-select: none;
+    padding: 0 2px;
+    font-size: 13px !important;
+    font-family: monospace;
+    color: #333;
+  }
+
+  .text-btn:hover:not(.disabled) {
+    opacity: 1;
+    color: #000;
+  }
+
+  .text-btn.disabled {
+    opacity: 0.15 !important;
+    cursor: not-allowed;
+  }
+
+  .pr-post-toggle {
+    /* Styles now handled by .text-btn */
+  }
+
+  .pr-post-comments {
+    padding: 10px;
+  }
+
+  .pr-post-comments.collapsed, .pr-post-content.collapsed, .pr-post-body-container.collapsed {
+    display: none;
+  }
+
+  /* Post body (full content) */
+  .pr-post-body-container {
+    padding: 15px 20px;
+    background: #fff;
+    border-bottom: 1px solid #eee;
+    font-family: serif;
+    line-height: 1.3;
+    overflow-wrap: break-word;
+    position: relative;
+  }
+
+  .pr-post-body-container.truncated {
+    overflow: hidden;
+    /* max-height is set dynamically from CONFIG */
+    padding-bottom: 50px; /* Space for overlay */
+  }
+
+  .pr-post-body {
+  }
+
+  .pr-post-body img {
+    max-width: min(50vw, 100%);
+    height: auto;
+  }
+
+  .pr-read-more-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 100px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,1) 80%);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 15px;
+    pointer-events: none;
+  }
+
+  .pr-read-more-btn {
+    background: #0078ff;
+    color: #fff;
+    border: none;
+    padding: 8px 24px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    pointer-events: auto;
+    box-shadow: 0 2px 8px rgba(0,120,255,0.3);
+  }
+
+  .pr-read-more-btn:hover {
+    background: #0056cc;
+  }
+
+  /* Shared pr-item class for read tracking */
+  .pr-item.read .pr-post-header h2 .pr-post-title {
+    color: #707070;
+  }
+
+  .pr-item.read .pr-post-body-container {
+    opacity: 0.8;
+  }
+
+  /* Comment styling */
+  .pr-comment {
+    margin: 4px 0;
+    padding: 0px 10px;
+    border: 1px solid black;
+    border-radius: 4px;
+    background: #fff;
+    position: relative; /* Context for absolute positioning */
+  }
+
+  .pr-comment.pr-missing-parent {
+    min-height: 6px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+  }
+
+  .pr-comment.reply-to-you {
+    border: 2px solid #0F0;
+  }
+
+  .pr-comment.reply-to-you.read {
+    border-width: 1px;
+    border-color: #0F0; /* Override general .read border-color */
+  }
+
+  .pr-comment.being-summarized, .pr-post.being-summarized {
+    border: 2px solid #007bff !important;
+    box-shadow: 0 0 8px rgba(0,123,255,0.3);
+  }
+
+  .pr-comment.read .pr-comment-body {
+    color: #707070;
+  }
+
+  .pr-comment.read {
+    border-color: #eee;
+  }
+
+  .pr-comment.rejected {
+    border: 1px solid red;
+  }
+
+  .pr-comment-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+    min-height: 24px;
+  }
+
+  .pr-author-controls {
+    cursor: pointer;
+    user-select: none;
+    margin: 0 4px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .pr-author-controls span {
+    margin-right: 2px;
+    padding: 0 4px;
+    border-radius: 2px;
+    font-size: 0.9em;
+  }
+
+  .pr-author-controls span:hover {
+    background: #e0e0e0;
+  }
+
+  .pr-author-controls span.active-up {
+    font-weight: bold;
+    color: green !important;
+  }
+
+  .pr-author-controls span.active-down {
+    font-weight: bold;
+    color: red !important;
+  }
+
+  .pr-author {
+    font-weight: bold;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .pr-author:hover {
+    text-decoration: underline;
+  }
+
+  .pr-score {
+    color: #666;
+  }
+
+  .pr-timestamp {
+    color: #666;
+  }
+
+  .pr-timestamp a {
+    color: #666;
+    text-decoration: none;
+  }
+
+  .pr-timestamp a:hover {
+    text-decoration: underline;
+  }
+
+  .pr-comment-controls {
+    cursor: pointer;
+    user-select: none;
+    margin-left: auto;
+  }
+
+  .pr-comment-action {
+    /* Styles now handled by .text-btn */
+  }
+
+  .pr-comment-controls span:hover {
+    /* Hover color handled by .text-btn */
+  }
+
+  .pr-comment-body {
+    margin: 4px 0;
+    overflow-wrap: break-word;
+    line-height: 1.3;
+  }
+
+  .pr-comment-body img {
+    max-width: min(50vw, 100%);
+    height: auto;
+  }
+
+  .pr-comment-body blockquote {
+    border-left: solid 3px #e0e0e0;
+    padding-left: 10px;
+    margin: 8px 0 8px 10px;
+    color: #555;
+  }
+
+  /* Inline Highlights */
+  .pr-highlight {
+    background-color: #fff9c4; /* Material Yellow 100 */
+    cursor: pointer;
+    border-bottom: 2px solid #fbc02d; /* Material Yellow 700 */
+  }
+
+  .pr-highlight:hover {
+    background-color: #fff59d; /* Material Yellow 200 */
+  }
+
+  /* Floating Inline Reaction Button */
+  .pr-inline-react-btn {
+    position: absolute;
+    z-index: 1000;
+    background: #333;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transform: translateX(-50%);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    pointer-events: auto;
+  }
+
+  .pr-inline-react-btn:hover {
+    background: #000;
+  }
+
+  .pr-inline-react-btn::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+  }
+
+
+
+  /* Nested comments */
+  .pr-replies {
+    margin-left: 20px;
+    padding-left: 10px;
+    position: relative;
+  }
+
+  /* [PR-NEST-05] Visual Indentation Line + 24px Hit Area */
+  .pr-replies::before {
+    content: '';
+    position: absolute;
+    left: -11px; /* Centered on the x=0 edge of the container */
+    top: 0;
+    bottom: 0;
+    width: 24px;
+    /* 2px solid visual line centered within the 24px hit area */
+    background: linear-gradient(to right, transparent 11px, #eee 11px, #eee 13px, transparent 13px);
+    cursor: pointer;
+    transition: background 0.2s;
+    z-index: 1; /* Below content but above container background */
+  }
+
+  .pr-replies::before:hover {
+    /* Darken line and show subtle background highlight */
+    background: linear-gradient(to right, rgba(0,0,0,0.03) 0, rgba(0,0,0,0.03) 11px, #bbb 11px, #bbb 13px, rgba(0,0,0,0.03) 13px, rgba(0,0,0,0.03) 24px);
+  }
+
+  /* Collapsed comment preview */
+  .pr-comment.collapsed > .pr-comment-body,
+  .pr-comment.collapsed > .pr-replies {
+    display: none;
+  }
+
+  .pr-comment.collapsed > .pr-comment-meta .pr-expand {
+    display: inline !important;
+  }
+
+  .pr-comment:not(.collapsed) > .pr-comment-meta .pr-expand {
+    display: none !important;
+  }
+
+  .pr-comment:not(.collapsed) > .pr-comment-meta .pr-collapse {
+    display: inline;
+  }
+
+  .pr-comment.collapsed > .pr-comment-meta .pr-collapse {
+    display: none;
+  }
+
+  /* Parent highlight */
+  .pr-comment.pr-highlight-parent > .pr-comment-body {
+    background-color: yellow !important;
+  }
+
+  /* First-time setup */
+  .pr-setup {
+    max-width: 600px;
+    margin: 50px auto;
+    padding: 20px;
+    background: #f9f9f9;
+    border-radius: 8px;
+  }
+
+  .pr-setup input[type="text"] {
+    width: 100%;
+    padding: 8px;
+    margin: 10px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+  }
+
+  .pr-setup button {
+    padding: 8px 16px;
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  .pr-setup button:hover {
+    background: #0056b3;
+  }
+
+  /* Loading state */
+  .pr-loading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+  }
+
+  /* Error state */
+  .pr-error {
+    color: red;
+    padding: 20px;
+    text-align: center;
+  }
+
+  /* Voting buttons */
+  .pr-vote-controls {
+    display: inline-flex;
+    gap: 2px;
+    margin-right: 8px;
+    align-items: center;
+  }
+
+  .pr-vote-btn {
+    cursor: pointer;
+    padding: 0 4px;
+    border-radius: 2px;
+    user-select: none;
+    font-size: 0.9em;
+  }
+
+  .pr-vote-btn:hover {
+    background: #e0e0e0;
+  }
+
+  .pr-vote-btn.active-up {
+    color: #0a0;
+    font-weight: bold;
+  }
+
+  .pr-vote-btn.active-down {
+    color: #a00;
+    font-weight: bold;
+  }
+
+  .pr-vote-btn.agree-active {
+    color: #090;
+    font-weight: bold;
+  }
+
+  .pr-vote-btn.disagree-active {
+    color: #900;
+    font-weight: bold;
+  }
+
+  .pr-karma-score {
+    font-weight: bold;
+    margin: 0 2px;
+    min-width: 1.2em;
+    text-align: center;
+  }
+
+  .pr-agreement-score {
+    color: #666;
+    min-width: 1.2em;
+    text-align: center;
+  }
+
+  /* Reactions */
+  .pr-reactions-container {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  .pr-reaction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    background: #f8f8f8;
+    font-size: 0.85em;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s;
+  }
+
+  .pr-reaction-chip:hover {
+    background: #eee;
+    border-color: #ccc;
+  }
+
+  .pr-reaction-chip.voted {
+    background: #e3f2fd;
+    border-color: #2196f3;
+  }
+
+  .pr-reaction-icon {
+    width: 1.1em;
+    height: 1.1em;
+    display: inline-block;
+  }
+
+  .pr-reaction-icon img {
+    width: 100%;
+    height: 100%;
+    vertical-align: top;
+  }
+
+  .pr-add-reaction-btn {
+    cursor: pointer;
+    padding: 2px 6px;
+    color: #888;
+    font-size: 1.1em;
+    line-height: 1;
+    user-select: none;
+    transition: color 0.2s;
+  }
+
+  .pr-add-reaction-btn:hover {
+    color: #333;
+  }
+
+  .pr-add-reaction-btn svg {
+    display: inline-block;
+    vertical-align: middle;
+    pointer-events: none; /* Let the click fall through to the button */
+    width: 1em;
+    height: 1em;
+  }
+
+  /* Reaction Picker */
+  .pr-reaction-picker {
+    position: absolute;
+    z-index: 3000;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    padding: 0;
+    width: fit-content;
+    max-width: 95vw;
+    height: auto;
+    display: none;
+    box-sizing: border-box;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .pr-reaction-picker.visible {
+    display: flex;
+  }
+
+  .pr-picker-header {
+    padding: 8px 12px 0 12px;
+    flex-shrink: 0;
+  }
+
+  .pr-picker-scroll-container {
+    padding: 0 12px 12px 12px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex-grow: 1;
+    scrollbar-width: thin;
+  }
+
+  .pr-reaction-picker * {
+    box-sizing: border-box;
+  }
+
+  .pr-picker-search {
+    margin-bottom: 8px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .pr-picker-search input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+  }
+
+  .pr-picker-section-title {
+    font-size: 0.75em;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 8px 0 4px 0;
+    padding-bottom: 2px;
+    border-bottom: 1px solid #eee;
+  }
+  
+  .pr-picker-section-title:first-child {
+    margin-top: 0;
+  }
+
+  .pr-picker-grid-separator {
+    grid-column: 1 / -1;
+    height: 1px;
+    background: #bbb;
+    margin: 8px 0;
+  }
+
+  .pr-reaction-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 38px);
+    gap: 4px;
+    width: 100%;
+  }
+
+  .pr-reaction-picker-item {
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.1s;
+    position: relative; /* CRITICAL for tooltips */
+  }
+
+  .pr-reaction-picker-item:hover {
+    background: #f0f0f0;
+  }
+  
+  .pr-reaction-picker-item.active {
+    background: #e3f2fd;
+    border: 1px solid #2196f3;
+  }
+
+  .pr-reaction-picker-item img {
+    width: 24px;
+    height: 24px;
+  }
+
+  .pr-tooltip-global {
+    position: fixed;
+    z-index: 9999;
+    background: #222;
+    color: white;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: normal;
+    min-width: 100px;
+    max-width: 180px;
+    text-align: left;
+    pointer-events: none;
+    line-height: 1.4;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    border: 1px solid #444;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+
+  .pr-tooltip-global strong {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 1.1em;
+    color: #fff;
+  }
+
+  /* Hover preview */
+  .pr-preview-overlay {
+    position: fixed;
+    z-index: 2000;
+    background: #fff;
+    border: 2px solid #333;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 16px;
+    pointer-events: auto;
+  }
+
+  .pr-preview-overlay.post-preview {
+    max-width: 80vw;
+    width: 800px;
+  }
+
+  .pr-preview-overlay.comment-preview {
+    max-width: 600px;
+  }
+
+  .pr-preview-overlay.author-preview {
+    max-width: 500px;
+    border-color: #0078ff;
+  }
+
+  .pr-preview-overlay .pr-preview-header {
+    font-weight: bold;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #ddd;
+  }
+
+  .pr-preview-overlay .pr-preview-content {
+    line-height: 1.6;
+    font-family: serif;
+  }
+
+  .pr-preview-overlay .pr-preview-content img {
+    max-width: 100%;
+  }
+
+  .pr-preview-loading {
+    text-align: center;
+    color: #666;
+    padding: 20px;
+  }
+
+  /* Sticky post header */
+  .pr-sticky-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1500;
+    display: none;
+  }
+
+  .pr-sticky-header.visible {
+    display: block;
+  }
+
+  .pr-sticky-header .pr-post-header {
+    margin: 0 auto;
+    border-bottom: 2px solid #333;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    cursor: pointer;
+  }
+
+  .pr-sticky-header .pr-post-header h2 .pr-post-title {
+    cursor: pointer;
+  }
+
+  /* List View Styles */
+  .pr-picker-view-toggle {
+    float: right;
+    cursor: pointer;
+    color: #888;
+    font-size: 18px;
+    user-select: none;
+    padding: 0 4px;
+  }
+  .pr-picker-view-toggle:hover {
+    color: #333;
+  }
+
+  .pr-reaction-picker-list {
+    display: flex;
+    flex-wrap: wrap;
+    width: 0;
+    min-width: 100%;
+  }
+
+  /* List Item (Icon + Label) */
+  .pr-reaction-list-item {
+    width: 50%;
+    max-width: 50%;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 2px 4px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.2s;
+  }
+  .pr-reaction-list-item:hover {
+    background: #f0f0f0;
+  }
+  .pr-reaction-list-item.active {
+    background: #e3f2fd;
+    border: 1px solid #2196f3;
+  }
+  .pr-reaction-list-item img {
+    width: 20px;
+    height: 20px;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  .pr-reaction-list-item span {
+    font-size: 13px;
+    white-space: pre-wrap; /* Allows 
+ to break lines */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .pr-reaction-list-item span.small {
+    font-size: 11px;
+  }
+
+  .pr-debug-btn {
+    padding: 6px 12px;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    margin-right: 8px;
+  }
+
+  .pr-debug-btn:hover {
+    background: #5a6268;
+  }
+
+  /* Bottom message */
+  .pr-bottom-message {
+    margin: 10px auto;
+    padding: 15px 20px;
+    text-align: center;
+    border: 2px dashed #ccc;
+    border-radius: 8px;
+    color: #666;
+    cursor: pointer;
+    transition: all 0.2s;
+    max-width: 600px;
+  }
+
+  .pr-bottom-message:hover {
+    background: #f0f0f0;
+    border-color: #999;
+    color: #333;
+  }
+
+  .pr-bottom-message.has-more {
+    background: #e3f2fd;
+    border-color: #2196f3;
+    color: #0d47a1;
+    border-style: solid;
+  }
+
+
+  /* AI Studio Response Popup */
+  .pr-ai-popup {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    max-width: 100%;
+    max-height: 50vh;
+    background: white;
+    border-bottom: 2px solid #007bff;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    z-index: 5000;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .pr-ai-popup-header {
+    background: #f0f7ff;
+    padding: 6px 15px;
+    border-bottom: 1px solid #cce5ff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .pr-ai-popup-header h3 {
+    margin: 0;
+    font-size: 0.9em;
+    color: #004085;
+  }
+
+  .pr-ai-popup-content {
+    padding: 12px 15px;
+    overflow-y: auto;
+    font-family: inherit;
+    font-size: 0.95em;
+    line-height: 1.4;
+    color: #333;
+  }
+
+  .pr-ai-popup-content p { margin-bottom: 0.5em; }
+  .pr-ai-popup-content ul, .pr-ai-popup-content ol { margin-bottom: 0.5em; padding-left: 1.5em; }
+  .pr-ai-popup-content li { margin-bottom: 0.3em; }
+  
+  .pr-ai-popup-content h1, 
+  .pr-ai-popup-content h2, 
+  .pr-ai-popup-content h3 {
+    margin-top: 0.8em;
+    margin-bottom: 0.3em;
+    font-size: 1.1em;
+    border-bottom: 1px solid #eee;
+    color: #111;
+  }
+
+  .pr-ai-popup-content code {
+    background: #f8f9fa;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.9em;
+    border: 1px solid #ddd;
+  }
+
+  .pr-ai-popup-content pre {
+    background: #f8f9fa;
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+    border: 1px solid #ddd;
+    margin-bottom: 0.6em;
+  }
+
+  /* Math/KaTeX Support from AI Studio */
+  .pr-ai-popup-content .inline {
+    display: inline-block;
+    vertical-align: middle;
+  }
+  
+  .pr-ai-popup-content .display {
+    display: block;
+    text-align: center;
+    margin: 1em 0;
+  }
+
+  /* Reset pre styles when inside math containers or containing KaTeX to stay inline/clean */
+  .pr-ai-popup-content .inline pre,
+  .pr-ai-popup-content .display pre,
+  .pr-ai-popup-content pre:has(.katex),
+  .pr-ai-popup-content pre:has(.rendered) {
+    display: inline-flex;
+    flex-direction: column;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+    vertical-align: middle;
+  }
+
+  .pr-ai-popup-content blockquote {
+    border-left: 4px solid #ddd;
+    padding-left: 15px;
+    margin: 1em 0;
+    color: #666;
+    font-style: italic;
+  }
+
+  /* Support for AI Studio's custom tags - must be inline to avoid breaking sentences */
+  ms-cmark-node { display: inline; }
+
+  .pr-ai-popup-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .pr-ai-popup-close, .pr-ai-popup-regen {
+    color: white;
+    border: none;
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 0.85em;
+    transition: background 0.2s;
+  }
+
+  .pr-ai-popup-close {
+    background: #6c757d;
+  }
+
+  .pr-ai-popup-close:hover {
+    background: #5a6268;
+  }
+
+  .pr-ai-popup-regen {
+    background: #28a745;
+  }
+
+  .pr-ai-popup-regen:hover {
+    background: #218838;
+  }
+
+  .pr-ai-popup-content hr {
+    border: 0;
+    border-top: 1px solid #ccc;
+    margin: 10px 0;
+  }
+  /* Footnote styling: force inline display */
+  /* Footnote styling: force inline display */
+  .footnote, .footnote-content {
+    display: inline !important;
+    margin-left: 4px;
+  }
+  .footnote p, .footnote-content p {
+    display: inline !important;
+    margin: 0 !important;
+  }
+
+  /* Recency highlight via CSS custom property (overridable by .pr-parent-hover) */
+  .pr-comment[style*="--pr-recency-color"] {
+    background-color: var(--pr-recency-color);
+  }
+
+  /* Hover state (static) - higher specificity to override recency */
+  .pr-comment.pr-parent-hover,
+  .pr-post-header.pr-parent-hover,
+  .pr-post-body-container.pr-parent-hover {
+    background-color: #ffe066 !important;
+    outline: 2px solid orange !important;
+    transition: background-color 0.2s;
+  }
+
+  /* Archive Mode */
+  .pr-archive-item-body {
+    padding: 10px 15px;
+    background: white;
+    border-top: 1px solid #eee;
+  }
+`;
+  const createInitialState = () => ({
+    currentUsername: null,
+    currentUserId: null,
+    currentUserPaletteStyle: null,
+    comments: [],
+    posts: [],
+    commentById: new Map(),
+    postById: new Map(),
+    childrenByParentId: new Map(),
+    subscribedAuthorIds: new Set(),
+    moreCommentsAvailable: false,
+    primaryPostsCount: 0,
+    initialBatchNewestDate: null,
+    currentSelection: null,
+    lastMousePos: { x: 0, y: 0 },
+    currentAIRequestId: null,
+    activeAIPopup: null,
+    sessionAICache: {}
+  });
+  const rebuildIndexes = (state2) => {
+    state2.commentById.clear();
+    state2.comments.forEach((c) => state2.commentById.set(c._id, c));
+    state2.postById.clear();
+    state2.posts.forEach((p) => state2.postById.set(p._id, p));
+    state2.childrenByParentId.clear();
+    state2.comments.forEach((c) => {
+      const parentId = c.parentCommentId || "";
+      if (!state2.childrenByParentId.has(parentId)) {
+        state2.childrenByParentId.set(parentId, []);
+      }
+      state2.childrenByParentId.get(parentId).push(c);
+    });
+    state2.childrenByParentId.forEach((children) => {
+      children.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+    });
+  };
+  const syncCommentInState = (state2, commentId, updates) => {
+    const comment = state2.commentById.get(commentId);
+    if (comment) {
+      Object.assign(comment, updates);
+    }
+  };
+  const syncPostInState = (state2, postId, updates) => {
+    const post = state2.postById.get(postId);
+    if (post) {
+      Object.assign(post, updates);
+    }
+  };
+  let globalState = null;
+  const getState = () => {
+    if (!globalState) {
+      globalState = createInitialState();
+    }
+    return globalState;
+  };
+  const executeTakeover = () => {
+    window.getState = getState;
+    window.stop();
+    const originalCreateElement = document.createElement.bind(document);
+    document.createElement = function(tagName, options) {
+      if (tagName.toLowerCase() === "script") {
+        Logger.warn("Blocking script creation attempt");
+        return originalCreateElement("div");
+      }
+      return originalCreateElement(tagName, options);
+    };
+    const scriptObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node instanceof HTMLScriptElement) {
+            node.remove();
+          }
+        });
+      });
+    });
+    scriptObserver.observe(document.documentElement, { childList: true, subtree: true });
+    Logger.info("Initializing...");
+    const protectionObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === "childList") {
+          const root = document.getElementById("power-reader-root");
+          if (document.body && !root && !document.querySelector(".pr-loading")) {
+            Logger.warn("UI cleared by site code! Re-injecting...");
+            rebuildDocument();
+          }
+        }
+      }
+    });
+    protectionObserver.observe(document.documentElement, { childList: true, subtree: true });
+  };
+  const rebuildDocument = () => {
+    const html2 = `
+    <head>
+      <meta charset="UTF-8">
+      <title>Less Wrong: Power Reader v${"1.2.571"}</title>
+      <style>${STYLES}</style>
+    </head>
+    <body>
+      <div id="power-reader-root">
+        <div class="pr-loading">Loading Power Reader...</div>
+      </div>
+      <div id="pr-sticky-header" class="pr-sticky-header"></div>
+      <div id="lw-power-reader-ready-signal" style="display: none;"></div>
+    </body>
+  `;
+    if (document.documentElement) {
+      document.documentElement.innerHTML = html2;
+    } else {
+      Logger.warn("document.documentElement is missing, attempting fallback write");
+      document.write(html2);
+      document.close();
+    }
+  };
+  const signalReady = () => {
+    const signal = document.getElementById("lw-power-reader-ready-signal");
+    if (signal) {
+      signal.style.display = "block";
+    }
+    window.__LW_POWER_READER_READY__ = true;
+  };
+  const getRoot = () => {
+    return document.getElementById("power-reader-root");
+  };
+  const LOG_PREFIX = "[GraphQL Client]";
+  function getGraphQLEndpoint() {
+    const hostname = window.location.hostname;
+    if (hostname === "forum.effectivealtruism.org") {
+      return "https://forum.effectivealtruism.org/graphql";
+    }
+    return "https://www.lesswrong.com/graphql";
+  }
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  function makeRequest(url, data) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "POST",
+        url,
+        headers: { "Content-Type": "application/json" },
+        data,
+        timeout: 3e4,
+        onload: (response) => resolve(response),
+        onerror: (err) => reject(err),
+        ontimeout: () => reject(new Error("Request timed out"))
+      });
+    });
+  }
+  async function queryGraphQL(query, variables = {}) {
+    const url = getGraphQLEndpoint();
+    const data = JSON.stringify({ query, variables });
+    const maxAttempts = 3;
+    const delays = [1e3, 2e3];
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const response = await makeRequest(url, data);
+        if (response.status === 429 || response.status >= 500) {
+          if (attempt < maxAttempts - 1) {
+            await sleep(delays[attempt]);
+            continue;
+          }
+          throw new Error(`HTTP ${response.status} after ${maxAttempts} attempts`);
+        }
+        let res;
+        try {
+          res = JSON.parse(response.responseText);
+        } catch (parseError) {
+          const error = parseError instanceof Error ? parseError : new Error("Failed to parse response JSON");
+          console.error(LOG_PREFIX, "GraphQL response parse failed:", response.responseText);
+          throw error;
+        }
+        if (res.errors) {
+          throw new Error(res.errors[0].message);
+        }
+        return res.data;
+      } catch (err) {
+        const isRetryable = err instanceof Error && (err.message === "Request timed out" || err.message.startsWith("HTTP "));
+        if (isRetryable && attempt < maxAttempts - 1) {
+          await sleep(delays[attempt]);
+          continue;
+        }
+        if (err instanceof Error && err.message.startsWith("HTTP ")) {
+          throw err;
+        }
+        if (attempt < maxAttempts - 1 && !(err instanceof Error)) {
+          await sleep(delays[attempt]);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("Failed to execute GraphQL query");
+  }
+  const GET_CURRENT_USER = (
+`
+  query GetCurrentUser {
+    currentUser {
+      _id
+      username
+      slug
+      karma
+      reactPaletteStyle
+    }
+  }
+`
+  );
+  const GET_SUBSCRIPTIONS = (
+`
+  query GetSubscriptions($userId: String!) {
+    subscriptions(selector: { subscriptionState: { userId: $userId, collectionName: "Users" } }) {
+      results {
+        documentId
+      }
+    }
+  }
+`
+  );
+  const POST_FIELDS_LITE = (
+`
+  fragment PostFieldsLite on Post {
+    _id
+    title
+    slug
+    pageUrl
+    postedAt
+    baseScore
+    voteCount
+    commentCount
+    wordCount
+    user {
+      _id
+      username
+      displayName
+      slug
+      karma
+    }
+    extendedScore
+    afExtendedScore
+    currentUserVote
+    currentUserExtendedVote
+  }
+`
+  );
+  const POST_FIELDS_FULL = (
+`
+  fragment PostFieldsFull on Post {
+    ...PostFieldsLite
+    htmlBody
+    contents { markdown }
+  }
+  ${POST_FIELDS_LITE}
+`
+  );
+  const COMMENT_FIELDS_CORE = (
+`
+  fragment CommentFieldsCore on Comment {
+    _id
+    postedAt
+    htmlBody
+    baseScore
+    voteCount
+    descendentCount
+    directChildrenCount
+    pageUrl
+    author
+    rejected
+    topLevelCommentId
+    user {
+      _id
+      username
+      displayName
+      slug
+      karma
+      htmlBio
+    }
+    postId
+    parentCommentId
+    parentComment {
+      _id
+      parentCommentId
+      parentComment {
+        _id
+        parentCommentId
+        parentComment {
+          _id
+          parentCommentId
+          parentComment {
+            _id
+            parentCommentId
+            parentComment {
+              _id
+              parentCommentId
+            }
+          }
+        }
+      }
+      user {
+        _id
+        username
+        displayName
+      }
+    }
+    extendedScore
+    afExtendedScore
+    currentUserVote
+    currentUserExtendedVote
+  }
+`
+  );
+  const COMMENT_FIELDS_LITE = (
+`
+  fragment CommentFieldsLite on Comment {
+    ...CommentFieldsCore
+    post {
+      ...PostFieldsLite
+    }
+  }
+  ${COMMENT_FIELDS_CORE}
+  ${POST_FIELDS_LITE}
+`
+  );
+  const COMMENT_FIELDS = (
+`
+  fragment CommentFieldsFull on Comment {
+    ...CommentFieldsCore
+    contents { markdown }
+    post {
+      ...PostFieldsFull
+    }
+    latestChildren {
+      _id
+      postedAt
+      htmlBody
+      baseScore
+      voteCount
+      descendentCount
+      directChildrenCount
+      pageUrl
+      author
+      rejected
+      topLevelCommentId
+      postId
+      parentCommentId
+    }
+  }
+  ${COMMENT_FIELDS_CORE}
+  ${POST_FIELDS_FULL}
+`
+  );
+  const GET_ALL_RECENT_COMMENTS_LITE = (
+`
+  query GetAllRecentCommentsLite($limit: Int, $after: String, $before: String, $offset: Int, $sortBy: String) {
+    comments(
+      selector: {
+        allRecentComments: {
+          after: $after,
+          before: $before,
+          sortBy: $sortBy
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...CommentFieldsLite
+      }
+    }
+  }
+  ${COMMENT_FIELDS_LITE}
+`
+  );
+  const GET_ALL_RECENT_COMMENTS = (
+`
+  query GetAllRecentComments($limit: Int, $after: String, $before: String, $offset: Int, $sortBy: String) {
+    comments(
+      selector: {
+        allRecentComments: {
+          after: $after,
+          before: $before,
+          sortBy: $sortBy
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const GET_COMMENTS_BY_IDS = (
+`
+  query GetCommentsByIds($commentIds: [String!]) {
+    comments(
+      selector: {
+        default: {
+          commentIds: $commentIds
+        }
+      }
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const VOTE_COMMENT_MUTATION = (
+`
+  mutation Vote($documentId: String!, $voteType: String!, $extendedVote: JSON) {
+    performVoteComment(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
+      document {
+        _id
+        baseScore
+        voteCount
+        extendedScore
+        afExtendedScore
+        currentUserVote
+        currentUserExtendedVote
+        contents { markdown }
+      }
+    }
+  }
+`
+  );
+  const VOTE_POST_MUTATION = (
+`
+  mutation VotePost($documentId: String!, $voteType: String!, $extendedVote: JSON) {
+    performVotePost(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
+      document {
+        _id
+        baseScore
+        voteCount
+        extendedScore
+        afExtendedScore
+        currentUserVote
+        currentUserExtendedVote
+        contents { markdown }
+      }
+    }
+  }
+`
+  );
+  const GET_POST = (
+`
+  query GetPost($id: String!) {
+    post(selector: { _id: $id }) {
+      result {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`
+  );
+  const GET_NEW_POSTS_FULL = (
+`
+  query GetNewPostsFull($limit: Int, $after: String, $before: String) {
+    posts(
+      selector: {
+        new: {
+          after: $after,
+          before: $before
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`
+  );
+  const GET_POST_COMMENTS = (
+`
+  query GetPostComments($postId: String!, $limit: Int) {
+    comments(
+      selector: {
+        postCommentsNew: {
+          postId: $postId
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const GET_THREAD_COMMENTS = (
+`
+  query GetThreadComments($topLevelCommentId: String!, $limit: Int) {
+    comments(
+      selector: {
+        repliesToCommentThreadIncludingRoot: {
+          topLevelCommentId: $topLevelCommentId
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const GET_USER_POSTS = (
+`
+  query GetUserPosts($userId: String!, $limit: Int, $offset: Int) {
+    posts(
+      selector: {
+        userPosts: {
+          userId: $userId
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`
+  );
+  const GET_USER_COMMENTS = (
+`
+  query GetUserComments($userId: String!, $limit: Int, $offset: Int) {
+    comments(
+      selector: {
+        profileComments: {
+          userId: $userId
+        }
+      },
+      limit: $limit,
+      offset: $offset
+    ) {
+      results {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const GET_USER = (
+`
+  query GetUser($id: String!) {
+    user(selector: { _id: $id }) {
+      result {
+        _id
+        username
+        displayName
+        slug
+        karma
+        htmlBio
+      }
+    }
+  }
+`
+  );
+  const GET_USER_BY_SLUG = (
+`
+  query GetUserBySlug($slug: String!) {
+    user: GetUserBySlug(slug: $slug) {
+      _id
+      username
+      displayName
+      slug
+      karma
+      htmlBio
+    }
+  }
+`
+  );
+  const GET_POST_BY_ID = GET_POST;
+  const GET_COMMENT = (
+`
+  query GetComment($id: String!) {
+    comment(selector: { _id: $id }) {
+      result {
+        ...CommentFieldsFull
+      }
+    }
+  }
+  ${COMMENT_FIELDS}
+`
+  );
+  const STORAGE_KEYS = {
+    READ: "power-reader-read",
+    READ_FROM: "power-reader-read-from",
+    AUTHOR_PREFS: "power-reader-author-prefs",
+    VIEW_WIDTH: "power-reader-view-width",
+    AI_STUDIO_PREFIX: "power-reader-ai-studio-prefix"
+  };
+  function getKey(baseKey) {
+    const hostname = window.location.hostname;
+    if (hostname.includes("effectivealtruism.org")) {
+      return `ea-${baseKey}`;
+    }
+    return baseKey;
+  }
+  let cachedReadState = null;
+  let lastReadStateFetch = 0;
+  let cachedLoadFrom = null;
+  let lastLoadFromFetch = 0;
+  function getReadState() {
+    const now = Date.now();
+    if (cachedReadState && now - lastReadStateFetch < 100) {
+      return cachedReadState;
+    }
+    try {
+      const raw = GM_getValue(getKey(STORAGE_KEYS.READ), "{}");
+      cachedReadState = JSON.parse(raw);
+      lastReadStateFetch = now;
+      return cachedReadState;
+    } catch {
+      return {};
+    }
+  }
+  function setReadState(state2) {
+    cachedReadState = state2;
+    lastReadStateFetch = Date.now();
+    GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state2));
+  }
+  function isRead(id, state2, postedAt) {
+    const readMap = state2 || getReadState();
+    if (readMap[id] === 1) return true;
+    if (postedAt) {
+      const cutoff = getLoadFrom();
+      if (cutoff && cutoff.includes("T")) {
+        const postTime = new Date(postedAt).getTime();
+        const cutoffTime = new Date(cutoff).getTime();
+        if (!isNaN(postTime) && !isNaN(cutoffTime) && postTime < cutoffTime) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  function markAsRead(target) {
+    const state2 = getReadState();
+    if (typeof target === "string") {
+      state2[target] = 1;
+    } else {
+      Object.assign(state2, target);
+    }
+    setReadState(state2);
+  }
+  function getLoadFrom() {
+    const now = Date.now();
+    if (cachedLoadFrom && now - lastLoadFromFetch < 100) {
+      return cachedLoadFrom;
+    }
+    const raw = GM_getValue(getKey(STORAGE_KEYS.READ_FROM), "");
+    cachedLoadFrom = raw;
+    lastLoadFromFetch = now;
+    return raw;
+  }
+  function setLoadFrom(isoDatetime) {
+    cachedLoadFrom = isoDatetime;
+    lastLoadFromFetch = Date.now();
+    GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
+  }
+  function getAuthorPreferences() {
+    try {
+      const raw = GM_getValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  function setAuthorPreferences(prefs) {
+    GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
+  }
+  function toggleAuthorPreference(author, direction) {
+    const prefs = getAuthorPreferences();
+    const current = prefs[author] || 0;
+    let newValue;
+    if (direction === "up") {
+      newValue = current > 0 ? 0 : 1;
+    } else {
+      newValue = current < 0 ? 0 : -1;
+    }
+    prefs[author] = newValue;
+    setAuthorPreferences(prefs);
+    return newValue;
+  }
+  function clearAllStorage() {
+    GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
+    GM_setValue(getKey(STORAGE_KEYS.READ_FROM), "");
+    GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
+    GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
+  }
+  function getViewWidth() {
+    const raw = GM_getValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
+    return parseInt(raw, 10) || 0;
+  }
+  function setViewWidth(width) {
+    GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), String(width));
+  }
+  function getAIStudioPrefix() {
+    return GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
+  }
+  function setAIStudioPrefix(prefix) {
+    GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
+  }
+  async function exportState() {
+    const exportData = {};
+    for (const key of Object.values(STORAGE_KEYS)) {
+      const namespacedKey = getKey(key);
+      exportData[namespacedKey] = GM_getValue(namespacedKey, "");
+    }
+    const json = JSON.stringify(exportData, null, 2);
+    if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(json);
+        alert("Power Reader state copied to clipboard!");
+      } catch (e) {
+        Logger.error("Clipboard write failed:", e);
+        alert("Failed to write to clipboard. Check console.");
+      }
+    } else {
+      Logger.info("Exported State:", json);
+      alert("Clipboard API not available. State logged to console.");
+    }
+  }
+  const CONFIG = {
+    loadMax: window.PR_TEST_LIMIT || 800,
+    highlightLastN: 33,
+    scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 5e3,
+hoverDelay: 300,
+    maxPostHeight: "50vh"
+  };
+  const loadInitial = async () => {
+    const injection = window.__PR_TEST_STATE_INJECTION__;
+    if (injection) {
+      Logger.info("Using injected test state");
+      return {
+        comments: injection.comments || [],
+        posts: injection.posts || [],
+        currentUsername: injection.currentUsername || null,
+        currentUserId: injection.currentUserId || null,
+        currentUserPaletteStyle: injection.currentUserPaletteStyle || null
+      };
+    }
+    const loadFrom = getLoadFrom();
+    const afterDate = loadFrom === "__LOAD_RECENT__" ? void 0 : loadFrom;
+    Logger.info(`Initial fetch: after=${afterDate}`);
+    const start = performance.now();
+    const [userRes, commentsRes] = await Promise.all([
+      queryGraphQL(GET_CURRENT_USER),
+      queryGraphQL(GET_ALL_RECENT_COMMENTS_LITE, {
+        after: afterDate,
+        limit: CONFIG.loadMax,
+        sortBy: afterDate ? "oldest" : "newest"
+      })
+    ]);
+    const networkTime = performance.now() - start;
+    Logger.info(`Initial fetch network request took ${networkTime.toFixed(2)}ms`);
+    const comments = commentsRes?.comments?.results || [];
+    let currentUsername = null;
+    let currentUserId = null;
+    let currentUserPaletteStyle = null;
+    if (userRes?.currentUser) {
+      currentUsername = userRes.currentUser.username || "";
+      currentUserId = userRes.currentUser._id;
+      currentUserPaletteStyle = userRes.currentUser.reactPaletteStyle || null;
+    }
+    const posts = [];
+    const seenPostIds = new Set();
+    comments.forEach((c) => {
+      if (c && c.post) {
+        const postId = c.post._id;
+        if (!seenPostIds.has(postId)) {
+          seenPostIds.add(postId);
+          posts.push(c.post);
+        }
+      }
+    });
+    const result = {
+      comments,
+      posts,
+      currentUsername,
+      currentUserId,
+      currentUserPaletteStyle,
+      lastInitialCommentDate: comments.length > 0 ? comments[comments.length - 1].postedAt : void 0
+    };
+    const totalTime = performance.now() - start;
+    Logger.info(`Initial load completed in ${totalTime.toFixed(2)}ms (processing: ${(totalTime - networkTime).toFixed(2)}ms)`);
+    return result;
+  };
+  const fetchRepliesBatch = async (parentIds) => {
+    const start = performance.now();
+    if (parentIds.length === 0) return [];
+    const CHUNK_SIZE = 30;
+    const allResults = [];
+    for (let i = 0; i < parentIds.length; i += CHUNK_SIZE) {
+      const chunk = parentIds.slice(i, i + CHUNK_SIZE);
+      const query = `
+      query GetRepliesBatch(${chunk.map((_, j) => `$id${j}: String!`).join(", ")}) {
+        ${chunk.map((_, j) => `
+          r${j}: comments(selector: { commentReplies: { parentCommentId: $id${j} } }) {
+            results {
+              ${COMMENT_FIELDS}
+            }
+          }
+        `).join("\n")}
+      }
+    `;
+      const variables = {};
+      chunk.forEach((id, j) => variables[`id${j}`] = id);
+      try {
+        const res = await queryGraphQL(query, variables);
+        if (!res) continue;
+        chunk.forEach((_, j) => {
+          const results = res[`r${j}`]?.results || [];
+          allResults.push(...results);
+        });
+      } catch (e) {
+        Logger.error(`Batch reply fetch failed for chunk starting at ${i}`, e);
+      }
+    }
+    Logger.info(`Batch reply fetch for ${parentIds.length} parents took ${(performance.now() - start).toFixed(2)}ms`);
+    return allResults;
+  };
+  const fetchThreadsBatch = async (threadIds) => {
+    const start = performance.now();
+    if (threadIds.length === 0) return [];
+    const CHUNK_SIZE = 15;
+    const allResults = [];
+    for (let i = 0; i < threadIds.length; i += CHUNK_SIZE) {
+      const chunk = threadIds.slice(i, i + CHUNK_SIZE);
+      const query = `
+      query GetThreadsBatch(${chunk.map((_, j) => `$id${j}: String!`).join(", ")}) {
+        ${chunk.map((_, j) => `
+          t${j}: comments(selector: { repliesToCommentThreadIncludingRoot: { topLevelCommentId: $id${j} } }, limit: 100) {
+            results {
+              ${COMMENT_FIELDS}
+            }
+          }
+        `).join("\n")}
+      }
+    `;
+      const variables = {};
+      chunk.forEach((id, j) => variables[`id${j}`] = id);
+      try {
+        const res = await queryGraphQL(query, variables);
+        if (!res) continue;
+        chunk.forEach((_, j) => {
+          const results = res[`t${j}`]?.results || [];
+          allResults.push(...results);
+        });
+      } catch (e) {
+        Logger.error(`Batch thread fetch failed for chunk starting at ${i}`, e);
+      }
+    }
+    Logger.info(`Batch thread fetch for ${threadIds.length} threads took ${(performance.now() - start).toFixed(2)}ms`);
+    return allResults;
+  };
+  const enrichInBackground = async (state2) => {
+    const start = performance.now();
+    const injection = window.__PR_TEST_STATE_INJECTION__;
+    if (injection && injection.posts) {
+      return {
+        posts: injection.posts,
+        comments: injection.comments || state2.comments,
+        subscribedAuthorIds: new Set(),
+        moreCommentsAvailable: false,
+        primaryPostsCount: injection.posts.length
+      };
+    }
+    const currentUserId = state2.currentUserId;
+    const allComments = [...state2.comments];
+    const subsPromise = currentUserId ? queryGraphQL(GET_SUBSCRIPTIONS, { userId: currentUserId }) : Promise.resolve(null);
+    const loadFrom = getLoadFrom();
+    const isLoadRecent = loadFrom === "__LOAD_RECENT__";
+    const afterDate = isLoadRecent ? void 0 : loadFrom;
+    let startDate = afterDate;
+    let endDate = void 0;
+    if (allComments.length > 0) {
+      const commentDates = allComments.map((c) => c && c.postedAt).filter((d) => !!d).sort();
+      const oldestCommentDate = commentDates[0];
+      const newestCommentDate = commentDates[commentDates.length - 1];
+      if (isLoadRecent) {
+        startDate = oldestCommentDate;
+      } else if (allComments.length >= CONFIG.loadMax) {
+        endDate = newestCommentDate;
+      }
+    }
+    const [postsRes, subsRes] = await Promise.all([
+      queryGraphQL(GET_NEW_POSTS_FULL, {
+        after: startDate,
+        before: endDate,
+        limit: CONFIG.loadMax
+      }),
+      subsPromise
+    ]);
+    const fetchTime = performance.now() - start;
+    Logger.info(`Enrichment posts/subs fetch took ${fetchTime.toFixed(2)}ms`);
+    const batchPosts = postsRes?.posts?.results || [];
+    const primaryPostsCount = batchPosts.length;
+    const subscribedAuthorIds = new Set();
+    if (subsRes?.subscriptions?.results) {
+      subsRes.subscriptions.results.forEach((r) => {
+        if (r.documentId) subscribedAuthorIds.add(r.documentId);
+      });
+    }
+    const updatedPosts = [...batchPosts];
+    const postIdSet = new Set(batchPosts.map((p) => p._id));
+    allComments.forEach((c) => {
+      if (c && c.post) {
+        const postId = c.post._id;
+        if (!postIdSet.has(postId)) {
+          postIdSet.add(postId);
+          updatedPosts.push(c.post);
+        }
+      }
+    });
+    const loadFromValue = getLoadFrom();
+    const moreCommentsAvailable = loadFromValue !== "__LOAD_RECENT__" && allComments.length >= CONFIG.loadMax;
+    const result = {
+      posts: updatedPosts,
+      comments: allComments,
+      subscribedAuthorIds,
+      moreCommentsAvailable,
+      primaryPostsCount
+    };
+    Logger.info(`Enrichment completed in ${(performance.now() - start).toFixed(2)}ms`);
+    return result;
+  };
+  const runSmartLoading = async (state2, readState) => {
+    const allComments = [...state2.comments];
+    const moreCommentsAvailable = state2.moreCommentsAvailable;
+    const forceSmartLoading = window.PR_TEST_FORCE_SMART_LOADING === true;
+    const unreadComments = allComments.filter((c) => !readState[c._id]);
+    if (!moreCommentsAvailable && !forceSmartLoading || unreadComments.length === 0) {
+      return null;
+    }
+    const start = performance.now();
+    Logger.info(`Smart Loading: Processing ${unreadComments.length} unread comments...`);
+    const commentMap = new Map();
+    allComments.forEach((c) => commentMap.set(c._id, c));
+    const unreadByThread = new Map();
+    unreadComments.forEach((c) => {
+      const threadId = c.topLevelCommentId || c.postId || c._id;
+      if (!unreadByThread.has(threadId)) {
+        unreadByThread.set(threadId, []);
+      }
+      unreadByThread.get(threadId).push(c);
+    });
+    const mergeComment = (comment) => {
+      if (!commentMap.has(comment._id)) {
+        allComments.push(comment);
+        commentMap.set(comment._id, comment);
+        return true;
+      } else {
+        const existing = commentMap.get(comment._id);
+        if (existing.isPlaceholder) {
+          const idx = allComments.findIndex((c) => c._id === comment._id);
+          if (idx !== -1) {
+            allComments[idx] = comment;
+            commentMap.set(comment._id, comment);
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    const threadIdsToFetchFull = new Set();
+    const commentIdsToFetchReplies = new Set();
+    const childrenByParent = state2.childrenByParentId;
+    const hasMissingChildren = (commentId, directChildrenCount) => {
+      if (directChildrenCount <= 0) return false;
+      const loadedChildren = childrenByParent.get(commentId);
+      return !loadedChildren || loadedChildren.length < directChildrenCount;
+    };
+    unreadByThread.forEach((threadUnread, threadId) => {
+      const commentsWithMissingChildren = threadUnread.filter((c) => {
+        const directCount = c.directChildrenCount ?? 0;
+        return hasMissingChildren(c._id, directCount);
+      });
+      if (commentsWithMissingChildren.length >= 3) {
+        threadIdsToFetchFull.add(threadId);
+        return;
+      }
+      commentsWithMissingChildren.forEach((target) => {
+        commentIdsToFetchReplies.add(target._id);
+      });
+    });
+    const fetchPromises = [];
+    if (threadIdsToFetchFull.size > 0) {
+      Logger.info(`Smart Loading: Fetching ${threadIdsToFetchFull.size} full threads in batch...`);
+      fetchPromises.push(
+        fetchThreadsBatch(Array.from(threadIdsToFetchFull)).then((results) => {
+          results.forEach(mergeComment);
+        })
+      );
+    }
+    if (commentIdsToFetchReplies.size > 0) {
+      Logger.info(`Smart Loading: Fetching replies for ${commentIdsToFetchReplies.size} comments in batch...`);
+      fetchPromises.push(
+        fetchRepliesBatch(Array.from(commentIdsToFetchReplies)).then(async (replyResults) => {
+          const newThreadIdsToFetch = new Set();
+          const parentToChildrenCount = new Map();
+          let anyNewData = false;
+          replyResults.forEach((c) => {
+            if (mergeComment(c)) anyNewData = true;
+            if (c.parentCommentId) {
+              parentToChildrenCount.set(c.parentCommentId, (parentToChildrenCount.get(c.parentCommentId) || 0) + 1);
+            }
+          });
+          if (!anyNewData && replyResults.length > 0) return;
+          parentToChildrenCount.forEach((count, parentId) => {
+            if (count > 1) {
+              const parent = commentMap.get(parentId);
+              const threadId = parent?.topLevelCommentId || parent?.postId || parentId;
+              if (!threadIdsToFetchFull.has(threadId)) {
+                newThreadIdsToFetch.add(threadId);
+              }
+            }
+          });
+          if (newThreadIdsToFetch.size > 0) {
+            Logger.info(`Smart Loading: Dynamic Switch triggered for ${newThreadIdsToFetch.size} threads`);
+            const extraResults = await fetchThreadsBatch(Array.from(newThreadIdsToFetch));
+            extraResults.forEach(mergeComment);
+          }
+        })
+      );
+    }
+    await Promise.all(fetchPromises);
+    const newCount = allComments.length - state2.comments.length;
+    Logger.info(`Smart Loading completed in ${(performance.now() - start).toFixed(2)}ms (${newCount} new comments)`);
+    return { comments: allComments };
+  };
+  const applyEnrichment = (state2, result) => {
+    state2.posts = result.posts;
+    state2.comments = result.comments;
+    state2.subscribedAuthorIds = result.subscribedAuthorIds;
+    state2.moreCommentsAvailable = result.moreCommentsAvailable;
+    state2.primaryPostsCount = result.primaryPostsCount;
+    rebuildIndexes(state2);
+  };
+  const applySmartLoad = (state2, result) => {
+    state2.comments = result.comments;
+    rebuildIndexes(state2);
+  };
+  const applyInitialLoad = (state2, result) => {
+    state2.comments = result.comments;
+    state2.posts = result.posts;
+    state2.currentUsername = result.currentUsername;
+    state2.currentUserId = result.currentUserId;
+    state2.currentUserPaletteStyle = result.currentUserPaletteStyle;
+    state2.primaryPostsCount = 0;
+    rebuildIndexes(state2);
+    if (state2.comments.length > 0) {
+      const validComments = state2.comments.filter((c) => c.postedAt && !isNaN(new Date(c.postedAt).getTime()));
+      if (validComments.length > 0) {
+        const sorted = [...validComments].sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
+        const oldestDate = sorted[0].postedAt;
+        setLoadFrom(oldestDate);
+        Logger.info(`loader: Initial loadFrom snapshot set to ${oldestDate}`);
+      }
+    }
+  };
+  const AI_STUDIO_PROMPT_PREFIX = `* summarize the focal post or comment in this thread at 1/3 length or 5 sentences, whichever is shorter (required, no heading)
+* explain any context for the focal post or comment not already explained in the summary (optional, heading: Context)
+* explain obscure terms or references, inside jokes, etc., but assume familiarity with basic LessWrong/EA knowledge (optional, heading: Clarifications)
+* what are the most serious potential errors in the focal post or comment? (optional, heading: Potential Errors)
+* if there are 2 or more comments in the thread, summarize the whole thread and highlight the most interesting parts (optional, heading: Thread Summary)
+* note that paragraphs prefixed by > are quotes from the previous comment
+`;
+  const state$1 = {
+    isDragging: false,
+    startX: 0,
+    startWidth: 0,
+    dragSide: null
+  };
+  let rootElement = null;
+  function initResizeHandles() {
+    rootElement = document.getElementById("power-reader-root");
+    if (!rootElement) return;
+    const leftHandle = document.createElement("div");
+    leftHandle.className = "pr-resize-handle left";
+    leftHandle.dataset.side = "left";
+    const rightHandle = document.createElement("div");
+    rightHandle.className = "pr-resize-handle right";
+    rightHandle.dataset.side = "right";
+    document.body.appendChild(leftHandle);
+    document.body.appendChild(rightHandle);
+    const savedWidth = getViewWidth();
+    applyWidth(savedWidth);
+    leftHandle.addEventListener("mousedown", startDrag);
+    rightHandle.addEventListener("mousedown", startDrag);
+    document.addEventListener("mousemove", onDrag);
+    document.addEventListener("mouseup", endDrag);
+    window.addEventListener("resize", () => {
+      const currentWidth = getViewWidth();
+      applyWidth(currentWidth);
+    });
+  }
+  function startDrag(e) {
+    const handle = e.target;
+    state$1.isDragging = true;
+    state$1.startX = e.clientX;
+    state$1.dragSide = handle.dataset.side;
+    state$1.startWidth = rootElement?.offsetWidth || window.innerWidth;
+    handle.classList.add("dragging");
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  }
+  function onDrag(e) {
+    if (!state$1.isDragging || !rootElement) return;
+    const deltaX = e.clientX - state$1.startX;
+    let newWidth;
+    if (state$1.dragSide === "left") {
+      newWidth = state$1.startWidth - deltaX * 2;
+    } else {
+      newWidth = state$1.startWidth + deltaX * 2;
+    }
+    const minWidth = 400;
+    const maxWidth = window.innerWidth;
+    newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+    applyWidth(newWidth);
+  }
+  function endDrag() {
+    if (!state$1.isDragging) return;
+    state$1.isDragging = false;
+    state$1.dragSide = null;
+    document.querySelectorAll(".pr-resize-handle").forEach((h) => {
+      h.classList.remove("dragging");
+    });
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (rootElement) {
+      const width = rootElement.offsetWidth;
+      setViewWidth(width);
+    }
+  }
+  function applyWidth(width) {
+    if (!rootElement) return;
+    if (width <= 0 || width >= window.innerWidth) {
+      rootElement.style.maxWidth = "";
+      rootElement.style.width = "100%";
+    } else {
+      rootElement.style.maxWidth = `${width}px`;
+      rootElement.style.width = `${width}px`;
+    }
+    updateHandlePositions();
+  }
+  function updateHandlePositions() {
+    if (!rootElement) return;
+    const rect = rootElement.getBoundingClientRect();
+    const leftHandle = document.querySelector(".pr-resize-handle.left");
+    const rightHandle = document.querySelector(".pr-resize-handle.right");
+    if (leftHandle) {
+      leftHandle.style.left = `${Math.max(0, rect.left - 4)}px`;
+    }
+    if (rightHandle) {
+      rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
+    }
+  }
   const HOVER_DELAY = 300;
   const state = {
     activePreview: null,
@@ -4190,200 +4243,6 @@ dirty.indexOf("<") === -1) {
     </div>
   `;
   }
-  const LOGIN_URL = `${window.location.origin}/auth/auth0`;
-  async function castKarmaVote(documentId, voteType, isLoggedIn, currentAgreement = null, documentType = "comment") {
-    Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
-    if (!isLoggedIn) {
-      Logger.info("Not logged in, opening auth page");
-      window.open(LOGIN_URL, "_blank");
-      return null;
-    }
-    try {
-      if (documentType === "post") {
-        const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
-          documentId,
-          voteType,
-          extendedVote: currentAgreement
-        });
-        return response2;
-      }
-      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
-        documentId,
-        voteType,
-        extendedVote: currentAgreement
-      });
-      return response;
-    } catch (e) {
-      Logger.error("Vote failed:", e);
-      return null;
-    }
-  }
-  async function castAgreementVote(documentId, voteType, isLoggedIn, currentKarma = "neutral", documentType = "comment") {
-    if (!isLoggedIn) {
-      window.open(LOGIN_URL, "_blank");
-      return null;
-    }
-    const agreementValue = voteType === "agree" ? "smallUpvote" : voteType === "disagree" ? "smallDownvote" : "neutral";
-    try {
-      if (documentType === "post") {
-        const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
-          documentId,
-          voteType: currentKarma || "neutral",
-          extendedVote: { agreement: agreementValue }
-        });
-        return response2;
-      }
-      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
-        documentId,
-        voteType: currentKarma || "neutral",
-        extendedVote: { agreement: agreementValue }
-      });
-      return response;
-    } catch (e) {
-      Logger.error("Agreement vote failed:", e);
-      return null;
-    }
-  }
-  async function castReactionVote(commentId, reactionName, isLoggedIn, currentKarma = "neutral", currentExtendedVote = {}, quote = null) {
-    if (!isLoggedIn) {
-      window.open(LOGIN_URL, "_blank");
-      return null;
-    }
-    const existingReacts = currentExtendedVote?.reacts || [];
-    const newReacts = JSON.parse(JSON.stringify(existingReacts));
-    const existingReactionIndex = newReacts.findIndex((r) => r.react === reactionName);
-    if (existingReactionIndex >= 0) {
-      const reaction = newReacts[existingReactionIndex];
-      if (quote) {
-        const quotes = reaction.quotes || [];
-        if (quotes.includes(quote)) {
-          reaction.quotes = quotes.filter((q) => q !== quote);
-          if (reaction.quotes.length === 0) {
-            newReacts.splice(existingReactionIndex, 1);
-          }
-        } else {
-          reaction.quotes = [...quotes, quote];
-        }
-      } else {
-        newReacts.splice(existingReactionIndex, 1);
-      }
-    } else {
-      const newReaction = {
-        react: reactionName,
-        vote: "created"
-};
-      if (quote) {
-        newReaction.quotes = [quote];
-      }
-      newReacts.push(newReaction);
-    }
-    const extendedVotePayload = {
-      agreement: currentExtendedVote?.agreement,
-      reacts: newReacts
-    };
-    try {
-      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
-        documentId: commentId,
-        voteType: currentKarma || "neutral",
-extendedVote: extendedVotePayload
-      });
-      return response;
-    } catch (e) {
-      Logger.error("Reaction vote failed:", e);
-      return null;
-    }
-  }
-  function calculateNextVoteState(currentVote, direction, isHold) {
-    const isUp = direction === "up" || direction === "agree";
-    const small = isUp ? direction === "agree" ? "agree" : "smallUpvote" : direction === "disagree" ? "disagree" : "smallDownvote";
-    const big = isUp ? "bigUpvote" : "bigDownvote";
-    const neutral = "neutral";
-    const currentIsBig = currentVote === big;
-    const currentIsSmall = currentVote === small || direction === "agree" && currentVote === "smallUpvote" || direction === "disagree" && currentVote === "smallDownvote";
-    if (isHold) {
-      if (currentIsBig) return neutral;
-      return big;
-    } else {
-      if (currentIsBig) return small;
-      if (currentIsSmall) return neutral;
-      return small;
-    }
-  }
-  function renderVoteButtons(commentId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true) {
-    const isUpvoted = currentKarmaVote === "smallUpvote" || currentKarmaVote === "bigUpvote" || currentKarmaVote === 1;
-    const isDownvoted = currentKarmaVote === "smallDownvote" || currentKarmaVote === "bigDownvote" || currentKarmaVote === -1;
-    const agreeVote = currentAgreement?.agreement;
-    const isAgreed = agreeVote === "smallUpvote" || agreeVote === "bigUpvote" || agreeVote === "agree";
-    const isDisagreed = agreeVote === "smallDownvote" || agreeVote === "bigDownvote" || agreeVote === "disagree";
-    const agreementHtml = showAgreement ? `
-    <span class="pr-vote-controls">
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isDisagreed ? "disagree-active" : ""} ${agreeVote === "bigDownvote" ? "strong-vote" : ""}" 
-            data-action="disagree" 
-            data-comment-id="${commentId}"
-            title="Disagree">✗</span>
-      ` : ""}
-      <span class="pr-agreement-score" title="Agreement votes: ${agreementVoteCount}">${agreementScore}</span>
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isAgreed ? "agree-active" : ""} ${agreeVote === "bigUpvote" ? "strong-vote" : ""}" 
-            data-action="agree" 
-            data-comment-id="${commentId}"
-            title="Agree">✓</span>
-      ` : ""}
-    </span>` : "";
-    return `
-    <span class="pr-vote-controls">
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isDownvoted ? "active-down" : ""} ${currentKarmaVote === "bigDownvote" ? "strong-vote" : ""}" 
-            data-action="karma-down" 
-            data-comment-id="${commentId}"
-            title="Downvote">▼</span>
-      ` : ""}
-      <span class="pr-karma-score" title="Total votes: ${voteCount}">${karmaScore}</span>
-      ${showButtons ? `
-      <span class="pr-vote-btn ${isUpvoted ? "active-up" : ""} ${currentKarmaVote === "bigUpvote" ? "strong-vote" : ""}" 
-            data-action="karma-up" 
-            data-comment-id="${commentId}"
-            title="Upvote">▲</span>
-      ` : ""}
-    </span>
-    ${agreementHtml}
-    <span class="pr-reactions-container" data-comment-id="${commentId}">
-      <!-- Reactions will be injected here during main render or update -->
-    </span>
-  `;
-  }
-  function updateVoteUI(documentId, response) {
-    const isPostVote = !!response.performVotePost?.document;
-    const targets = isPostVote ? Array.from(document.querySelectorAll(`.pr-post-header[data-post-id="${documentId}"]`)) : Array.from(document.querySelectorAll(`.pr-comment[data-id="${documentId}"]`));
-    const doc = response.performVoteComment?.document ?? response.performVotePost?.document;
-    if (!doc || targets.length === 0) return;
-    targets.forEach((target) => {
-      const scoreEl = target.querySelector(".pr-karma-score");
-      if (scoreEl) {
-        scoreEl.textContent = String(doc.baseScore);
-      }
-      const agreeScoreEl = target.querySelector(".pr-agreement-score");
-      if (agreeScoreEl && doc.afExtendedScore?.agreement !== void 0) {
-        agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
-      }
-      const upBtn = target.querySelector('[data-action="karma-up"]');
-      const downBtn = target.querySelector('[data-action="karma-down"]');
-      const vote = doc.currentUserVote;
-      upBtn?.classList.toggle("active-up", vote === "smallUpvote" || vote === "bigUpvote");
-      upBtn?.classList.toggle("strong-vote", vote === "bigUpvote");
-      downBtn?.classList.toggle("active-down", vote === "smallDownvote" || vote === "bigDownvote");
-      downBtn?.classList.toggle("strong-vote", vote === "bigDownvote");
-      const agreeBtn = target.querySelector('[data-action="agree"]');
-      const disagreeBtn = target.querySelector('[data-action="disagree"]');
-      const extVote = doc.currentUserExtendedVote;
-      const agreeState = extVote?.agreement;
-      agreeBtn?.classList.toggle("agree-active", agreeState === "smallUpvote" || agreeState === "bigUpvote" || agreeState === "agree");
-      agreeBtn?.classList.toggle("strong-vote", agreeState === "bigUpvote");
-      disagreeBtn?.classList.toggle("disagree-active", agreeState === "smallDownvote" || agreeState === "bigDownvote" || agreeState === "disagree");
-      disagreeBtn?.classList.toggle("strong-vote", agreeState === "bigDownvote");
-    });
-  }
   const DEFAULT_FILTER = {
     opacity: 1,
     saturate: 1,
@@ -4655,6 +4514,164 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
   }
+  function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true) {
+    const isUpvoted = currentKarmaVote === "smallUpvote" || currentKarmaVote === "bigUpvote" || currentKarmaVote === 1;
+    const isDownvoted = currentKarmaVote === "smallDownvote" || currentKarmaVote === "bigDownvote" || currentKarmaVote === -1;
+    const agreeVote = currentAgreement?.agreement;
+    const isAgreed = agreeVote === "smallUpvote" || agreeVote === "bigUpvote" || agreeVote === "agree";
+    const isDisagreed = agreeVote === "smallDownvote" || agreeVote === "bigDownvote" || agreeVote === "disagree";
+    const agreementHtml = showAgreement ? `
+    <span class="pr-vote-controls">
+      ${showButtons ? `
+      <span class="pr-vote-btn ${isDisagreed ? "disagree-active" : ""} ${agreeVote === "bigDownvote" ? "strong-vote" : ""}" 
+            data-action="disagree" 
+            data-id="${itemId}"
+            title="Disagree">✗</span>
+      ` : ""}
+      <span class="pr-agreement-score" title="Agreement votes: ${agreementVoteCount}">${agreementScore}</span>
+      ${showButtons ? `
+      <span class="pr-vote-btn ${isAgreed ? "agree-active" : ""} ${agreeVote === "bigUpvote" ? "strong-vote" : ""}" 
+            data-action="agree" 
+            data-id="${itemId}"
+            title="Agree">✓</span>
+      ` : ""}
+    </span>` : "";
+    return `
+    <span class="pr-vote-controls">
+      ${showButtons ? `
+      <span class="pr-vote-btn ${isDownvoted ? "active-down" : ""} ${currentKarmaVote === "bigDownvote" ? "strong-vote" : ""}" 
+            data-action="karma-down" 
+            data-id="${itemId}"
+            title="Downvote">▼</span>
+      ` : ""}
+      <span class="pr-karma-score" title="Total votes: ${voteCount}">${karmaScore}</span>
+      ${showButtons ? `
+      <span class="pr-vote-btn ${isUpvoted ? "active-up" : ""} ${currentKarmaVote === "bigUpvote" ? "strong-vote" : ""}" 
+            data-action="karma-up" 
+            data-id="${itemId}"
+            title="Upvote">▲</span>
+      ` : ""}
+    </span>
+    ${agreementHtml}
+    <span class="pr-reactions-container" data-id="${itemId}">
+      <!-- Reactions will be injected here during main render or update -->
+    </span>
+  `;
+  }
+  const renderReactions = (itemId, extendedScore, currentUserExtendedVote) => {
+    let html2 = '<span class="pr-reactions-inner">';
+    const reacts = extendedScore?.reacts || {};
+    const userReacts = currentUserExtendedVote?.reacts || [];
+    const allReactions = getReactions();
+    const reactionCounts = {};
+    Object.entries(reacts).forEach(([reactName, users]) => {
+      let score = 0;
+      users.forEach((u) => {
+        if (u.reactType === "disagreed") score -= 1;
+        else score += 1;
+      });
+      if (score > 0) {
+        reactionCounts[reactName] = score;
+      }
+    });
+    allReactions.forEach((reaction) => {
+      const count = reactionCounts[reaction.name] || 0;
+      const userVoted = userReacts.some((r) => r.react === reaction.name);
+      if (count > 0 || userVoted) {
+        const filter = reaction.filter || DEFAULT_FILTER;
+        const opacity = filter.opacity ?? 1;
+        const saturate = filter.saturate ?? 1;
+        const scale = filter.scale ?? 1;
+        const tx = filter.translateX ?? 0;
+        const ty = filter.translateY ?? 0;
+        const padding = filter.padding ?? 0;
+        const imgStyle = `
+        filter: opacity(${opacity}) saturate(${saturate});
+        transform: scale(${scale}) translate(${tx}px, ${ty}px);
+        padding: ${padding}px;
+      `;
+        const title = `${reaction.label}${reaction.description ? "\\n" + reaction.description : ""}`;
+        html2 += `
+        <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
+              data-action="reaction-vote" 
+              data-id="${itemId}" 
+              data-reaction-name="${reaction.name}"
+              title="${escapeHtml(title)}">
+          <span class="pr-reaction-icon" style="overflow:visible">
+             <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
+          </span>
+          <span class="pr-reaction-count">${count > 0 ? count : ""}</span>
+        </span>
+      `;
+      }
+    });
+    html2 += `
+    <span class="pr-add-reaction-btn" data-action="open-picker" data-id="${itemId}" title="Add reaction">
+      <svg height="16" viewBox="0 0 16 16" width="16"><g fill="currentColor"><path d="m13 7c0-3.31371-2.6863-6-6-6-3.31371 0-6 2.68629-6 6 0 3.3137 2.68629 6 6 6 .08516 0 .1699-.0018.25419-.0053-.11154-.3168-.18862-.6499-.22673-.9948l-.02746.0001c-2.76142 0-5-2.23858-5-5s2.23858-5 5-5 5 2.23858 5 5l-.0001.02746c.3449.03811.678.11519.9948.22673.0035-.08429.0053-.16903.0053-.25419z"></path><path d="m7.11191 10.4982c.08367-.368.21246-.71893.38025-1.04657-.15911.03174-.32368.04837-.49216.04837-.74037 0-1.40506-.3212-1.86354-.83346-.18417-.20576-.50026-.22327-.70603-.03911-.20576.18417-.22327.50026-.03911.70603.64016.71524 1.57205 1.16654 2.60868 1.16654.03744 0 .07475-.0006.11191-.0018z"></path><path d="m6 6c0 .41421-.33579.75-.75.75s-.75-.33579-.75-.75.33579-.75.75-.75.75.33579.75.75z"></path><path d="m8.75 6.75c.41421 0 .75-.33579.75-.75s-.33579-.75-.75-.75-.75.33579-.75.75.33579.75.75.75z"></path><path d="m15 11.5c0 1.933-1.567 3.5-3.5 3.5s-3.5-1.567-3.5-3.5 1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5zm-3-2c0-.27614-.2239-.5-.5-.5s-.5.22386-.5.5v1.5h-1.5c-.27614 0-.5.2239-.5.5s.22386.5.5.5h1.5v1.5c0 .2761.2239.5.5.5s.5-.2239.5-.5v-1.5h1.5c.2761 0 .5-.2239.5-.5s-.2239-.5-.5-.5h-1.5z"></path></g></svg>
+    </span>
+  `;
+    html2 += "</span>";
+    return html2;
+  };
+  const renderMetadata = (item, options = {}) => {
+    const { state: state2, isFullPost = true, style = "", extraClass = "", children = "" } = options;
+    const isPost = "title" in item;
+    const authorHandle = item.user?.username || item.author || "Unknown Author";
+    const authorName = item.user?.displayName || authorHandle;
+    const authorId = item.user?._id || "";
+    const voteButtonsHtml = renderVoteButtons(
+      item._id,
+      item.baseScore || 0,
+      item.currentUserVote ?? null,
+      item.currentUserExtendedVote ?? null,
+      item.afExtendedScore?.agreement ?? 0,
+      isPost ? item.voteCount || 0 : 0,
+      0,
+isPost ? window.location.hostname.includes("effectivealtruism.org") || window.location.hostname === "localhost" : true,
+isFullPost
+);
+    const reactionsHtml = renderReactions(
+      item._id,
+      item.extendedScore,
+      item.currentUserExtendedVote
+    );
+    const authorPrefs = getAuthorPreferences();
+    let authorPref = authorPrefs[authorHandle];
+    if (authorPref === void 0 && authorId && state2?.subscribedAuthorIds.has(authorId)) {
+      authorPref = 1;
+    }
+    authorPref = authorPref || 0;
+    const postedAt = item.postedAt || ( new Date()).toISOString();
+    const date = new Date(postedAt);
+    const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
+    const authorSlug = item.user?.slug;
+    const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
+    let containerClass = isPost ? "pr-comment-meta pr-post-meta" : "pr-comment-meta";
+    if (extraClass) containerClass += ` ${extraClass}`;
+    return `
+    <div class="${containerClass}" style="${style}">
+      ${voteButtonsHtml}
+      ${reactionsHtml}
+      <span class="pr-author-controls">
+        <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" 
+              data-action="author-down" 
+              data-author="${escapeHtml(authorHandle)}"
+              title="Mark author as disliked (auto-hide their future comments)">↓</span>
+      </span>
+      <a href="${authorLink}" target="_blank" class="pr-author" data-author-id="${authorId}">${escapeHtml(authorName)}</a>
+      <span class="pr-author-controls">
+        <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" 
+              data-action="author-up" 
+              data-author="${escapeHtml(authorHandle)}"
+              title="Mark author as preferred (highlight their future comments)">↑</span>
+      </span>
+      <span class="pr-timestamp">
+        <a href="${item.pageUrl}" target="_blank">${timeStr}</a>
+      </span>
+      ${children}
+    </div>
+  `;
+  };
   function hexToRgb(hex) {
     hex = hex.replace(/^#/, "");
     if (hex.length === 3) {
@@ -4762,61 +4779,6 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   const escapeHtml = (unsafe) => {
     return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   };
-  const renderReactions = (commentId, extendedScore, currentUserExtendedVote) => {
-    let html2 = '<span class="pr-reactions-inner">';
-    const reacts = extendedScore?.reacts || {};
-    const userReacts = currentUserExtendedVote?.reacts || [];
-    const allReactions = getReactions();
-    const reactionCounts = {};
-    Object.entries(reacts).forEach(([reactName, users]) => {
-      let score = 0;
-      users.forEach((u) => {
-        if (u.reactType === "disagreed") score -= 1;
-        else score += 1;
-      });
-      if (score > 0) {
-        reactionCounts[reactName] = score;
-      }
-    });
-    allReactions.forEach((reaction) => {
-      const count = reactionCounts[reaction.name] || 0;
-      const userVoted = userReacts.some((r) => r.react === reaction.name);
-      if (count > 0 || userVoted) {
-        const filter = reaction.filter || DEFAULT_FILTER;
-        const opacity = filter.opacity ?? 1;
-        const saturate = filter.saturate ?? 1;
-        const scale = filter.scale ?? 1;
-        const tx = filter.translateX ?? 0;
-        const ty = filter.translateY ?? 0;
-        const padding = filter.padding ?? 0;
-        const imgStyle = `
-        filter: opacity(${opacity}) saturate(${saturate});
-        transform: scale(${scale}) translate(${tx}px, ${ty}px);
-        padding: ${padding}px;
-      `;
-        const title = `${reaction.label}${reaction.description ? "\\n" + reaction.description : ""}`;
-        html2 += `
-        <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
-              data-action="reaction-vote" 
-              data-comment-id="${commentId}" 
-              data-reaction-name="${reaction.name}"
-              title="${escapeHtml(title)}">
-          <span class="pr-reaction-icon" style="overflow:visible">
-             <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
-          </span>
-          <span class="pr-reaction-count">${count > 0 ? count : ""}</span>
-        </span>
-      `;
-      }
-    });
-    html2 += `
-    <span class="pr-add-reaction-btn" data-action="open-picker" data-comment-id="${commentId}" title="Add reaction">
-      <svg height="16" viewBox="0 0 16 16" width="16"><g fill="currentColor"><path d="m13 7c0-3.31371-2.6863-6-6-6-3.31371 0-6 2.68629-6 6 0 3.3137 2.68629 6 6 6 .08516 0 .1699-.0018.25419-.0053-.11154-.3168-.18862-.6499-.22673-.9948l-.02746.0001c-2.76142 0-5-2.23858-5-5s2.23858-5 5-5 5 2.23858 5 5l-.0001.02746c.3449.03811.678.11519.9948.22673.0035-.08429.0053-.16903.0053-.25419z"></path><path d="m7.11191 10.4982c.08367-.368.21246-.71893.38025-1.04657-.15911.03174-.32368.04837-.49216.04837-.74037 0-1.40506-.3212-1.86354-.83346-.18417-.20576-.50026-.22327-.70603-.03911-.20576.18417-.22327.50026-.03911.70603.64016.71524 1.57205 1.16654 2.60868 1.16654.03744 0 .07475-.0006.11191-.0018z"></path><path d="m6 6c0 .41421-.33579.75-.75.75s-.75-.33579-.75-.75.33579-.75.75-.75.75.33579.75.75z"></path><path d="m8.75 6.75c.41421 0 .75-.33579.75-.75s-.33579-.75-.75-.75-.75.33579-.75.75.33579.75.75.75z"></path><path d="m15 11.5c0 1.933-1.567 3.5-3.5 3.5s-3.5-1.567-3.5-3.5 1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5zm-3-2c0-.27614-.2239-.5-.5-.5s-.5.22386-.5.5v1.5h-1.5c-.27614 0-.5.2239-.5.5s.22386.5.5.5h1.5v1.5c0 .2761.2239.5.5.5s.5-.2239.5-.5v-1.5h1.5c.2761 0 .5-.2239.5-.5s-.2239-.5-.5-.5h-1.5z"></path></g></svg>
-    </span>
-  `;
-    html2 += "</span>";
-    return html2;
-  };
   const calculatePostHeaderStyle = (post) => {
     if (!post.htmlBody) return "";
     const authorName = post.user?.username || "Unknown Author";
@@ -4833,56 +4795,9 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     style += ` font-size: ${fontSize}%;`;
     return style;
   };
-  const renderPostMetadata = (post, state2, isFullPost = true) => {
-    const authorHandle = post.user?.username || "Unknown Author";
-    const authorName = post.user?.displayName || authorHandle;
-    const voteButtonsHtml = renderVoteButtons(
-      post._id,
-      post.baseScore || 0,
-      post.currentUserVote ?? null,
-      post.currentUserExtendedVote ?? null,
-      post.afExtendedScore?.agreement ?? 0,
-      post.voteCount || 0,
-      0,
-      window.location.hostname.includes("effectivealtruism.org"),
-      isFullPost
-    );
-    const reactionsHtml = renderReactions(
-      post._id,
-      post.extendedScore,
-      post.currentUserExtendedVote
-    );
-    const authorPrefs = getAuthorPreferences();
-    let authorPref = authorPrefs[authorHandle];
-    if (authorPref === void 0 && post.user?._id && state2?.subscribedAuthorIds.has(post.user._id)) {
-      authorPref = 1;
-    }
-    authorPref = authorPref || 0;
-    const postedAt = post.postedAt || ( new Date()).toISOString();
-    const date = new Date(postedAt);
-    const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
-    const authorSlug = post.user?.slug;
-    const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
-    return `
-    <div class="pr-comment-meta pr-post-meta">
-      ${voteButtonsHtml}
-      ${reactionsHtml}
-      <span class="pr-author-controls">
-        <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" data-action="author-down" title="Mark author as disliked (auto-hide their future comments)">↓</span>
-      </span>
-      <a href="${authorLink}" target="_blank" class="pr-author" data-author-id="${post.user?._id || ""}">${escapeHtml(authorName)}</a>
-      <span class="pr-author-controls">
-        <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" data-action="author-up" title="Mark author as preferred (highlight their future comments)">↑</span>
-      </span>
-      <span class="pr-timestamp">
-        <a href="${post.pageUrl}" target="_blank">${timeStr}</a>
-      </span>
-    </div>
-  `;
-  };
   const renderPostHeader = (post, options = {}) => {
     const { isSticky = false, isFullPost = false, state: state2 } = options;
-    const metadataHtml = renderPostMetadata(post, state2, isFullPost);
+    const metadataHtml = renderMetadata(post, { state: state2, isFullPost });
     const headerStyle = calculatePostHeaderStyle(post);
     const escapedTitle = escapeHtml(post.title);
     const classes = [
@@ -4917,6 +4832,78 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       </span>
       <span class="pr-post-toggle text-btn" data-action="collapse" title="${isSticky ? "Collapse current threads" : "Collapse post and comments"}">[−]</span>
       <span class="pr-post-toggle text-btn" data-action="expand" style="display:none" title="${isSticky ? "Expand current threads" : "Expand post and comments"}">[+]</span>
+    </div>
+  `;
+  };
+  const highlightQuotes$1 = (html2, extendedScore) => {
+    const safeHtml = sanitizeHtml(html2);
+    if (!extendedScore || !extendedScore.reacts) return safeHtml;
+    const quotesToHighlight = [];
+    Object.values(extendedScore.reacts).forEach((users) => {
+      users.forEach((u) => {
+        if (u.quotes) {
+          u.quotes.forEach((q) => {
+            if (q.quote && q.quote.trim().length > 0) {
+              quotesToHighlight.push(q.quote);
+            }
+          });
+        }
+      });
+    });
+    if (quotesToHighlight.length === 0) return safeHtml;
+    const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(safeHtml, "text/html");
+    const replaceTextNode = (node, quote) => {
+      const text2 = node.nodeValue || "";
+      if (!text2.includes(quote)) return;
+      const parts = text2.split(quote);
+      if (parts.length <= 1) return;
+      const fragment = doc.createDocumentFragment();
+      parts.forEach((part, index) => {
+        if (part) {
+          fragment.appendChild(doc.createTextNode(part));
+        }
+        if (index < parts.length - 1) {
+          const span = doc.createElement("span");
+          span.className = "pr-highlight";
+          span.title = "Reacted content";
+          span.textContent = quote;
+          fragment.appendChild(span);
+        }
+      });
+      node.parentNode?.replaceChild(fragment, node);
+    };
+    uniqueQuotes.forEach((quote) => {
+      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      let node = walker.nextNode();
+      while (node) {
+        const textNode = node;
+        if (!textNode.parentElement?.classList.contains("pr-highlight")) {
+          nodes.push(textNode);
+        }
+        node = walker.nextNode();
+      }
+      nodes.forEach((textNode) => replaceTextNode(textNode, quote));
+    });
+    return doc.body.innerHTML;
+  };
+  const renderBody = (html2, extendedScore) => {
+    const content = html2 || "<i>(No content)</i>";
+    return highlightQuotes$1(content, extendedScore);
+  };
+  const renderPostBody$1 = (html2, extendedScore, isTruncated) => {
+    const bodyHtml = renderBody(html2, extendedScore);
+    return `
+    <div class="pr-post-body pr-post-body-container ${isTruncated ? "truncated" : ""}" 
+         style="${isTruncated ? `max-height: ${CONFIG.maxPostHeight};` : ""}">
+      <div class="pr-post-content">
+        ${bodyHtml}
+      </div>
+      <div class="pr-read-more-overlay" style="${isTruncated ? "" : "display: none;"}">
+        <button class="pr-read-more-btn pr-post-read-more" data-action="read-more" style="${isTruncated ? "" : "display: none;"}">Read More</button>
+      </div>
     </div>
   `;
   };
@@ -5071,31 +5058,19 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     `;
     }
     const authorHandle = comment.user?.username || comment.author || "Unknown Author";
-    const authorName = comment.user?.displayName || authorHandle;
-    const authorKarma = comment.user?.karma || 0;
     const postedAt = comment.postedAt || ( new Date()).toISOString();
     const ageHours = getAgeInHours(postedAt);
     const score = comment.baseScore || 0;
+    const authorKarma = comment.user?.karma || 0;
     const normalized = calculateNormalizedScore(score, ageHours, authorHandle, authorKarma, false);
     const order = comment._order || 0;
     const isContext = comment.isContext;
     const isReplyToYou = !!(state2.currentUsername && comment.parentComment?.user?.username === state2.currentUsername);
     const autoHide = shouldAutoHide(normalized) && !commentIsRead && !isContext;
-    if (autoHide) {
-      Logger.debug(`Auto-hiding comment ${comment._id} (score=${normalized.toFixed(2)})`);
-    }
     const clampedScore = clampScore(normalized);
     const scoreColor = normalized > 0 ? getScoreColor(clampedScore) : "";
     const recencyColor = order > 0 ? getRecencyColor(order, CONFIG.highlightLastN) : "";
     const fontSize = getFontSizePercent(score, false);
-    const authorPrefs = getAuthorPreferences();
-    let authorPref = authorPrefs[authorHandle];
-    if (authorPref === void 0 && comment.user?._id && state2.subscribedAuthorIds.has(comment.user._id)) {
-      authorPref = 1;
-    }
-    authorPref = authorPref || 0;
-    const date = new Date(comment.postedAt);
-    const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     const classes = [
       "pr-comment",
       "pr-item",
@@ -5109,27 +5084,6 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const metaStyle = scoreColor ? `background-color: ${scoreColor};` : "";
     const bodyStyle = recencyColor ? `--pr-recency-color: ${recencyColor};` : "";
     const fontStyle = `font-size: ${fontSize}%;`;
-    const voteButtonsHtml = renderVoteButtons(
-      comment._id,
-      comment.baseScore || 0,
-      comment.currentUserVote ?? null,
-      comment.currentUserExtendedVote ?? null,
-      comment.afExtendedScore?.agreement ?? 0,
-      0,
-0,
-true
-);
-    const reactionsHtml = renderReactions(
-      comment._id,
-      comment.extendedScore,
-      comment.currentUserExtendedVote
-    );
-    const bodyContent = highlightQuotes(
-      comment.htmlBody || "<i>(No content)</i>",
-      comment.extendedScore
-    );
-    const authorSlug = comment.user?.slug;
-    const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
     const hasParent = !!comment.parentCommentId;
     const totalChildren = comment.directChildrenCount || 0;
     let rDisabled;
@@ -5146,6 +5100,23 @@ true
     }
     const tDisabled = !hasParent;
     const tTooltip = tDisabled ? "Already at top level" : "Load parents and scroll to root (Shortkey: t)";
+    const controlsHtml = `
+    <span class="pr-comment-controls">
+      <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+      <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
+      <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
+      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
+      <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
+      <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
+    </span>
+  `;
+    const metadataHtml = renderMetadata(comment, {
+      state: state2,
+      style: `${metaStyle} ${fontStyle}`,
+      extraClass: "pr-comment-meta-wrapper",
+      children: controlsHtml
+    });
+    const bodyContent = renderBody(comment.htmlBody || "", comment.extendedScore);
     return `
     <div class="${classes}" 
          data-id="${comment._id}" 
@@ -5153,28 +5124,7 @@ true
          data-parent-id="${comment.parentCommentId || ""}"
          data-post-id="${comment.postId}"
          style="${bodyStyle}">
-      <div class="pr-comment-meta" style="${metaStyle} ${fontStyle}">
-        ${voteButtonsHtml}
-        ${reactionsHtml}
-        <span class="pr-author-controls">
-          <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" data-action="author-down" title="Mark author as disliked (auto-hide their future comments)">↓</span>
-        </span>
-        <a href="${authorLink}" target="_blank" class="pr-author" data-author-id="${comment.user?._id || ""}">${escapeHtml(authorName)}</a>
-        <span class="pr-author-controls">
-          <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" data-action="author-up" title="Mark author as preferred (highlight their future comments)">↑</span>
-        </span>
-        <span class="pr-timestamp">
-          <a href="${comment.pageUrl}" target="_blank">${timeStr}</a>
-        </span>
-        <span class="pr-comment-controls">
-          <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
-          <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
-          <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
-          <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
-          <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
-          <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
-        </span>
-      </div>
+      ${metadataHtml}
       <div class="pr-comment-body">
         ${bodyContent}
       </div>
@@ -5257,21 +5207,12 @@ true
     });
     return childrenByParentId;
   };
-  const renderPostBody = (post) => {
-    const bodyContent = highlightQuotes(
-      post.htmlBody || "<i>(No content)</i>",
-      post.extendedScore
+  const renderPostBody = (post, isTruncated = true) => {
+    return renderPostBody$1(
+      post.htmlBody || "",
+      post.extendedScore,
+      isTruncated
     );
-    return `
-    <div class="pr-post-content pr-post-body-container truncated" style="max-height: ${CONFIG.maxPostHeight};">
-      <div class="pr-post-body">
-        ${bodyContent}
-      </div>
-      <div class="pr-read-more-overlay">
-        <button class="pr-read-more-btn" data-action="read-more">Read More</button>
-      </div>
-    </div>
-  `;
   };
   const renderPostGroup = (group, state2) => {
     const commentsWithPlaceholders = withMissingParentPlaceholders(group.comments, state2);
@@ -5309,6 +5250,7 @@ true
     const postToRender = group.fullPost || {
       _id: group.postId,
       title: group.title,
+      slug: "",
       pageUrl: `${window.location.origin}/posts/${group.postId}`,
       postedAt: cutoff || ( new Date()).toISOString(),
 baseScore: 0,
@@ -5318,17 +5260,21 @@ baseScore: 0,
       afExtendedScore: null,
       currentUserVote: null,
       currentUserExtendedVote: null,
-      commentCount: 0
+      contents: { markdown: null },
+      commentCount: 0,
+      wordCount: 0
     };
     if (!group.fullPost) {
       Logger.warn(`renderPostGroup: fullPost missing for ${group.postId}, using fallback`);
     }
     const isReadPost = isRead(group.postId, readState, postToRender.postedAt);
+    const existingEl = document.querySelector(`.pr-post[data-id="${group.postId}"]`);
+    const currentlyTruncated = existingEl ? existingEl.querySelector(".pr-post-body-container")?.classList.contains("truncated") : true;
     const headerHtml = renderPostHeader(postToRender, {
       isFullPost,
       state: state2
     });
-    const postBodyHtml = isFullPost ? renderPostBody(group.fullPost) : "";
+    const postBodyHtml = isFullPost ? renderPostBody(group.fullPost, currentlyTruncated !== false) : "";
     const authorHandle = postToRender.user?.username || "";
     return `
     <div class="pr-post pr-item ${isReadPost ? "read" : ""}" 
@@ -5359,7 +5305,7 @@ baseScore: 0,
               const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
               if (!post) return null;
               const body = post.querySelector(".pr-post-body-container");
-              const collapsed = post.querySelector(".pr-post-content.collapsed");
+              const collapsed = post.querySelector(".pr-post-body-container.collapsed");
               if (!body || collapsed) return null;
               if (isElementFullyVisible(post)) {
                 return [post];
@@ -5455,7 +5401,7 @@ baseScore: 0,
                 if (!post) return null;
                 const header = post.querySelector(".pr-post-header");
                 const body = post.querySelector(".pr-post-body-container");
-                const collapsed = post.querySelector(".pr-post-content.collapsed");
+                const collapsed = post.querySelector(".pr-post-body-container.collapsed");
                 const targets = [];
                 if (header) targets.push(header);
                 if (body && !collapsed) {
@@ -5650,7 +5596,7 @@ refresh() {
         btn.id = "pr-inline-react-btn";
         btn.className = "pr-inline-react-btn";
         btn.textContent = "React";
-        btn.dataset.commentId = commentBody.closest(".pr-comment")?.getAttribute("data-id") || "";
+        btn.dataset.id = commentBody.closest(".pr-comment")?.getAttribute("data-id") || "";
         document.body.appendChild(btn);
         const rect = range.getBoundingClientRect();
         btn.style.top = `${rect.top - 30 + window.scrollY}px`;
@@ -5659,7 +5605,7 @@ refresh() {
         const rect = range.getBoundingClientRect();
         existingBtn.style.top = `${rect.top - 30 + window.scrollY}px`;
         existingBtn.style.left = `${rect.left + rect.width / 2}px`;
-        existingBtn.dataset.commentId = commentBody.closest(".pr-comment")?.getAttribute("data-id") || "";
+        existingBtn.dataset.id = commentBody.closest(".pr-comment")?.getAttribute("data-id") || "";
       }
     });
   };
@@ -5735,9 +5681,9 @@ refresh() {
         const rect = el.getBoundingClientRect();
         let checkRect = rect;
         if (el.classList.contains("pr-post")) {
-          const body = el.querySelector(".pr-post-content");
-          if (body && !body.classList.contains("collapsed")) {
-            checkRect = body.getBoundingClientRect();
+          const bodyContainer = el.querySelector(".pr-post-body-container");
+          if (bodyContainer && !bodyContainer.classList.contains("collapsed")) {
+            checkRect = bodyContainer.getBoundingClientRect();
           } else {
             const header = el.querySelector(".pr-post-header");
             if (header) checkRect = header.getBoundingClientRect();
@@ -5755,7 +5701,6 @@ refresh() {
         const shouldMark = checkRect.bottom < readThreshold || isAtBottom && isVisible;
         if (shouldMark) {
           if (!this.pendingReadTimeouts[id]) {
-            Logger.debug(`processScroll: marking ${id} as read`);
             this.pendingReadTimeouts[id] = window.setTimeout(() => {
               delete this.pendingReadTimeouts[id];
               const currentEl = document.querySelector(`.pr-comment[data-id="${id}"], .pr-item[data-id="${id}"]`);
@@ -5767,10 +5712,8 @@ refresh() {
                 const unreadCountEl = document.getElementById("pr-unread-count");
                 if (unreadCountEl) {
                   unreadCountEl.textContent = newCount.toString();
-                  Logger.debug(`processScroll: ${id} read, recalculated unread count=${newCount}`);
                   const isNowAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
                   if (newCount === 0 && isNowAtBottom) {
-                    Logger.debug("processScroll: hit 0 unread at bottom, checking server");
                     this.checkInitialState();
                   }
                 }
@@ -5949,7 +5892,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       const container = post.querySelector(".pr-post-body-container");
       const eBtn = post.querySelector('[data-action="toggle-post-body"]');
       if (container && eBtn) {
-        const isFullPost = !!container.querySelector(".pr-post-body");
+        const isFullPost = container.classList.contains("pr-post-body");
         if (container.classList.contains("truncated")) {
           if (container.classList.contains("collapsed") || container.style.display === "none") {
             eBtn.classList.remove("disabled");
@@ -6230,7 +6173,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6373,7 +6316,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -6396,6 +6339,156 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       }
     });
   };
+  const LOGIN_URL = `${window.location.origin}/auth/auth0`;
+  async function castKarmaVote(documentId, voteType, isLoggedIn, currentAgreement = null, documentType = "comment") {
+    Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
+    if (!isLoggedIn) {
+      Logger.info("Not logged in, opening auth page");
+      window.open(LOGIN_URL, "_blank");
+      return null;
+    }
+    try {
+      if (documentType === "post") {
+        const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
+          documentId,
+          voteType,
+          extendedVote: currentAgreement
+        });
+        return response2;
+      }
+      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
+        documentId,
+        voteType,
+        extendedVote: currentAgreement
+      });
+      return response;
+    } catch (e) {
+      Logger.error("Vote failed:", e);
+      return null;
+    }
+  }
+  async function castAgreementVote(documentId, voteType, isLoggedIn, currentKarma = "neutral", documentType = "comment") {
+    if (!isLoggedIn) {
+      window.open(LOGIN_URL, "_blank");
+      return null;
+    }
+    const agreementValue = voteType === "agree" ? "smallUpvote" : voteType === "disagree" ? "smallDownvote" : "neutral";
+    try {
+      if (documentType === "post") {
+        const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
+          documentId,
+          voteType: currentKarma || "neutral",
+          extendedVote: { agreement: agreementValue }
+        });
+        return response2;
+      }
+      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
+        documentId,
+        voteType: currentKarma || "neutral",
+        extendedVote: { agreement: agreementValue }
+      });
+      return response;
+    } catch (e) {
+      Logger.error("Agreement vote failed:", e);
+      return null;
+    }
+  }
+  async function castReactionVote(commentId, reactionName, isLoggedIn, currentKarma = "neutral", currentExtendedVote = {}, quote = null) {
+    if (!isLoggedIn) {
+      window.open(LOGIN_URL, "_blank");
+      return null;
+    }
+    const existingReacts = currentExtendedVote?.reacts || [];
+    const newReacts = JSON.parse(JSON.stringify(existingReacts));
+    const existingReactionIndex = newReacts.findIndex((r) => r.react === reactionName);
+    if (existingReactionIndex >= 0) {
+      const reaction = newReacts[existingReactionIndex];
+      if (quote) {
+        const quotes = reaction.quotes || [];
+        if (quotes.includes(quote)) {
+          reaction.quotes = quotes.filter((q) => q !== quote);
+          if (reaction.quotes.length === 0) {
+            newReacts.splice(existingReactionIndex, 1);
+          }
+        } else {
+          reaction.quotes = [...quotes, quote];
+        }
+      } else {
+        newReacts.splice(existingReactionIndex, 1);
+      }
+    } else {
+      const newReaction = {
+        react: reactionName,
+        vote: "created"
+};
+      if (quote) {
+        newReaction.quotes = [quote];
+      }
+      newReacts.push(newReaction);
+    }
+    const extendedVotePayload = {
+      agreement: currentExtendedVote?.agreement,
+      reacts: newReacts
+    };
+    try {
+      const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
+        documentId: commentId,
+        voteType: currentKarma || "neutral",
+extendedVote: extendedVotePayload
+      });
+      return response;
+    } catch (e) {
+      Logger.error("Reaction vote failed:", e);
+      return null;
+    }
+  }
+  function calculateNextVoteState(currentVote, direction, isHold) {
+    const isUp = direction === "up" || direction === "agree";
+    const small = isUp ? direction === "agree" ? "agree" : "smallUpvote" : direction === "disagree" ? "disagree" : "smallDownvote";
+    const big = isUp ? "bigUpvote" : "bigDownvote";
+    const neutral = "neutral";
+    const currentIsBig = currentVote === big;
+    const currentIsSmall = currentVote === small || direction === "agree" && currentVote === "smallUpvote" || direction === "disagree" && currentVote === "smallDownvote";
+    if (isHold) {
+      if (currentIsBig) return neutral;
+      return big;
+    } else {
+      if (currentIsBig) return small;
+      if (currentIsSmall) return neutral;
+      return small;
+    }
+  }
+  function updateVoteUI(documentId, response) {
+    const isPostVote = !!response.performVotePost?.document;
+    const targets = isPostVote ? Array.from(document.querySelectorAll(`.pr-post-header[data-post-id="${documentId}"]`)) : Array.from(document.querySelectorAll(`.pr-comment[data-id="${documentId}"]`));
+    const doc = response.performVoteComment?.document ?? response.performVotePost?.document;
+    if (!doc || targets.length === 0) return;
+    targets.forEach((target) => {
+      const scoreEl = target.querySelector(".pr-karma-score");
+      if (scoreEl) {
+        scoreEl.textContent = String(doc.baseScore);
+      }
+      const agreeScoreEl = target.querySelector(".pr-agreement-score");
+      if (agreeScoreEl && doc.afExtendedScore?.agreement !== void 0) {
+        agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
+      }
+      const upBtn = target.querySelector('[data-action="karma-up"]');
+      const downBtn = target.querySelector('[data-action="karma-down"]');
+      const vote = doc.currentUserVote;
+      upBtn?.classList.toggle("active-up", vote === "smallUpvote" || vote === "bigUpvote");
+      upBtn?.classList.toggle("strong-vote", vote === "bigUpvote");
+      downBtn?.classList.toggle("active-down", vote === "smallDownvote" || vote === "bigDownvote");
+      downBtn?.classList.toggle("strong-vote", vote === "bigDownvote");
+      const agreeBtn = target.querySelector('[data-action="agree"]');
+      const disagreeBtn = target.querySelector('[data-action="disagree"]');
+      const extVote = doc.currentUserExtendedVote;
+      const agreeState = extVote?.agreement;
+      agreeBtn?.classList.toggle("agree-active", agreeState === "smallUpvote" || agreeState === "bigUpvote" || agreeState === "agree");
+      agreeBtn?.classList.toggle("strong-vote", agreeState === "bigUpvote");
+      disagreeBtn?.classList.toggle("disagree-active", agreeState === "smallDownvote" || agreeState === "bigDownvote" || agreeState === "disagree");
+      disagreeBtn?.classList.toggle("strong-vote", agreeState === "bigDownvote");
+    });
+  }
   const ACTION_TO_VOTE = {
     "karma-up": { kind: "karma", dir: "up" },
     "karma-down": { kind: "karma", dir: "down" },
@@ -6405,7 +6498,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   const handleVoteInteraction = (target, action, state2) => {
     const config = ACTION_TO_VOTE[action];
     if (!config) return;
-    const documentId = target.dataset.commentId;
+    const documentId = target.dataset.id;
     if (!documentId) return;
     const comment = state2.commentById.get(documentId);
     const post = state2.postById.get(documentId);
@@ -6570,7 +6663,7 @@ currentCommentId = null;
       this.currentSelection = selection;
     }
     open(button, initialSearchText = "") {
-      const commentId = button.dataset.commentId;
+      const commentId = button.dataset.id;
       if (!commentId) return;
       const existing = document.getElementById("pr-global-reaction-picker");
       if (existing && this.activeTriggerButton === button) {
@@ -6622,7 +6715,7 @@ currentCommentId = null;
           return `
             <div class="pr-reaction-list-item ${voted ? "active" : ""}" 
                  data-action="reaction-vote" 
-                 data-comment-id="${this.currentCommentId}" 
+                 data-id="${this.currentCommentId}" 
                  data-reaction-name="${reaction.name}"
                  ${labelAttr} ${descAttr}>
               <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
@@ -6633,7 +6726,7 @@ currentCommentId = null;
         return `
         <div class="pr-reaction-picker-item ${voted ? "active" : ""}" 
              data-action="reaction-vote" 
-             data-comment-id="${this.currentCommentId}" 
+             data-id="${this.currentCommentId}" 
              data-reaction-name="${reaction.name}"
              ${labelAttr} ${descAttr}>
           <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
@@ -6747,7 +6840,7 @@ currentCommentId = null;
         e.stopPropagation();
         const target = e.target.closest('[data-action="reaction-vote"]');
         if (target) {
-          const commentId = target.dataset.commentId;
+          const commentId = target.dataset.id;
           const reactionName = target.dataset.reactionName;
           if (commentId && reactionName) {
             Logger.info(`Picker: Clicked reaction ${reactionName} on comment ${commentId}`);
@@ -7006,12 +7099,12 @@ currentCommentId = null;
   };
   const collapsePost = (post) => {
     post.querySelector(".pr-post-comments")?.classList.add("collapsed");
-    post.querySelector(".pr-post-content")?.classList.add("collapsed");
+    post.querySelector(".pr-post-body-container")?.classList.add("collapsed");
     syncPostToggleButtons(post, true);
   };
   const expandPost = (post) => {
     post.querySelector(".pr-post-comments")?.classList.remove("collapsed");
-    post.querySelector(".pr-post-content")?.classList.remove("collapsed");
+    post.querySelector(".pr-post-body-container")?.classList.remove("collapsed");
     syncPostToggleButtons(post, false);
   };
   const syncPostToggleButtons = (post, isCollapsed) => {
@@ -7223,6 +7316,13 @@ currentCommentId = null;
       container.style.maxHeight = "none";
       const overlay = container.querySelector(".pr-read-more-overlay");
       if (overlay) overlay.style.display = "none";
+      const btn = container.querySelector(".pr-post-read-more");
+      if (btn) btn.style.display = "none";
+      const postEl = container.closest(".pr-post");
+      if (postEl) {
+        const postId = postEl.dataset.id;
+        if (postId) refreshPostActionButtons(postId);
+      }
     }
   };
   const reRenderPostGroup = (postId, state2, anchorCommentId) => {
@@ -7239,6 +7339,8 @@ currentCommentId = null;
     const post = state2.postById.get(postId);
     const postComments = state2.comments.filter((c) => c.postId === postId);
     Logger.info(`reRenderPostGroup: p=${postId}, comments=${postComments.length}`);
+    const bodyContainer = postContainer.querySelector(".pr-post-body-container");
+    const wasExpanded = bodyContainer && !bodyContainer.classList.contains("truncated");
     const group = {
       postId,
       title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
@@ -7246,6 +7348,16 @@ currentCommentId = null;
       fullPost: post
     };
     postContainer.outerHTML = renderPostGroup(group, state2);
+    const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+    if (wasExpanded && newPostContainer) {
+      const newBody = newPostContainer.querySelector(".pr-post-body-container");
+      if (newBody && newBody.classList.contains("truncated")) {
+        newBody.classList.remove("truncated");
+        newBody.style.maxHeight = "none";
+        const overlay = newBody.querySelector(".pr-read-more-overlay");
+        if (overlay) overlay.style.display = "none";
+      }
+    }
     setupLinkPreviews(state2.comments);
     refreshPostActionButtons(postId);
     if (anchorCommentId && beforeTop !== null) {
@@ -7378,12 +7490,14 @@ currentCommentId = null;
           state2.posts.push(post);
         }
         reRenderPostGroup(postId, state2);
-        container = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-body-container`);
-        if (container) {
-          container.classList.remove("truncated");
-          container.style.maxHeight = "none";
-          const overlay = container.querySelector(".pr-read-more-overlay");
+        const newContainer = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-body-container`);
+        if (newContainer) {
+          newContainer.classList.remove("truncated");
+          newContainer.style.maxHeight = "none";
+          const overlay = newContainer.querySelector(".pr-read-more-overlay");
           if (overlay) overlay.style.display = "none";
+          const readMoreBtn = newContainer.querySelector(".pr-post-read-more");
+          if (readMoreBtn) readMoreBtn.style.display = "none";
         }
         const newBtn = document.querySelector(`.pr-post[data-id="${postId}"] [data-action="toggle-post-body"]`);
         if (newBtn) {
@@ -7414,12 +7528,16 @@ currentCommentId = null;
       container.style.maxHeight = "none";
       const overlay = container.querySelector(".pr-read-more-overlay");
       if (overlay) overlay.style.display = "none";
+      const readMoreBtn = container.querySelector(".pr-post-read-more");
+      if (readMoreBtn) readMoreBtn.style.display = "none";
       if (eBtn) eBtn.title = "Collapse post body";
     } else {
       container.classList.add("truncated");
       container.style.maxHeight = CONFIG.maxPostHeight;
       const overlay = container.querySelector(".pr-read-more-overlay");
       if (overlay) overlay.style.display = "flex";
+      const readMoreBtn = container.querySelector(".pr-post-read-more");
+      if (readMoreBtn) readMoreBtn.style.display = "block";
       if (eBtn) eBtn.title = "Expand post body";
     }
     if (isFromSticky) {
@@ -8053,7 +8171,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       if (action === "karma-up" || action === "karma-down" || action === "agree" || action === "disagree") {
         handleVoteInteraction(target, action, state2);
       } else if (action === "reaction-vote") {
-        const commentId = target.dataset.commentId;
+        const commentId = target.dataset.id;
         const reactName = target.dataset.reactionName;
         if (commentId && reactName) {
           handleReactionVote(commentId, reactName, state2);
@@ -8256,6 +8374,235 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       }, 100);
     }
   };
+  const createInitialArchiveState = (username) => ({
+    username,
+    userId: null,
+    items: [],
+    itemById: new Map(),
+    lastSyncDate: null,
+    viewMode: "card",
+    sortBy: "date",
+    filters: {
+      regex: "",
+      minScore: null,
+      startDate: null,
+      endDate: null
+    },
+    isSyncing: false,
+    syncProgress: {
+      postsFetched: 0,
+      commentsFetched: 0
+    }
+  });
+  const DB_NAME = "PowerReaderArchive";
+  const DB_VERSION = 1;
+  const STORE_ITEMS = "items";
+  const STORE_METADATA = "metadata";
+  const openDB = () => {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(STORE_ITEMS)) {
+          const itemStore = db.createObjectStore(STORE_ITEMS, { keyPath: "_id" });
+          itemStore.createIndex("username", "username", { unique: false });
+          itemStore.createIndex("postedAt", "postedAt", { unique: false });
+          itemStore.createIndex("userId", "userId", { unique: false });
+        }
+        if (!db.objectStoreNames.contains(STORE_METADATA)) {
+          db.createObjectStore(STORE_METADATA, { keyPath: "username" });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  };
+  const saveArchiveData = async (username, items, lastSyncDate) => {
+    const db = await openDB();
+    const tx = db.transaction([STORE_ITEMS, STORE_METADATA], "readwrite");
+    const itemStore = tx.objectStore(STORE_ITEMS);
+    const metadataStore = tx.objectStore(STORE_METADATA);
+    items.forEach((item) => {
+      const itemToSave = { ...item, username };
+      itemStore.put(itemToSave);
+    });
+    metadataStore.put({ username, lastSyncDate });
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  };
+  const loadArchiveData = async (username) => {
+    const db = await openDB();
+    const metadata = await new Promise((resolve) => {
+      const tx = db.transaction(STORE_METADATA, "readonly");
+      const request = tx.objectStore(STORE_METADATA).get(username);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    });
+    const items = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_ITEMS, "readonly");
+      const index = tx.objectStore(STORE_ITEMS).index("username");
+      const request = index.getAll(IDBKeyRange.only(username));
+      request.onsuccess = () => {
+        const results = request.result;
+        results.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+        resolve(results);
+      };
+      request.onerror = () => reject(request.error);
+    });
+    return {
+      items,
+      lastSyncDate: metadata?.lastSyncDate || null
+    };
+  };
+  const PAGE_SIZE = 50;
+  const fetchUserId = async (username) => {
+    try {
+      const response = await queryGraphQL(GET_USER_BY_SLUG, { slug: username });
+      return response.user?._id || null;
+    } catch (e) {
+      Logger.error(`Failed to fetch userId for ${username}:`, e);
+      return null;
+    }
+  };
+  const fetchUserPosts = async (userId, onProgress) => {
+    let allPosts = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      try {
+        const response = await queryGraphQL(GET_USER_POSTS, {
+          userId,
+          limit: PAGE_SIZE,
+          offset
+        });
+        const results = response.posts?.results || [];
+        allPosts = [...allPosts, ...results];
+        if (onProgress) onProgress(allPosts.length);
+        if (results.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          offset += PAGE_SIZE;
+        }
+      } catch (e) {
+        Logger.error(`Error fetching posts at offset ${offset}:`, e);
+        hasMore = false;
+      }
+    }
+    return allPosts;
+  };
+  const fetchUserComments = async (userId, onProgress) => {
+    let allComments = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      try {
+        const response = await queryGraphQL(GET_USER_COMMENTS, {
+          userId,
+          limit: PAGE_SIZE,
+          offset
+        });
+        const results = response.comments?.results || [];
+        allComments = [...allComments, ...results];
+        if (onProgress) onProgress(allComments.length);
+        if (results.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          offset += PAGE_SIZE;
+        }
+      } catch (e) {
+        Logger.error(`Error fetching comments at offset ${offset}:`, e);
+        hasMore = false;
+      }
+    }
+    return allComments;
+  };
+  const initArchive = async (username) => {
+    Logger.info(`Initializing User Archive for: ${username}`);
+    try {
+      executeTakeover();
+      await initializeReactions();
+      rebuildDocument();
+      const state2 = createInitialArchiveState(username);
+      const root = document.getElementById("power-reader-root");
+      if (!root) return;
+      root.innerHTML = `
+    <div class="pr-header">
+      <h1>User Archive: ${escapeHtml(username)}</h1>
+      <div class="pr-status" id="archive-status">Checking local database...</div>
+    </div>
+    <div id="archive-dashboard" class="pr-setup" style="max-width: 800px">
+      Loading archive data...
+    </div>
+    <div id="archive-feed" style="margin-top: 20px"></div>
+  `;
+      const statusEl = document.getElementById("archive-status");
+      const dashboardEl = document.getElementById("archive-dashboard");
+      const feedEl = document.getElementById("archive-feed");
+      const cached = await loadArchiveData(username);
+      if (cached.items.length > 0) {
+        statusEl.textContent = `Loaded ${cached.items.length} items from local database. Last sync: ${cached.lastSyncDate || "Unknown"}`;
+        state2.items = cached.items;
+        renderArchiveFeed(feedEl, state2.items);
+      } else {
+        statusEl.textContent = `No local data found. Fetching full history for ${username}...`;
+        const userId = await fetchUserId(username);
+        if (!userId) {
+          dashboardEl.innerHTML = `<div class="pr-error">Could not find user: ${escapeHtml(username)}</div>`;
+          return;
+        }
+        state2.userId = userId;
+        const posts = await fetchUserPosts(userId, (count) => {
+          statusEl.textContent = `Fetching posts: ${count} loaded...`;
+        });
+        const comments = await fetchUserComments(userId, (count) => {
+          statusEl.textContent = `Fetching comments: ${count} loaded...`;
+        });
+        const allItems = [...posts, ...comments];
+        allItems.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+        state2.items = allItems;
+        statusEl.textContent = `Sync complete! ${allItems.length} items loaded.`;
+        await saveArchiveData(username, allItems, ( new Date()).toISOString());
+        renderArchiveFeed(feedEl, state2.items);
+      }
+      dashboardEl.style.display = "none";
+      signalReady();
+    } catch (err) {
+      Logger.error("Failed to initialize archive:", err);
+      const root = document.getElementById("power-reader-root");
+      if (root) {
+        root.innerHTML = `<div class="pr-error">Failed to load archive: ${err.message}</div>`;
+      }
+    }
+  };
+  const renderArchiveFeed = (container, items) => {
+    if (items.length === 0) {
+      container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
+      return;
+    }
+    container.innerHTML = items.map((item) => {
+      const isPost = "title" in item;
+      const classes = `pr-archive-item pr-item ${isPost ? "pr-post" : "pr-comment"}`;
+      const metadataHtml = renderMetadata(item);
+      let contentHtml = "";
+      if (isPost) {
+        contentHtml = `<h3>${escapeHtml(item.title)}</h3>` + renderBody(item.htmlBody || "", item.extendedScore);
+      } else {
+        contentHtml = renderBody(item.htmlBody || "", item.extendedScore);
+      }
+      return `
+      <div class="${classes}" data-id="${item._id}">
+        <div class="pr-archive-item-header">
+           ${metadataHtml}
+        </div>
+        <div class="pr-archive-item-body">
+          ${contentHtml}
+        </div>
+      </div>
+    `;
+    }).join("");
+  };
   const initReader = async () => {
     const route = getRoute();
     if (route.type === "skip") {
@@ -8267,6 +8614,10 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     if (route.type === "ai-studio") {
       await runAIStudioMode();
+      return;
+    }
+    if (route.type === "archive") {
+      await initArchive(route.username);
       return;
     }
     executeTakeover();
@@ -8304,7 +8655,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

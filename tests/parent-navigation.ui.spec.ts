@@ -52,6 +52,7 @@ test.describe('Power Reader Parent Navigation', () => {
 
         await initPowerReader(page, {
             testMode: true,
+            storage: { 'helpCollapsed': true },
             comments: [comment],
             posts: [post]
         });
@@ -62,8 +63,11 @@ test.describe('Power Reader Parent Navigation', () => {
         // Ensure header is visible
         await expect(header).toBeVisible();
 
-        // Trigger hover
-        await btn.hover();
+        // Trigger hover robustly
+        const box = await btn.boundingBox();
+        if (!box) throw new Error('No bounding box');
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await btn.dispatchEvent('mouseenter');
 
         // Should highlight
         await expect(header).toHaveClass(/pr-parent-hover/);

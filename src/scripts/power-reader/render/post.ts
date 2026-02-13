@@ -4,10 +4,9 @@
 
 import type { Comment, Post, NamesAttachedReactionsScore } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
-import { CONFIG } from '../config';
 import { getReadState, isRead, getLoadFrom } from '../utils/storage';
 import { renderPostHeader, escapeHtml } from '../utils/rendering';
-import { renderCommentTree, highlightQuotes } from './comment';
+import { renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
 import { Logger } from '../utils/logger';
 
@@ -110,26 +109,19 @@ const buildChildrenIndex = (comments: Comment[]): Map<string, Comment[]> => {
   return childrenByParentId;
 };
 
-/**
- * Render a post's full content with truncation
- */
-export const renderPostBody = (post: Post): string => {
-  const bodyContent = highlightQuotes(
-    post.htmlBody || '<i>(No content)</i>',
-    post.extendedScore as NamesAttachedReactionsScore
-  );
+import { renderPostBody as renderSharedPostBody } from './components/body';
 
-  return `
-    <div class="pr-post-content pr-post-body-container truncated" style="max-height: ${CONFIG.maxPostHeight};">
-      <div class="pr-post-body">
-        ${bodyContent}
-      </div>
-      <div class="pr-read-more-overlay">
-        <button class="pr-read-more-btn" data-action="read-more">Read More</button>
-      </div>
-    </div>
-  `;
+/**
+ * Render a post's full content with optional truncation
+ */
+export const renderPostBody = (post: Post, isTruncated: boolean = true): string => {
+  return renderSharedPostBody(
+    post.htmlBody || '',
+    post.extendedScore as NamesAttachedReactionsScore,
+    isTruncated
+  );
 };
+
 
 /**
  * Render a post group with its comments
@@ -198,12 +190,16 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
 
   const isReadPost = isRead(group.postId, readState, postToRender.postedAt);
 
+  // Detect current expansion state if element already exists in DOM
+  const existingEl = document.querySelector(`.pr-post[data-id="${group.postId}"]`);
+  const currentlyTruncated = existingEl ? existingEl.querySelector('.pr-post-body-container')?.classList.contains('truncated') : true;
+
   const headerHtml = renderPostHeader(postToRender, {
     isFullPost: isFullPost,
     state: state
   });
 
-  const postBodyHtml = isFullPost ? renderPostBody(group.fullPost!) : '';
+  const postBodyHtml = isFullPost ? renderPostBody(group.fullPost!, currentlyTruncated !== false) : '';
 
   const authorHandle = postToRender.user?.username || '';
 

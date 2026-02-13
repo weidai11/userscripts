@@ -9,6 +9,9 @@ $logFile = Join-Path $logDir "test_run_$timestamp.log"
 
 Write-Host "Running $TestFile and saving to $logFile..." -ForegroundColor Cyan
 
+# Set environment variable for verbose logging if running a single file
+$env:PW_SINGLE_FILE_RUN = "true"
+
 # Run playwright with list reporter and capture everything
 npx playwright test $TestFile --reporter=list,json --output=$logDir/report.json *>&1 | Tee-Object -FilePath $logFile
 
