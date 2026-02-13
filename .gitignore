@@ -42,6 +42,7 @@ power_reader_screenshot.png
 reactions_update.txt
 
 # Generated GraphQL files
+src/generated/graphql.ts
 src/shared/graphql/lw_schema.json
 src/shared/graphql/lw_schema.graphql
 
