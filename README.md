@@ -33,14 +33,16 @@ This repository uses **Jujutsu**. Use `jj` for all version control operations.
 ```bash
 # Common jj commands
 jj status
-jj git push --bookmark main
+jj bookmark set main
+jj git push
 ```
 
 ### Development Workflow
-1.  **Start Dev Server**: `npm run dev:power-reader` (PowerReader) or `npm run dev:playground`.
-2.  **Install Loader**: Visit `http://localhost:5173/` and install the Tampermonkey loader script.
-3.  **Visit Site**: Go to any forum page (e.g. [LessWrong](https://www.lesswrong.com)). Use the "POWER Reader" link in the header or visit `/reader` directly.
-4.  **Edit & Reload**: Changes to `src/` trigger automatic reloads via HMR.
+1.  **Install**: `npm install`
+2.  **Start Dev Server**: `npm run dev:power-reader` (PowerReader) or `npm run dev:playground`.
+3.  **Install Loader**: Visit `http://localhost:5173/` and install the Tampermonkey loader script.
+4.  **Visit Site**: Go to any forum page (e.g. [LessWrong](https://www.lesswrong.com)). Use the "POWER Reader" link in the header or visit `/reader` directly.
+5.  **Edit & Reload**: Changes to `src/` trigger automatic reloads via HMR.
 
 ## 🛠 Tech Stack
 - **Vite** + **TypeScript** + **[vite-plugin-monkey](https://github.com/lisonge/vite-plugin-monkey)**.
@@ -48,7 +50,7 @@ jj git push --bookmark main
 - **Playwright**: Robust E2E testing suite (100% mocked by default).
 
 ## 📜 Documentation & Guides
-- **[GEMINI.md](./GEMINI.md)**: AI-friendly guide to architecture, commands, and conventions.
+- **[AGENTS.md](./AGENTS.md)**: AI-friendly guide to architecture, commands, and conventions.
 - **[TESTING.md](./TESTING.md)**: Workflows for running and debugging the test suite.
 - **[SPEC.md](./src/scripts/power-reader/SPEC.md)**: Detailed feature requirements and UI specifications.
 - **[GRAPHQL_API.md](./src/shared/GRAPHQL_API.md)**: Guide to the LessWrong and EA Forum API.
