@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.543] - 2026-02-13
+
+### Fixed
+- **Hotkey Conflicts**: Fixed a bug where system shortcuts (e.g., `Ctrl+C`, `Ctrl+G`) would accidentally trigger Power Reader hotkeys. Hotkeys now only activate if `Ctrl`, `Alt`, or `Meta` are not pressed. `Shift` is still allowed for intentional combinations like `Shift+G`.
+- **AI Studio Popup**: The AI Studio popup now correctly ignores modified keys for its internal `g` hotkey, preventing accidental closure when using browser shortcuts.
+
 ## [1.2.541] - 2026-02-13
 
 ### Improved

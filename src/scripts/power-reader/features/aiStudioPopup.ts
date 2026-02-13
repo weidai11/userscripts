@@ -372,13 +372,19 @@ export const setupAIStudioKeyboard = (state: ReaderState): void => {
     const key = e.key;
     const lowerKey = key.toLowerCase();
 
-    if (lowerKey === 'g' || key === 'Escape') {
+    // Escape should always close if it's the Escape key
+    if (key === 'Escape') {
+      closeAIPopup(state);
+      return;
+    }
+
+    // For other hotkeys (like 'g'), ignore if Ctrl, Alt, or Meta keys are pressed
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      return;
+    }
+
+    if (lowerKey === 'g') {
       if (state.activeAIPopup) {
-        // Close on Escape always
-        if (key === 'Escape') {
-          closeAIPopup(state);
-          return;
-        }
 
         // Close on 'g' only if mouse is in popup or focal item
         const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);

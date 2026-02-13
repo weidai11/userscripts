@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.542
+// @version    1.2.543
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1637,7 +1637,7 @@ reset: () => {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.542"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.543"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6230,7 +6230,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.542"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6373,7 +6373,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.542"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -6943,6 +6943,9 @@ currentCommentId = null;
     document.addEventListener("keydown", (e) => {
       const target = e.target;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+      if (e.ctrlKey || e.altKey || e.metaKey) {
         return;
       }
       const key = e.key.toLowerCase();
@@ -8007,12 +8010,15 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       }
       const key = e.key;
       const lowerKey = key.toLowerCase();
-      if (lowerKey === "g" || key === "Escape") {
+      if (key === "Escape") {
+        closeAIPopup(state2);
+        return;
+      }
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        return;
+      }
+      if (lowerKey === "g") {
         if (state2.activeAIPopup) {
-          if (key === "Escape") {
-            closeAIPopup(state2);
-            return;
-          }
           const elementUnderMouse = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
           const isInPopup = !!elementUnderMouse?.closest(".pr-ai-popup");
           const isInFocalItem = !!elementUnderMouse?.closest(".being-summarized");
@@ -8298,7 +8304,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.542"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.543"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

@@ -16,6 +16,12 @@ export const attachHotkeyListeners = (state: ReaderState): void => {
       return;
     }
 
+    // Ignore if Ctrl, Alt, or Meta keys are pressed (e.g. Ctrl+C should not trigger 'c' hotkey)
+    // We allow Shift as some hotkeys like 'G' (Shift+g) might be intentional
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      return;
+    }
+
     const key = e.key.toLowerCase();
 
     // Map keys to data-action values
@@ -72,18 +78,18 @@ export const attachHotkeyListeners = (state: ReaderState): void => {
       e.stopPropagation();
 
       // Dispatch events to trigger delegation listeners
-      button.dispatchEvent(new MouseEvent('mousedown', { 
-        bubbles: true, 
+      button.dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true,
         cancelable: true,
         shiftKey: e.shiftKey
       }));
-      button.dispatchEvent(new MouseEvent('mouseup', { 
-        bubbles: true, 
+      button.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
         cancelable: true,
         shiftKey: e.shiftKey
       }));
-      button.dispatchEvent(new MouseEvent('click', { 
-        bubbles: true, 
+      button.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
         cancelable: true,
         shiftKey: e.shiftKey
       }));
