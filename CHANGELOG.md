@@ -10,7 +10,13 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Regression Test**: Added `tests/repro-a-hotkey.spec.ts` to verify visibility of comments loaded via `[a]`.
 
-## [1.2.535] - 2026-02-12
+## [1.2.538] - 2026-02-12
+
+### Security
+- **Dependency Audit**: Integrated `npm audit --audit-level=high` into the build pipeline (`prebuild` hooks) to automatically block builds with critical vulnerabilities.
+- **Supply Chain**: Pinned `vite-plugin-monkey` version to mitigate potential supply chain risks.
+
+## [1.2.536] - 2026-02-12
 
 ### Added
 - **Test Coverage**: Achieved 100% requirements coverage in the Power Reader test suite, adding tests for:
