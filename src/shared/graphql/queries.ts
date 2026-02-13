@@ -208,9 +208,26 @@ export const GET_COMMENTS_BY_IDS = /* GraphQL */ `
   ${COMMENT_FIELDS}
 `;
 
-export const VOTE_MUTATION = /* GraphQL */ `
+export const VOTE_COMMENT_MUTATION = /* GraphQL */ `
   mutation Vote($documentId: String!, $voteType: String!, $extendedVote: JSON) {
     performVoteComment(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
+      document {
+        _id
+        baseScore
+        voteCount
+        extendedScore
+        afExtendedScore
+        currentUserVote
+        currentUserExtendedVote
+        contents { markdown }
+      }
+    }
+  }
+`;
+
+export const VOTE_POST_MUTATION = /* GraphQL */ `
+  mutation VotePost($documentId: String!, $voteType: String!, $extendedVote: JSON) {
+    performVotePost(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
       document {
         _id
         baseScore
@@ -472,6 +489,9 @@ export type VoteResponseDocument = {
 
 export type VoteResponse = {
   performVoteComment?: {
+    document: VoteResponseDocument;
+  } | null;
+  performVotePost?: {
     document: VoteResponseDocument;
   } | null;
 };

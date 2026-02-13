@@ -1,5 +1,7 @@
 declare const GM_xmlhttpRequest: any;
 
+const LOG_PREFIX = '[GraphQL Client]';
+
 function getGraphQLEndpoint(): string {
     const hostname = window.location.hostname;
     if (hostname === 'forum.effectivealtruism.org') {
@@ -45,7 +47,14 @@ export async function queryGraphQL<TData = any, TVariables = any>(query: string,
                 throw new Error(`HTTP ${response.status} after ${maxAttempts} attempts`);
             }
 
-            const res = JSON.parse(response.responseText);
+            let res: any;
+            try {
+                res = JSON.parse(response.responseText);
+            } catch (parseError) {
+                const error = parseError instanceof Error ? parseError : new Error('Failed to parse response JSON');
+                console.error(LOG_PREFIX, 'GraphQL response parse failed:', response.responseText);
+                throw error;
+            }
             if (res.errors) {
                 throw new Error(res.errors[0].message);
             }

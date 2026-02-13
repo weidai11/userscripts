@@ -4,9 +4,9 @@
  */
 
 import { queryGraphQL } from '../../../shared/graphql/client';
-import { VOTE_MUTATION } from '../../../shared/graphql/queries';
+import { VOTE_COMMENT_MUTATION, VOTE_POST_MUTATION } from '../../../shared/graphql/queries';
 import type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote } from '../../../shared/graphql/queries';
-import type { VoteMutation, VoteMutationVariables } from '../../../generated/graphql';
+import type { VoteMutation, VoteMutationVariables, VotePostMutation, VotePostMutationVariables } from '../../../generated/graphql';
 import { Logger } from './logger';
 export type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote };
 
@@ -20,12 +20,13 @@ const LOGIN_URL = `${window.location.origin}/auth/auth0`;
  * Cast a karma vote on a comment
  */
 export async function castKarmaVote(
-  commentId: string,
+  documentId: string,
   voteType: KarmaVote,
   isLoggedIn: boolean,
-  currentAgreement: any = null
+  currentAgreement: any = null,
+  documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
-  Logger.debug(`castKarmaVote: commentId=${commentId}, isLoggedIn=${isLoggedIn}`);
+  Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
   if (!isLoggedIn) {
     Logger.info('Not logged in, opening auth page');
     window.open(LOGIN_URL, '_blank');
@@ -33,8 +34,17 @@ export async function castKarmaVote(
   }
 
   try {
-    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_MUTATION, {
-      documentId: commentId,
+    if (documentType === 'post') {
+      const response = await queryGraphQL<VotePostMutation, VotePostMutationVariables>(VOTE_POST_MUTATION, {
+        documentId: documentId,
+        voteType: voteType,
+        extendedVote: currentAgreement,
+      });
+      return response as unknown as VoteResponse;
+    }
+
+    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_COMMENT_MUTATION, {
+      documentId: documentId,
       voteType: voteType,
       extendedVote: currentAgreement,
     });
@@ -51,10 +61,11 @@ export async function castKarmaVote(
  * Agreement voting uses extended vote types
  */
 export async function castAgreementVote(
-  commentId: string,
+  documentId: string,
   voteType: AgreementVote,
   isLoggedIn: boolean,
-  currentKarma: KarmaVote = 'neutral'
+  currentKarma: KarmaVote = 'neutral',
+  documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
   if (!isLoggedIn) {
     window.open(LOGIN_URL, '_blank');
@@ -67,8 +78,17 @@ export async function castAgreementVote(
       'neutral';
 
   try {
-    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_MUTATION, {
-      documentId: commentId,
+    if (documentType === 'post') {
+      const response = await queryGraphQL<VotePostMutation, VotePostMutationVariables>(VOTE_POST_MUTATION, {
+        documentId: documentId,
+        voteType: currentKarma || 'neutral',
+        extendedVote: { agreement: agreementValue },
+      });
+      return response as unknown as VoteResponse;
+    }
+
+    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_COMMENT_MUTATION, {
+      documentId: documentId,
       voteType: currentKarma || 'neutral',
       extendedVote: { agreement: agreementValue },
     });
@@ -151,7 +171,7 @@ export async function castReactionVote(
   };
 
   try {
-    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_MUTATION, {
+    const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_COMMENT_MUTATION, {
       documentId: commentId,
       voteType: currentKarma || 'neutral', // Need to pass current karma to preserve it
       extendedVote: extendedVotePayload,
@@ -288,48 +308,52 @@ export function renderVoteButtons(
  * Update vote UI after a vote is cast
  */
 export function updateVoteUI(
-  commentId: string,
+  documentId: string,
   response: VoteResponse
 ): void {
-  const comment = document.querySelector(`[data-id="${commentId}"]`);
-  if (!comment || !response.performVoteComment?.document) return;
+  const isPostVote = !!response.performVotePost?.document;
+  const targets = isPostVote
+    ? Array.from(document.querySelectorAll<HTMLElement>(`.pr-post-header[data-post-id="${documentId}"]`))
+    : Array.from(document.querySelectorAll<HTMLElement>(`.pr-comment[data-id="${documentId}"]`));
+  const doc = response.performVoteComment?.document ?? response.performVotePost?.document;
+  if (!doc || targets.length === 0) return;
 
-  const doc = response.performVoteComment.document;
+  targets.forEach(target => {
+    // Update karma score
+    const scoreEl = target.querySelector('.pr-karma-score');
+    if (scoreEl) {
+      scoreEl.textContent = String(doc.baseScore);
+    }
 
-  // Update karma score
-  const scoreEl = comment.querySelector('.pr-karma-score');
-  if (scoreEl) {
-    scoreEl.textContent = String(doc.baseScore);
-  }
+    // Update agreement score
+    const agreeScoreEl = target.querySelector('.pr-agreement-score');
+    if (agreeScoreEl && doc.afExtendedScore?.agreement !== undefined) {
+      agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
+    }
 
-  // Update agreement score
-  const agreeScoreEl = comment.querySelector('.pr-agreement-score');
-  if (agreeScoreEl && doc.afExtendedScore?.agreement !== undefined) {
-    agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
-  }
+    // Update karma button states
+    const upBtn = target.querySelector('[data-action="karma-up"]');
+    const downBtn = target.querySelector('[data-action="karma-down"]');
 
-  // Update karma button states
-  const upBtn = comment.querySelector('[data-action="karma-up"]');
-  const downBtn = comment.querySelector('[data-action="karma-down"]');
+    const vote = doc.currentUserVote;
 
-  const vote = doc.currentUserVote;
+    upBtn?.classList.toggle('active-up', vote === 'smallUpvote' || vote === 'bigUpvote');
+    upBtn?.classList.toggle('strong-vote', vote === 'bigUpvote');
 
-  upBtn?.classList.toggle('active-up', vote === 'smallUpvote' || vote === 'bigUpvote');
-  upBtn?.classList.toggle('strong-vote', vote === 'bigUpvote');
+    downBtn?.classList.toggle('active-down', vote === 'smallDownvote' || vote === 'bigDownvote');
+    downBtn?.classList.toggle('strong-vote', vote === 'bigDownvote');
 
-  downBtn?.classList.toggle('active-down', vote === 'smallDownvote' || vote === 'bigDownvote');
-  downBtn?.classList.toggle('strong-vote', vote === 'bigDownvote');
+    // Update agreement button states
+    const agreeBtn = target.querySelector('[data-action="agree"]');
+    const disagreeBtn = target.querySelector('[data-action="disagree"]');
 
-  // Update agreement button states
-  const agreeBtn = comment.querySelector('[data-action="agree"]');
-  const disagreeBtn = comment.querySelector('[data-action="disagree"]');
+    const extVote = doc.currentUserExtendedVote;
+    const agreeState = extVote?.agreement;
 
-  const extVote = doc.currentUserExtendedVote;
-  const agreeState = extVote?.agreement;
+    agreeBtn?.classList.toggle('agree-active', agreeState === 'smallUpvote' || agreeState === 'bigUpvote' || agreeState === 'agree');
+    agreeBtn?.classList.toggle('strong-vote', agreeState === 'bigUpvote');
 
-  agreeBtn?.classList.toggle('agree-active', agreeState === 'smallUpvote' || agreeState === 'bigUpvote' || agreeState === 'agree');
-  agreeBtn?.classList.toggle('strong-vote', agreeState === 'bigUpvote');
-
-  disagreeBtn?.classList.toggle('disagree-active', agreeState === 'smallDownvote' || agreeState === 'bigDownvote' || agreeState === 'disagree');
-  disagreeBtn?.classList.toggle('strong-vote', agreeState === 'bigDownvote');
+    disagreeBtn?.classList.toggle('disagree-active', agreeState === 'smallDownvote' || agreeState === 'bigDownvote' || agreeState === 'disagree');
+    disagreeBtn?.classList.toggle('strong-vote', agreeState === 'bigDownvote');
+  });
 }

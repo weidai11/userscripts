@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.541] - 2026-02-13
+
+### Improved
+- **Voting Code Clarity**: Renamed internal `commentId` → `documentId` in `votes.ts` event handlers and helpers (`executeVote`, `syncVoteToState`) to reflect that the ID can be either a comment or a post.
+- **Duplicate DOM Update Removed**: Removed duplicate `updateVoteUI` calls from `handleVoteInteraction`. The call now lives exclusively in `syncVoteToState`, which is the single entry point for post-vote state + DOM synchronization.
+- **Documentation**: Added JSDoc comments to `refreshCommentBody` and `refreshReactions` explaining they are intentionally comment-only (post bodies and reactions use separate containers).
+
 ## [1.2.536] - 2026-02-12
 
 ### Fixed

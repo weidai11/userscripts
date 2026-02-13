@@ -11,7 +11,7 @@ A fast, context-first reader for LessWrong and the EA Forum, designed to make hi
 - **Sticky Header Navigation**: Keeps post controls and key metadata visible while scrolling long threads.
 - **Keyboard-First Workflow**: Hotkeys for post/comment actions, including fallback from hovered comments to parent post actions.
 - **AI Studio Integration**: Send posts or comment threads to Google AI Studio (`g` / `Shift+G`), with customizable prompt prefix.
-- **Rich Voting & Reactions**: Karma + agreement voting, reaction picker, and inline quote reactions with highlighted quoted text.
+- **Rich Voting & Reactions**: Karma + agreement voting on posts and comments, reaction picker, and inline quote reactions with highlighted quoted text.
 - **Smart Prioritization**: Sorts by "most important unread content first" using <abbr title="Prioritizes posts/threads by the highest-karma unread item within them.">tree-karma sorting</abbr> and can apply <abbr title="Hides threads once the post and relevant comments are all read.">fully read thread hiding</abbr>.
 - **Personalization**: Author preference controls, read tracking, and saved layout/settings in browser storage.
 - **Site-wide Entry Point**: Accessible from any forum page via an injected "POWER Reader" header link.

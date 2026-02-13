@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
-async function setupDefault(page: any, commentCount: number = 20) {
+async function setupDefault(page: any, commentCount: number = 20, onMutation?: string) {
     const p1PostedAt = new Date(Date.now() - 500000).toISOString();
     const p2PostedAt = new Date(Date.now() - 1000000).toISOString();
 
@@ -62,7 +62,8 @@ async function setupDefault(page: any, commentCount: number = 20) {
     await initPowerReader(page, {
         testMode: true,
         comments,
-        posts
+        posts,
+        onMutation
     });
 }
 
@@ -252,6 +253,55 @@ test.describe('Sticky Header Feature', () => {
         // Verify we DID NOT scroll back to top (scroll position should be roughly same)
         const newScrollY = await page.evaluate(() => window.scrollY);
         expect(Math.abs(newScrollY - initialScrollY)).toBeLessThan(10); // allow tiny variations
+    });
+
+    test('[PR-STICKY-VOTE-01] post vote from sticky header syncs both sticky and main header UI', async ({ page }) => {
+        await setupDefault(page, 20, `
+            if (query.includes('mutation VotePost') || query.includes('performVotePost')) {
+                const { documentId, voteType } = variables;
+                return {
+                    data: {
+                        performVotePost: {
+                            document: {
+                                _id: documentId,
+                                baseScore: voteType === 'smallUpvote' ? 51 : voteType === 'smallDownvote' ? 49 : 50,
+                                voteCount: 11,
+                                extendedScore: { reacts: {} },
+                                afExtendedScore: { agreement: 0 },
+                                currentUserVote: voteType === 'neutral' ? null : voteType,
+                                currentUserExtendedVote: null
+                            }
+                        }
+                    }
+                };
+            }
+        `);
+
+        const stickyHeader = page.locator('#pr-sticky-header');
+
+        await page.evaluate(() => {
+            const header = document.querySelector('.pr-post-header') as HTMLElement;
+            header.scrollIntoView({ block: 'start' });
+            window.scrollBy(0, 500);
+            window.dispatchEvent(new Event('scroll'));
+        });
+
+        await expect(stickyHeader).toHaveClass(/visible/, { timeout: 10000 });
+
+        const mainScore = page.locator('.pr-post[data-id="p1"] .pr-post-header .pr-karma-score').first();
+        const stickyScore = stickyHeader.locator('.pr-karma-score').first();
+        const mainUpvote = page.locator('.pr-post[data-id="p1"] .pr-post-header [data-action="karma-up"]').first();
+        const stickyUpvote = stickyHeader.locator('[data-action="karma-up"]').first();
+
+        await expect(mainScore).toContainText('50');
+        await expect(stickyScore).toContainText('50');
+
+        await stickyUpvote.click();
+
+        await expect(mainUpvote).toHaveClass(/active-up/);
+        await expect(stickyUpvote).toHaveClass(/active-up/);
+        await expect(mainScore).toContainText('51');
+        await expect(stickyScore).toContainText('51');
     });
 });
 

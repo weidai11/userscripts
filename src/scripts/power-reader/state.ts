@@ -100,6 +100,16 @@ export const syncCommentInState = (state: ReaderState, commentId: string, update
   }
 };
 
+/**
+ * Sync a post in state after a vote or update
+ */
+export const syncPostInState = (state: ReaderState, postId: string, updates: Partial<Post>): void => {
+  const post = state.postById.get(postId);
+  if (post) {
+    Object.assign(post, updates);
+  }
+};
+
 // Singleton state instance for the application
 let globalState: ReaderState | null = null;
 

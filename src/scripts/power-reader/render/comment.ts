@@ -9,13 +9,15 @@ import { getScoreColor, getRecencyColor } from '../utils/colors';
 import { getReadState, getAuthorPreferences, isRead, getLoadFrom } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { renderVoteButtons, renderReactions, escapeHtml } from '../utils/rendering';
+import { sanitizeHtml } from '../utils/sanitize';
 import { Logger } from '../utils/logger';
 
 /**
  * Highlight quotes in the comment body based on reactions
  */
 export const highlightQuotes = (html: string, extendedScore: NamesAttachedReactionsScore | null): string => {
-  if (!extendedScore || !extendedScore.reacts) return html;
+  const safeHtml = sanitizeHtml(html);
+  if (!extendedScore || !extendedScore.reacts) return safeHtml;
 
   // Collect all quotes
   const quotesToHighlight: string[] = [];
@@ -31,26 +33,54 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
     });
   });
 
-  if (quotesToHighlight.length === 0) return html;
+  if (quotesToHighlight.length === 0) return safeHtml;
 
   // Sort quotes by length descending to process longest first
   const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
 
-  let processedHtml = html;
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(safeHtml, 'text/html');
 
-  uniqueQuotes.forEach(quote => {
-    const escaped = quote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    try {
-      const regex = new RegExp(`(${escaped})`, 'g');
-      processedHtml = processedHtml.replace(regex, (match) => {
-        return `<span class="pr-highlight" title="Reacted content">${match}</span>`;
-      });
-    } catch {
-      // Ignore regex errors
+  const replaceTextNode = (node: Text, quote: string): void => {
+    const text = node.nodeValue || '';
+    if (!text.includes(quote)) return;
+
+    const parts = text.split(quote);
+    if (parts.length <= 1) return;
+
+    const fragment = doc.createDocumentFragment();
+    parts.forEach((part, index) => {
+      if (part) {
+        fragment.appendChild(doc.createTextNode(part));
+      }
+      if (index < parts.length - 1) {
+        const span = doc.createElement('span');
+        span.className = 'pr-highlight';
+        span.title = 'Reacted content';
+        span.textContent = quote;
+        fragment.appendChild(span);
+      }
+    });
+
+    node.parentNode?.replaceChild(fragment, node);
+  };
+
+  uniqueQuotes.forEach((quote) => {
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    let node = walker.nextNode();
+    while (node) {
+      const textNode = node as Text;
+      if (!textNode.parentElement?.classList.contains('pr-highlight')) {
+        nodes.push(textNode);
+      }
+      node = walker.nextNode();
     }
+
+    nodes.forEach(textNode => replaceTextNode(textNode, quote));
   });
 
-  return processedHtml;
+  return doc.body.innerHTML;
 };
 
 const isPlaceholderComment = (comment: Comment): boolean => {
@@ -273,8 +303,10 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
   );
 
   // Prepare HTML content with highlights
-  let bodyContent = comment.htmlBody || '<i>(No content)</i>';
-  bodyContent = highlightQuotes(bodyContent, comment.extendedScore as NamesAttachedReactionsScore);
+  const bodyContent = highlightQuotes(
+    comment.htmlBody || '<i>(No content)</i>',
+    comment.extendedScore as NamesAttachedReactionsScore
+  );
 
   const authorSlug = comment.user?.slug;
   const authorLink = authorSlug ? `/users/${authorSlug}` : '#';

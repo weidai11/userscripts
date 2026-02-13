@@ -114,9 +114,10 @@ const buildChildrenIndex = (comments: Comment[]): Map<string, Comment[]> => {
  * Render a post's full content with truncation
  */
 export const renderPostBody = (post: Post): string => {
-  let bodyContent = post.htmlBody || '<i>(No content)</i>';
-
-  bodyContent = highlightQuotes(bodyContent, post.extendedScore as NamesAttachedReactionsScore);
+  const bodyContent = highlightQuotes(
+    post.htmlBody || '<i>(No content)</i>',
+    post.extendedScore as NamesAttachedReactionsScore
+  );
 
   return `
     <div class="pr-post-content pr-post-body-container truncated" style="max-height: ${CONFIG.maxPostHeight};">

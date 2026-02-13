@@ -217,11 +217,17 @@ async function waitForResponse(timeoutMs: number = 180000): Promise<string> {
                 if (!editIcon) return setTimeout(checkCompletion, 1000);
 
                 const container = lastTurn.querySelector('div.model-response-content, .message-content, .turn-content') || lastTurn;
-                const cleanHtml = container.innerHTML
-                    .replace(/<button[^>]*>.*?<\/button>/g, '')
-                    .replace(/<ms-help-buttons[^>]*>.*?<\/ms-help-buttons>/g, '');
+                const text = (container.textContent || '').trim();
 
-                if (cleanHtml.length > 10) return resolve(cleanHtml);
+                if (text.length > 10) {
+                    const escaped = text
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;')
+                        .replace(/"/g, '&quot;')
+                        .replace(/'/g, '&#039;');
+                    return resolve(`<pre class="pr-ai-text">${escaped}</pre>`);
+                }
             }
             setTimeout(checkCompletion, 1000);
         };

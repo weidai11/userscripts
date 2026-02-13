@@ -4,6 +4,7 @@
  */
 
 import { Logger } from './logger';
+import { sanitizeHtml } from './sanitize';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
@@ -517,7 +518,7 @@ export function createPostPreviewFetcher(postId: string): () => Promise<string> 
         </span>
       </div>
       <div class="pr-preview-content">
-        ${post.htmlBody || '<i>(No content)</i>'}
+        ${sanitizeHtml(post.htmlBody || '<i>(No content)</i>')}
       </div>
     `;
   };
@@ -565,7 +566,7 @@ function formatCommentPreview(comment: Comment): string {
       </span>
     </div>
     <div class="pr-preview-content">
-      ${comment.htmlBody || ''}
+      ${sanitizeHtml(comment.htmlBody || '')}
     </div>
   `;
 }

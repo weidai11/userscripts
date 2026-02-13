@@ -4,7 +4,7 @@
  */
 
 import type { ReaderState } from '../state';
-import { syncCommentInState } from '../state';
+import { syncCommentInState, syncPostInState } from '../state';
 import {
   castKarmaVote,
   castAgreementVote,
@@ -14,7 +14,7 @@ import {
   type AgreementVote,
   type VoteResponse,
 } from '../utils/voting';
-import type { Comment } from '../../../shared/graphql/queries';
+import type { Comment, Post } from '../../../shared/graphql/queries';
 import { renderComment, highlightQuotes } from '../render/comment';
 import { renderReactions } from '../utils/rendering';
 import { Logger } from '../utils/logger';
@@ -45,16 +45,19 @@ export const handleVoteInteraction = (
   const config = ACTION_TO_VOTE[action];
   if (!config) return;
 
-  const commentId = target.dataset.commentId;
-  if (!commentId) return;
+  // data-comment-id attribute carries the document ID for both comments and posts
+  const documentId = target.dataset.commentId;
+  if (!documentId) return;
 
-  const comment = state.commentById.get(commentId);
-  if (!comment) return;
+  const comment = state.commentById.get(documentId);
+  const post = state.postById.get(documentId);
+  const targetDoc = comment ?? post;
+  if (!targetDoc) return;
 
   // Determine current vote state
   const currentVote = config.kind === 'karma'
-    ? (comment.currentUserVote || 'neutral')
-    : (comment.currentUserExtendedVote?.agreement || 'neutral');
+    ? (targetDoc.currentUserVote || 'neutral')
+    : (targetDoc.currentUserExtendedVote?.agreement || 'neutral');
 
   // Map direction for state calculation
   const direction = config.kind === 'karma'
@@ -89,10 +92,9 @@ export const handleVoteInteraction = (
     }
 
     // Execute hold vote
-    const res = await executeVote(commentId, holdTargetState, config.kind, state, comment);
+    const res = await executeVote(documentId, holdTargetState, config.kind, state, targetDoc);
     if (res) {
-      updateVoteUI(commentId, res);
-      syncVoteToState(state, commentId, res);
+      syncVoteToState(state, documentId, res);
     }
   }, 500);
 
@@ -105,10 +107,9 @@ export const handleVoteInteraction = (
     clearVoteClasses(target);
 
     // Execute click vote
-    const res = await executeVote(commentId, clickTargetState, config.kind, state, comment);
+    const res = await executeVote(documentId, clickTargetState, config.kind, state, targetDoc);
     if (res) {
-      updateVoteUI(commentId, res);
-      syncVoteToState(state, commentId, res);
+      syncVoteToState(state, documentId, res);
     }
   };
 
@@ -153,64 +154,84 @@ const clearVoteClasses = (target: HTMLElement): void => {
  * Execute the appropriate vote mutation
  */
 const executeVote = async (
-  commentId: string,
+  documentId: string,
   targetState: string,
   kind: VoteKind,
   state: ReaderState,
-  comment: any
+  document: any
 ): Promise<VoteResponse | null> => {
   const isLoggedIn = !!state.currentUserId;
+  const documentType: 'comment' | 'post' = state.commentById.has(documentId) ? 'comment' : 'post';
+  Logger.debug(`executeVote: type=${documentType}, kind=${kind}, targetState=${targetState}, id=${documentId}`);
 
   if (kind === 'karma') {
     return castKarmaVote(
-      commentId,
+      documentId,
       targetState as KarmaVote,
       isLoggedIn,
-      comment.currentUserExtendedVote
+      document.currentUserExtendedVote,
+      documentType
     );
   } else {
     return castAgreementVote(
-      commentId,
+      documentId,
       targetState as AgreementVote,
       isLoggedIn,
-      comment.currentUserVote as KarmaVote
+      document.currentUserVote as KarmaVote,
+      documentType
     );
   }
 };
 
 /**
- * Sync vote response to state and re-render comment
+ * Sync vote response to state, update DOM, and re-render reactions/highlights.
+ * This is the single place that calls updateVoteUI — callers should NOT call it separately.
  */
 export const syncVoteToState = (
   state: ReaderState,
-  commentId: string,
+  documentId: string,
   response: VoteResponse
 ): void => {
-  const comment = state.commentById.get(commentId);
-  if (comment && response.performVoteComment?.document) {
-    const doc = response.performVoteComment.document;
-    syncCommentInState(state, commentId, {
-      baseScore: doc.baseScore ?? 0,
-      voteCount: doc.voteCount ?? 0,
-      currentUserVote: doc.currentUserVote,
-      extendedScore: doc.extendedScore,
-      afExtendedScore: doc.afExtendedScore,
-      currentUserExtendedVote: doc.currentUserExtendedVote,
-    } as Partial<Comment>);
+  const comment = state.commentById.get(documentId);
+  const post = state.postById.get(documentId);
+  const doc = response.performVoteComment?.document ?? response.performVotePost?.document;
+  if (doc) {
+    if (comment) {
+      syncCommentInState(state, documentId, {
+        baseScore: doc.baseScore ?? 0,
+        voteCount: doc.voteCount ?? 0,
+        currentUserVote: doc.currentUserVote,
+        extendedScore: doc.extendedScore,
+        afExtendedScore: doc.afExtendedScore,
+        currentUserExtendedVote: doc.currentUserExtendedVote,
+      } as Partial<Comment>);
+    }
+
+    if (post) {
+      syncPostInState(state, documentId, {
+        baseScore: doc.baseScore ?? 0,
+        voteCount: doc.voteCount ?? 0,
+        currentUserVote: doc.currentUserVote,
+        extendedScore: doc.extendedScore,
+        afExtendedScore: doc.afExtendedScore,
+        currentUserExtendedVote: doc.currentUserExtendedVote,
+      } as Partial<Post>);
+    }
 
     // Use updateVoteUI for fine-grained DOM changes to preserve children
-    updateVoteUI(commentId, response);
+    updateVoteUI(documentId, response);
 
-    // Also re-render reactions if they might have changed
-    refreshReactions(commentId, state);
+    // Re-render reactions if they might have changed (comment-only; posts don't have inline reactions yet)
+    refreshReactions(documentId, state);
 
-    // Refresh body to show highlighted quotes
-    refreshCommentBody(commentId, state);
+    // Refresh body to show highlighted quotes (comment-only; post bodies are in a separate container)
+    refreshCommentBody(documentId, state);
   }
 };
 
 /**
- * Re-render comment body to show highlights
+ * Re-render comment body to show highlights.
+ * Intentionally comment-only — post bodies live in a separate `.pr-post-content` container.
  */
 export const refreshCommentBody = (commentId: string, state: ReaderState): void => {
   const comment = state.commentById.get(commentId);
@@ -229,7 +250,8 @@ export const refreshCommentBody = (commentId: string, state: ReaderState): void 
 };
 
 /**
- * Re-render reactions for a single comment
+ * Re-render reactions for a single comment.
+ * Intentionally comment-only — post-level reactions are not yet supported inline.
  */
 export const refreshReactions = (commentId: string, state: ReaderState): void => {
   const comment = state.commentById.get(commentId);

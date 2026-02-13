@@ -52,7 +52,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 **[PR-POST-01]** **Post Header Layout**:
 - **Author Preference Arrows**: `↓` / `↑` for quick liking/disliking of authors.
 - **Metadata**: Author name (clickable link to profile), timestamp (link to original post).
-- **Vote Controls**: Karma and agreement vote buttons.
+- **Vote Controls**: Karma and agreement vote buttons (posts and comments).
 - **Action Buttons**: `[e]` (expand), `[a]` (load all), `[c]` (scroll to comments), `[n]` (next post).
 - **Structural Toggles**: `[−]` (collapse), `[+]` (expand).
 
@@ -466,7 +466,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ### 18. Voting Buttons
 
-- **[PR-VOTE-01]** Two-axis voting (karma + agreement).
+- **[PR-VOTE-01]** Two-axis voting (karma + agreement) for posts and comments.
 - **[PR-VOTE-02]** **Karma voting**: `[▲]` `[▼]` buttons.
 - **[PR-VOTE-03]** **Agreement voting**: `[✓]` `[✗]` buttons.
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
