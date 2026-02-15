@@ -276,6 +276,6 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Solution**: Inject unique metadata into the test HTML. Using `data-side="left"` and `data-side="right"` allows locators to be perfectly unambiguous even if the DOM structure is identical across different test cases.
 
 ### 429 Rate Limiting in API Tests (Vercel)
-- **Problem**: The `tests/api-sanity.spec.ts` suite hits the live `lesswrong.com/graphql` endpoint to verify schema integrity. These requests are frequently blocked by Vercel's security checkpoint with a `429 Too Many Requests` status, causing the test suite to fail even if the application code is correct.
+- **Problem**: The `tests/api-sanity.spec.ts` suite hits the live `lesswrong.com/graphql` endpoint to verify schema integrity. These requests are frequently blocked by Vercel's security checkpoint with a `429 Too Many Requests` status when using standard Playwright `request` API.
 - **Diagnosis**: Check the test log for `[api-sanity] BatchA HTTP 429` or `Vercel Security Checkpoint`.
-- **Solution**: This is an external environment issue, not a code bug. If this occurs, verify that the other mocked tests pass. You can try to run the test individually (`npx playwright test tests/api-sanity.spec.ts`), but persistent failures may require manual validation or waiting for the rate limit to clear.
+- **Solution**: We have refactored the test (`api-sanity.spec.ts`) to use `page.evaluate(fetch)` inside a real browser context. This inherits the browser's User-Agent and TLS fingerprint, significantly reducing the chance of being blocked. If failures persist, it indicates a strict IP ban; wait for it to clear or run tests on a different network.

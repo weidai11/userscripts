@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.573
+// @version    1.2.586
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2660,7 +2660,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.573"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.586"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3090,6 +3090,7 @@ dirty.indexOf("<") === -1) {
       selector: {
         userPosts: {
           userId: $userId
+          sortedBy: "newest"
         }
       },
       limit: $limit,
@@ -3110,6 +3111,7 @@ dirty.indexOf("<") === -1) {
       selector: {
         profileComments: {
           userId: $userId
+          sortBy: "newest"
         }
       },
       limit: $limit,
@@ -4233,12 +4235,22 @@ hoverDelay: 300,
     };
   }
   function renderUserPreview(user) {
+    const archiveLink = `/reader?view=archive&username=${user.slug || user.username}`;
     return `
     <div class="pr-preview-header">
-      <strong>${escapeHtml$1(user.displayName || user.username || "Unknown")}</strong>
-      <span style="color: #666; margin-left: 10px;">
-        ${Math.round(user.karma)} karma · @${escapeHtml$1(user.username || "")}
-      </span>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+        <div style="flex: 1;">
+            <strong>${escapeHtml$1(user.displayName || user.username || "Unknown")}</strong>
+            <div style="color: #666; font-size: 0.9em;">
+                ${Math.round(user.karma)} karma · @${escapeHtml$1(user.username || "")}
+            </div>
+        </div>
+        <a href="${archiveLink}" 
+           class="pr-archive-link"
+           style="background: var(--pr-bg-secondary); border: 1px solid var(--pr-border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.8em; color: var(--pr-text-primary); text-decoration: none; white-space: nowrap;">
+            📂 Archive
+        </a>
+      </div>
     </div>
     <div class="pr-preview-content">
       ${user.htmlBio || "<i>(No bio provided)</i>"}
@@ -6175,7 +6187,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.586"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6318,7 +6330,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.586"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -8378,6 +8390,108 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       }, 100);
     }
   };
+  const getUsernameFromUrl = () => {
+    const path = window.location.pathname;
+    if (!path.startsWith("/users/")) return null;
+    const parts = path.split("/");
+    if (parts.length >= 4 && parts[3]) {
+      return parts[3];
+    }
+    if (parts.length >= 3) {
+      return parts[2];
+    }
+    return null;
+  };
+  const injectArchiveButton = () => {
+    const username = getUsernameFromUrl();
+    if (!username) return;
+    const container = document.querySelector(".ProfilePage-mobileProfileActions") || document.querySelector(".ProfilePage-header") || document.querySelector(".UsersProfile-header");
+    if (!container) {
+      Logger.debug(`Profile Injection: valid container not found for ${username}`);
+      return;
+    }
+    const existingButton = document.getElementById("pr-profile-archive-button");
+    const targetHref = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+    if (existingButton) {
+      if (!existingButton.href.includes(username)) {
+        existingButton.href = targetHref;
+        Logger.debug(`Profile Injection: Updated button for ${username}`);
+      }
+      return;
+    }
+    if (!document.getElementById("pr-profile-injection-styles")) {
+      GM_addStyle(`
+      #pr-profile-archive-button {
+        margin-left: 8px;
+        transition: opacity 0.2s;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        font-size: 0.875rem;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 5px 15px;
+        min-width: 64px;
+        box-sizing: border-box;
+        line-height: 1.75;
+        color: inherit;
+        text-decoration: none;
+        border: 1px solid rgba(0, 0, 0, 0.23);
+        border-radius: 4px;
+      }
+      #pr-profile-archive-button:hover {
+        opacity: 0.8;
+      }
+    `);
+      const styleMarker = document.createElement("div");
+      styleMarker.id = "pr-profile-injection-styles";
+      styleMarker.style.display = "none";
+      document.head.appendChild(styleMarker);
+    }
+    const button = document.createElement("a");
+    button.id = "pr-profile-archive-button";
+    button.href = targetHref;
+    button.className = "MuiButtonBase-root MuiButton-root MuiButton-outlined";
+    button.innerHTML = `
+    <span class="MuiButton-label">
+      ARCHIVE
+    </span>
+  `;
+    container.appendChild(button);
+    Logger.debug(`Profile Injection: Button injected for ${username}`);
+  };
+  const setupProfileInjection = () => {
+    let isHydrated = false;
+    const detectAndInject = () => {
+      if (!window.location.pathname.startsWith("/users/")) return;
+      if (document.querySelector(".ProfilePage-mobileProfileActions")) {
+        isHydrated = true;
+        injectArchiveButton();
+      }
+    };
+    if (document.readyState === "complete") {
+      detectAndInject();
+    } else {
+      window.addEventListener("load", detectAndInject);
+    }
+    const observer = new MutationObserver(() => {
+      if (!window.location.pathname.startsWith("/users/")) return;
+      if (!isHydrated) {
+        if (document.querySelector(".ProfilePage-mobileProfileActions")) {
+          isHydrated = true;
+          injectArchiveButton();
+        }
+        return;
+      }
+      injectArchiveButton();
+    });
+    if (document.documentElement) {
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
+    window.addEventListener("beforeunload", () => observer.disconnect());
+  };
   const createInitialArchiveState = (username) => ({
     username,
     userId: null,
@@ -8460,7 +8574,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       lastSyncDate: metadata?.lastSyncDate || null
     };
   };
-  const PAGE_SIZE = 50;
+  const PAGE_SIZE$1 = 50;
   const fetchUserId = async (username) => {
     try {
       const response = await queryGraphQL(GET_USER_BY_SLUG, { slug: username });
@@ -8470,7 +8584,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       return null;
     }
   };
-  const fetchUserPosts = async (userId, onProgress) => {
+  const fetchUserPosts = async (userId, onProgress, minDate) => {
     let allPosts = [];
     let offset = 0;
     let hasMore = true;
@@ -8478,16 +8592,26 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       try {
         const response = await queryGraphQL(GET_USER_POSTS, {
           userId,
-          limit: PAGE_SIZE,
+          limit: PAGE_SIZE$1,
           offset
         });
         const results = response.posts?.results || [];
-        allPosts = [...allPosts, ...results];
+        let filteredResults = results;
+        if (minDate) {
+          const oldestInBatch = results[results.length - 1];
+          if (oldestInBatch && new Date(oldestInBatch.postedAt) < minDate) {
+            filteredResults = results.filter((p) => new Date(p.postedAt) >= minDate);
+            hasMore = false;
+          }
+        }
+        allPosts = [...allPosts, ...filteredResults];
         if (onProgress) onProgress(allPosts.length);
-        if (results.length < PAGE_SIZE) {
-          hasMore = false;
-        } else {
-          offset += PAGE_SIZE;
+        if (hasMore) {
+          if (results.length < PAGE_SIZE$1) {
+            hasMore = false;
+          } else {
+            offset += PAGE_SIZE$1;
+          }
         }
       } catch (e) {
         Logger.error(`Error fetching posts at offset ${offset}:`, e);
@@ -8496,7 +8620,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     return allPosts;
   };
-  const fetchUserComments = async (userId, onProgress) => {
+  const fetchUserComments = async (userId, onProgress, minDate) => {
     let allComments = [];
     let offset = 0;
     let hasMore = true;
@@ -8504,16 +8628,26 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       try {
         const response = await queryGraphQL(GET_USER_COMMENTS, {
           userId,
-          limit: PAGE_SIZE,
+          limit: PAGE_SIZE$1,
           offset
         });
         const results = response.comments?.results || [];
-        allComments = [...allComments, ...results];
+        let filteredResults = results;
+        if (minDate) {
+          const oldestInBatch = results[results.length - 1];
+          if (oldestInBatch && new Date(oldestInBatch.postedAt) < minDate) {
+            filteredResults = results.filter((c) => new Date(c.postedAt) >= minDate);
+            hasMore = false;
+          }
+        }
+        allComments = [...allComments, ...filteredResults];
         if (onProgress) onProgress(allComments.length);
-        if (results.length < PAGE_SIZE) {
-          hasMore = false;
-        } else {
-          offset += PAGE_SIZE;
+        if (hasMore) {
+          if (results.length < PAGE_SIZE$1) {
+            hasMore = false;
+          } else {
+            offset += PAGE_SIZE$1;
+          }
         }
       } catch (e) {
         Logger.error(`Error fetching comments at offset ${offset}:`, e);
@@ -8522,6 +8656,198 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     return allComments;
   };
+  const fetchCommentsByIds = async (commentIds) => {
+    if (commentIds.length === 0) return [];
+    const chunks = [];
+    for (let i = 0; i < commentIds.length; i += 50) {
+      chunks.push(commentIds.slice(i, i + 50));
+    }
+    let allResults = [];
+    for (const chunk of chunks) {
+      try {
+        const response = await queryGraphQL(
+          GET_COMMENTS_BY_IDS,
+          { commentIds: chunk }
+        );
+        if (response.comments?.results) {
+          allResults = [...allResults, ...response.comments.results];
+        }
+      } catch (e) {
+        Logger.error("Failed to fetch context comments chunk:", e);
+      }
+    }
+    return allResults;
+  };
+  let currentRenderLimit = 50;
+  const updateRenderLimit = (limit) => {
+    currentRenderLimit = limit;
+  };
+  const incrementRenderLimit = (delta) => {
+    currentRenderLimit += delta;
+  };
+  const renderArchiveFeed = async (container, items, viewMode, itemById) => {
+    if (items.length === 0) {
+      container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
+      return;
+    }
+    const visibleItems = items.slice(0, currentRenderLimit);
+    const loadMoreBtn = document.getElementById("archive-load-more");
+    if (loadMoreBtn) {
+      loadMoreBtn.style.display = items.length > currentRenderLimit ? "block" : "none";
+      if (items.length > currentRenderLimit && loadMoreBtn.querySelector("button")) {
+        loadMoreBtn.querySelector("button").textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
+      }
+    }
+    if (viewMode === "index") {
+      container.innerHTML = visibleItems.map((item) => renderIndexItem(item)).join("");
+    } else if (viewMode === "thread") {
+      container.innerHTML = `<div class="pr-loading-context">Loading conversation context...</div>`;
+      await ensureContextForItems(visibleItems, itemById);
+      container.innerHTML = visibleItems.map((item) => renderThreadItem(item, itemById)).join("");
+    } else {
+      container.innerHTML = visibleItems.map((item) => renderCardItem(item)).join("");
+    }
+  };
+  const renderCardItem = (item) => {
+    const isPost = "title" in item;
+    const classes = `pr-archive-item pr-item ${isPost ? "pr-post" : "pr-comment"}`;
+    const metadataHtml = renderMetadata(item);
+    let contentHtml = "";
+    if (isPost) {
+      const post = item;
+      contentHtml = `<h3>${escapeHtml(post.title)}</h3>` + renderBody(post.htmlBody || "", post.extendedScore);
+    } else {
+      const comment = item;
+      contentHtml = renderBody(comment.htmlBody || "", comment.extendedScore);
+    }
+    return `
+      <div class="${classes}" data-id="${item._id}">
+        <div class="pr-archive-item-header">
+           ${metadataHtml}
+        </div>
+        <div class="pr-archive-item-body">
+          ${contentHtml}
+        </div>
+      </div>
+    `;
+  };
+  const renderIndexItem = (item) => {
+    const isPost = "title" in item;
+    const title = isPost ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
+    const context = isPost ? "Post" : `Reply to ${getInterlocutorName$1(item)}`;
+    const date = new Date(item.postedAt).toLocaleDateString();
+    return `
+        <div class="pr-archive-index-item" data-id="${item._id}">
+            <div class="pr-index-score" style="color: ${item.baseScore > 0 ? "var(--pr-highlight)" : "inherit"}">
+                ${item.baseScore || 0}
+            </div>
+            <div class="pr-index-title">
+                ${escapeHtml(title)}
+            </div>
+            <div class="pr-index-meta">
+                ${context} • ${date}
+            </div>
+        </div>
+    `;
+  };
+  const renderThreadItem = (item, itemById) => {
+    const isPost = "title" in item;
+    if (isPost) {
+      return renderCardItem(item);
+    }
+    const comment = item;
+    const parents = [];
+    let current = comment.parentComment;
+    while (current) {
+      const fullParent = itemById.get(current._id);
+      if (fullParent && !("title" in fullParent)) {
+        parents.unshift(fullParent);
+        current = fullParent.parentComment;
+      } else if (current._id) {
+        break;
+      } else {
+        break;
+      }
+    }
+    let postContext = "";
+    const post = "post" in comment ? comment.post : null;
+    const fullPost = itemById.get(comment.postId);
+    if (fullPost && "title" in fullPost) {
+      postContext = `
+            <div class="pr-thread-root-post">
+                <a href="${fullPost.pageUrl}" target="_blank" class="pr-thread-post-link">
+                    📝 ${escapeHtml(fullPost.title)}
+                </a>
+                <span class="pr-thread-post-meta">by ${fullPost.user?.displayName || "Unknown"}</span>
+            </div>
+        `;
+    } else if (post) {
+      postContext = `
+            <div class="pr-thread-root-post">
+                <a href="${post.pageUrl}" target="_blank" class="pr-thread-post-link">
+                    📝 ${escapeHtml(post.title)}
+                </a>
+            </div>
+        `;
+    }
+    const parentHtml = parents.map((p) => `
+        <div class="pr-thread-parent">
+            <div class="pr-thread-parent-meta">
+                Replying to <strong>${escapeHtml(p.user?.displayName || p.author || "Unknown")}</strong>
+            </div>
+            <div class="pr-thread-parent-body">
+                ${sanitizeBodySimple(p.htmlBody || "")}
+            </div>
+        </div>
+    `).join("");
+    return `
+        <div class="pr-thread-wrapper" style="margin-bottom: 30px; border: 1px solid var(--pr-border-subtle); border-radius: 8px; overflow: hidden;">
+            ${postContext}
+            <div class="pr-thread-parents" style="background: var(--pr-bg-secondary); padding: 10px;">
+                ${parentHtml}
+            </div>
+            ${renderCardItem(comment)} 
+        </div>
+    `;
+  };
+  const ensureContextForItems = async (items, itemById) => {
+    const missingIds = new Set();
+    for (const item of items) {
+      if ("title" in item) continue;
+      let current = item.parentComment;
+      let depth = 0;
+      while (current && depth < 5) {
+        if (!itemById.has(current._id)) {
+          missingIds.add(current._id);
+        }
+        if (current.parentComment) {
+          current = current.parentComment;
+        } else {
+          break;
+        }
+        depth++;
+      }
+      if (item.postId && !itemById.has(item.postId)) ;
+    }
+    if (missingIds.size > 0) {
+      Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
+      const fetched = await fetchCommentsByIds(Array.from(missingIds));
+      for (const c of fetched) {
+        itemById.set(c._id, c);
+      }
+    }
+  };
+  const getInterlocutorName$1 = (item) => {
+    if ("title" in item) return " (Original Post)";
+    const c = item;
+    if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
+    if (c.post?.user?.displayName) return c.post.user.displayName;
+    return "Unknown";
+  };
+  const sanitizeBodySimple = (html2) => {
+    return renderBody(html2, null);
+  };
+  const PAGE_SIZE = 50;
   const initArchive = async (username) => {
     Logger.info(`Initializing User Archive for: ${username}`);
     try {
@@ -8531,44 +8857,184 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       const state2 = createInitialArchiveState(username);
       const root = document.getElementById("power-reader-root");
       if (!root) return;
+      const style = document.createElement("style");
+      style.textContent = `
+        .pr-archive-toolbar {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+        .pr-archive-toolbar select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid var(--pr-border-color);
+            background: var(--pr-bg-secondary);
+            color: var(--pr-text-primary);
+        }
+        .pr-archive-index-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid var(--pr-border-subtle);
+            color: var(--pr-text-primary);
+            text-decoration: none;
+        }
+        .pr-archive-index-item:hover {
+            background: var(--pr-bg-secondary);
+        }
+        .pr-index-score {
+            width: 50px;
+            text-align: right;
+            margin-right: 15px;
+            font-weight: bold;
+            color: var(--pr-text-secondary);
+        }
+        .pr-index-title {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .pr-index-meta {
+            font-size: 0.85em;
+            color: var(--pr-text-tertiary);
+            margin-left: 10px;
+            min-width: 120px;
+            text-align: right;
+        }
+        
+        /* Thread View Styles */
+        .pr-thread-wrapper {
+             background: var(--pr-bg-primary);
+        }
+        .pr-thread-root-post {
+            padding: 10px;
+            background: var(--pr-bg-secondary);
+            border-bottom: 1px solid var(--pr-border-subtle);
+            font-size: 0.9em;
+        }
+        .pr-thread-parent {
+            padding: 8px 0;
+            border-left: 2px solid var(--pr-border-color);
+            padding-left: 10px;
+            margin-bottom: 5px;
+        }
+        .pr-thread-parent-meta {
+            font-size: 0.85em;
+            color: var(--pr-text-tertiary);
+            margin-bottom: 4px;
+        }
+        .pr-thread-parent-body {
+            font-size: 0.9em;
+            color: var(--pr-text-secondary);
+        }
+    `;
+      document.head.appendChild(style);
       root.innerHTML = `
     <div class="pr-header">
       <h1>User Archive: ${escapeHtml(username)}</h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
-    <div id="archive-dashboard" class="pr-setup" style="max-width: 800px">
+    
+    <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
+        <div class="pr-archive-toolbar">
+            <input type="text" id="archive-search" placeholder="Search archive (Regex supported)..." class="pr-input" style="flex: 2; min-width: 200px;">
+            <select id="archive-sort">
+                <option value="date">Date (Newest)</option>
+                <option value="date-asc">Date (Oldest)</option>
+                <option value="score">Karma (High-Low)</option>
+                <option value="score-asc">Karma (Low-High)</option>
+                <option value="replyTo">Reply To (Name)</option>
+            </select>
+             <select id="archive-view">
+                <option value="card">Card View</option>
+                <option value="index">Index View</option>
+                <option value="thread">Thread View</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="archive-dashboard" class="pr-setup" style="max-width: 800px; display: none;">
       Loading archive data...
     </div>
     <div id="archive-feed" style="margin-top: 20px"></div>
+    <div id="archive-load-more" style="text-align: center; margin: 20px; display: none;">
+        <button class="pr-button">Load More</button>
+    </div>
   `;
       const statusEl = document.getElementById("archive-status");
       const dashboardEl = document.getElementById("archive-dashboard");
       const feedEl = document.getElementById("archive-feed");
-      const cached = await loadArchiveData(username);
-      if (cached.items.length > 0) {
-        statusEl.textContent = `Loaded ${cached.items.length} items from local database. Last sync: ${cached.lastSyncDate || "Unknown"}`;
-        state2.items = cached.items;
-        renderArchiveFeed(feedEl, state2.items);
-      } else {
-        statusEl.textContent = `No local data found. Fetching full history for ${username}...`;
-        const userId = await fetchUserId(username);
-        if (!userId) {
-          dashboardEl.innerHTML = `<div class="pr-error">Could not find user: ${escapeHtml(username)}</div>`;
-          return;
+      const loadMoreBtn = document.getElementById("archive-load-more");
+      const searchInput = document.getElementById("archive-search");
+      const sortSelect = document.getElementById("archive-sort");
+      const viewSelect = document.getElementById("archive-view");
+      let activeItems = state2.items;
+      const updateItemMap = (items) => {
+        items.forEach((i) => state2.itemById.set(i._id, i));
+      };
+      const refreshView = async () => {
+        let filtered = state2.items;
+        const query = searchInput.value;
+        if (query) {
+          try {
+            const regex = new RegExp(query, "i");
+            filtered = state2.items.filter((item) => {
+              const bodyText = item.contents?.markdown || (item.htmlBody || "").replace(/<[^>]+>/g, " ");
+              const text2 = (item.title || "") + " " + bodyText;
+              return regex.test(text2);
+            });
+          } catch (e) {
+            const lower = query.toLowerCase();
+            filtered = state2.items.filter((item) => {
+              const bodyText = item.contents?.markdown || (item.htmlBody || "").replace(/<[^>]+>/g, " ");
+              const text2 = ((item.title || "") + " " + bodyText).toLowerCase();
+              return text2.includes(lower);
+            });
+          }
         }
-        state2.userId = userId;
-        const posts = await fetchUserPosts(userId, (count) => {
-          statusEl.textContent = `Fetching posts: ${count} loaded...`;
+        activeItems = sortItems(filtered, sortSelect.value);
+        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, state2.itemById);
+      };
+      searchInput?.addEventListener("input", () => {
+        updateRenderLimit(PAGE_SIZE);
+        refreshView();
+      });
+      sortSelect?.addEventListener("change", () => {
+        state2.sortBy = sortSelect.value;
+        updateRenderLimit(PAGE_SIZE);
+        refreshView();
+      });
+      viewSelect?.addEventListener("change", () => {
+        state2.viewMode = viewSelect.value;
+        updateRenderLimit(PAGE_SIZE);
+        refreshView();
+      });
+      loadMoreBtn?.querySelector("button")?.addEventListener("click", () => {
+        incrementRenderLimit(PAGE_SIZE);
+        renderArchiveFeed(feedEl, activeItems, state2.viewMode, state2.itemById);
+      });
+      const cached = await loadArchiveData(username);
+      state2.items = cached.items;
+      updateItemMap(state2.items);
+      activeItems = state2.items;
+      if (cached.items.length > 0) {
+        statusEl.textContent = `Loaded ${cached.items.length} items. Checking for updates...`;
+        refreshView();
+      } else {
+        dashboardEl.style.display = "block";
+        statusEl.textContent = `No local data. Fetching full history for ${username}...`;
+      }
+      try {
+        await syncArchive(username, state2, cached.lastSyncDate, (msg) => {
+          if (statusEl) statusEl.textContent = msg;
         });
-        const comments = await fetchUserComments(userId, (count) => {
-          statusEl.textContent = `Fetching comments: ${count} loaded...`;
-        });
-        const allItems = [...posts, ...comments];
-        allItems.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
-        state2.items = allItems;
-        statusEl.textContent = `Sync complete! ${allItems.length} items loaded.`;
-        await saveArchiveData(username, allItems, ( new Date()).toISOString());
-        renderArchiveFeed(feedEl, state2.items);
+        updateItemMap(state2.items);
+        refreshView();
+      } catch (e) {
+        Logger.error("Background sync failed:", e);
+        if (statusEl) statusEl.textContent = `Sync failed. Showing cached data (${cached.items.length} items).`;
       }
       dashboardEl.style.display = "none";
       signalReady();
@@ -8580,32 +9046,64 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       }
     }
   };
-  const renderArchiveFeed = (container, items) => {
-    if (items.length === 0) {
-      container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
-      return;
+  const sortItems = (items, sortMode) => {
+    const sorted = [...items];
+    switch (sortMode) {
+      case "date-asc":
+        return sorted.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
+      case "date":
+      default:
+        return sorted.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+      case "score":
+        return sorted.sort((a, b) => (b.baseScore || 0) - (a.baseScore || 0));
+      case "score-asc":
+        return sorted.sort((a, b) => (a.baseScore || 0) - (b.baseScore || 0));
+      case "replyTo":
+        return sorted.sort((a, b) => {
+          const nameA = getInterlocutorName(a).toLowerCase();
+          const nameB = getInterlocutorName(b).toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
     }
-    container.innerHTML = items.map((item) => {
-      const isPost = "title" in item;
-      const classes = `pr-archive-item pr-item ${isPost ? "pr-post" : "pr-comment"}`;
-      const metadataHtml = renderMetadata(item);
-      let contentHtml = "";
-      if (isPost) {
-        contentHtml = `<h3>${escapeHtml(item.title)}</h3>` + renderBody(item.htmlBody || "", item.extendedScore);
-      } else {
-        contentHtml = renderBody(item.htmlBody || "", item.extendedScore);
-      }
-      return `
-      <div class="${classes}" data-id="${item._id}">
-        <div class="pr-archive-item-header">
-           ${metadataHtml}
-        </div>
-        <div class="pr-archive-item-body">
-          ${contentHtml}
-        </div>
-      </div>
-    `;
-    }).join("");
+  };
+  const getInterlocutorName = (item) => {
+    if (item.title) return " (Original Post)";
+    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;
+    if (item.post?.user?.displayName) return item.post.user.displayName;
+    return "Unknown";
+  };
+  const syncArchive = async (username, state2, lastSyncDate, onStatus) => {
+    const syncStartTime = ( new Date()).toISOString();
+    let userId = state2.userId;
+    if (!userId) {
+      const fetchedId = await fetchUserId(username);
+      if (!fetchedId) throw new Error(`User ${username} not found`);
+      state2.userId = fetchedId;
+      userId = fetchedId;
+    }
+    const minDate = lastSyncDate ? new Date(lastSyncDate) : void 0;
+    if (minDate) {
+      onStatus(`Fetching items since ${minDate.toLocaleDateString()}...`);
+    }
+    const posts = await fetchUserPosts(userId, (count) => {
+      onStatus(`Fetching posts: ${count} new...`);
+    }, minDate);
+    const comments = await fetchUserComments(userId, (count) => {
+      onStatus(`Fetching comments: ${count} new...`);
+    }, minDate);
+    const newItems = [...posts, ...comments];
+    if (newItems.length > 0) {
+      onStatus(`Found ${newItems.length} new items. Merging...`);
+      const existingIds = new Set(state2.items.map((i) => i._id));
+      const uniqueNewItems = newItems.filter((i) => !existingIds.has(i._id));
+      state2.items = [...uniqueNewItems, ...state2.items];
+      state2.items.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+      await saveArchiveData(username, uniqueNewItems, syncStartTime);
+      onStatus(`Sync complete. ${state2.items.length} total items.`);
+    } else {
+      onStatus(`Up to date. (${state2.items.length} items)`);
+      await saveArchiveData(username, [], syncStartTime);
+    }
   };
   const initReader = async () => {
     const route = getRoute();
@@ -8614,6 +9112,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     if (route.type === "forum-injection") {
       setupHeaderInjection();
+      setupProfileInjection();
       return;
     }
     if (route.type === "ai-studio") {
@@ -8659,7 +9158,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.586"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

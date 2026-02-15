@@ -21,7 +21,7 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 ## 📖 Key Commands
 - **Dev**: `npm run dev:power-reader` | `dev:playground` (HMR enabled).
 - **Build**: `npm run build:power-reader` | `build:playground` (Auto-runs `npm audit`, patches version).
-- **Test**: `npm test` (all) | `npm run test:power-reader` (E2E) | `npx playwright test --debug`.
+- **Test**: `npm test` (all) | `npm run test:power-reader` (E2E) | `npx playwright test`.
 - **Tooling**: `npm run codegen` (types) | `update-schema` (latest LW API). `codegen` runs automatically on `dev`/`build`.
 
 ## 📜 Conventions & Gotchas

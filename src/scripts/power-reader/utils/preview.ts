@@ -878,12 +878,22 @@ export function createAuthorBySlugPreviewFetcher(slug: string): () => Promise<st
  * Helper to render user preview html
  */
 function renderUserPreview(user: any): string {
+  const archiveLink = `/reader?view=archive&username=${user.slug || user.username}`;
   return `
     <div class="pr-preview-header">
-      <strong>${escapeHtml(user.displayName || user.username || 'Unknown')}</strong>
-      <span style="color: #666; margin-left: 10px;">
-        ${Math.round(user.karma)} karma · @${escapeHtml(user.username || '')}
-      </span>
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+        <div style="flex: 1;">
+            <strong>${escapeHtml(user.displayName || user.username || 'Unknown')}</strong>
+            <div style="color: #666; font-size: 0.9em;">
+                ${Math.round(user.karma)} karma · @${escapeHtml(user.username || '')}
+            </div>
+        </div>
+        <a href="${archiveLink}" 
+           class="pr-archive-link"
+           style="background: var(--pr-bg-secondary); border: 1px solid var(--pr-border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.8em; color: var(--pr-text-primary); text-decoration: none; white-space: nowrap;">
+            📂 Archive
+        </a>
+      </div>
     </div>
     <div class="pr-preview-content">
       ${user.htmlBio || '<i>(No bio provided)</i>'}

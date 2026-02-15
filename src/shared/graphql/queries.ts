@@ -333,6 +333,7 @@ export const GET_USER_POSTS = /* GraphQL */ `
       selector: {
         userPosts: {
           userId: $userId
+          sortedBy: "newest"
         }
       },
       limit: $limit,
@@ -352,6 +353,7 @@ export const GET_USER_COMMENTS = /* GraphQL */ `
       selector: {
         profileComments: {
           userId: $userId
+          sortBy: "newest"
         }
       },
       limit: $limit,

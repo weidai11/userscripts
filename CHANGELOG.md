@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.587] - 2026-02-15
+
+### Fixed
+- **Profile Injection Robustness ([P2])**: Added fallback selectors (`.ProfilePage-header`, `.UsersProfile-header`) for profile archive button injection, ensuring Compatibility with desktop views where the mobile-specific container might be absent.
+- **Sync Reliability ([P1])**: Added explicit `sortedBy: "newest"` (posts) and `sortBy: "newest"` (comments) to GraphQL queries to guarantee the newest-first ordering required for stable incremental sync watermarks.
+- **Code Safety**: Replaced a risky non-null assertion in the archive rendering logic with safe optional chaining.
+
+## [1.2.583] - 2026-02-15
+
+### Fixed
+- **Archive Sync Integrity ([P1])**:
+    - **Stable Watermark**: The sync process now uses the `syncStartTime` (captured at the beginning of the operation) as the watermark for the next fetch. This prevents data loss where items posted during the sync window (between start and end) could be skipped in subsequent updates.
+    - **Error Resilience**: Wrapped the background sync process in a dedicated error handler. Network failures during sync no longer crash the offline archive view, ensuring cached data remains accessible.
+- **Profile Injection ([P2])**: The "Archive" button on user profiles now correctly updates its URL when navigating between different users in the SPA, even if the button element is reused by the framework.
+
+## [1.2.582] - 2026-02-15
+
+### Added
+- **User Archive 2.0 (Phase 2 Complete)**:
+    - **Thread View**: Implemented a context-rich "Thread View" that displays user comments alongside their parent chain and root post, reconstructing the full conversation.
+    - **Context Fetching**: Added logic to automatically fetch missing parent comments when viewing threads, ensuring complete context even for deep replies.
+    - **Sorting & Views**: Full sorting support (Date, Karma, Reply-To) and view mode switching (Card, Index, Thread).
+    - **Search Refinement**: Improved the client-side search to strip HTML tags, matching queries against clean text content.
+    - **Access Point**: Added a `📂 Archive` button to the User Hover Preview for quick access to any user's history.
+
+## [1.2.576] - 2026-02-14
+
+### Added
+- **User Archive 2.0 (Phase 2 Progress)**: Enhanced the archive with syncing and filtering capabilities.
+    - **Incremental Sync**: Implemented logic to fetch only new items based on the last sync timestamp, significantly reducing bandwidth and sync time for returning users.
+    - **Search Filtering**: Added a real-time regex/text search bar to filter the archive feed instantly.
+    - **Pagination**: Added a "Load More" button and virtualization limit (50 items) to prevent browser freezing when rendering large histories.
+
 ## [1.2.571] - 2026-02-15
 
 ### Fixed

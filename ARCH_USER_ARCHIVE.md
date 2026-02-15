@@ -7,25 +7,27 @@ Transform the user profile into a powerful, offline-first research tool that agg
 
 ## 📅 Phased Implementation Plan
 
-### Phase 1: Foundation & Data Layer
+### Phase 1: Foundation & Data Layer (✅ Completed)
 **Goal**: Fetch, store, and display massive amounts of data without freezing the browser.
 - **Bulk Ingestion**: Specialized data loader to fetch 10,000+ items via pagination loops.
 - **Smart Caching (IndexedDB)**: Persist full history locally. Subsequent visits only fetch *new* items since the last sync watermark.
 - **Unified Feed**: A single chronological stream merging `Post` and `Comment` objects.
-- **Threaded Context**: Group comments by thread, fetching surrounding context (parents/replies) from other users to reconstruct conversations.
+- **Threaded Context**: (Pending) Group comments by thread, fetching surrounding context (parents/replies) from other users to reconstruct conversations.
 
-### Phase 2: Parity & Search (Legacy Features)
+### Phase 2: Parity & Search (✅ Completed)
 **Goal**: Match and exceed the utility of `lw_user_archive.html`.
-- **Client-Side Filters**: Instant regex filtering on body text.
-- **Sorting**:
+- **Client-Side Filters (✅ Done)**: Instant regex filtering on body text via search bar.
+- **Pagination (✅ Done)**: "Load More" virtualization to handle large datasets.
+- **Sorting (✅ Done)**:
   - **Karma**: Best/Worst takes.
   - **Date**: Oldest/Newest.
   - **Reply-To**: Group by interlocutor.
-- **View Modes**:
+- **View Modes (✅ Done)**:
   - **Card View**: Full content (Power Reader style).
   - **Index View**: Dense list of titles/snippets.
   - **Thread View**: Context-heavy view focusing on conversation trees.
-- **Reader Integration**: `[View in Archive]` buttons on authors in the main feed.
+- ✅ **Profile Page Integration**: Injected "Archive" button on user profile pages.
+- ✅ **Feed Integration**: `[View in Archive]` buttons on user hover cards.
 
 ### Phase 3: Advanced Intelligence
 **Goal**: Analytics and AI capabilities.
@@ -149,9 +151,11 @@ Since the Archive relies heavily on IndexedDB and massive data sets, standard E2
     *   Test IndexedDB reads/writes using `fake-indexeddb` in Node environment.
     *   Verify schema upgrades (if any).
 
-3.  **E2E Tests (`tests/archive.spec.ts`)**:
+3.  **E2E Tests (`tests/archive-route.spec.ts`)**:
     *   **Mocked**: Load a fake user with 50 items. Verify filtering (`regex`) and sorting (`karma`) works in the UI.
-    *   **Live (Sanity)**: One test to hit the real `userComments` endpoint to ensure schema compliance.
+    *   **Context Fetching**: Verifies that threaded view correctly fetches and renders missing parent context.
+    *   **Profile Injection**: `tests/profile-injection.spec.ts` verifies ARCHIVE button injection and SPA navigation updates.
+    *   **Live (Sanity)**: `tests/api-sanity.spec.ts` hits the real GraphQL endpoint to ensure schema compliance for all fields.
 
 ---
 

@@ -568,13 +568,25 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 ### 26. User Archive Mode
 The Power Reader supports a dedicated "User Archive" mode for browsing a user's entire history (posts and comments) in a unified, searchable feed.
 
-- **URL Pattern**: `/reader?view=archive&username=[username]`
-- **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for the complete feature specification, architecture, and implementation plan.
-- **Key Features**:
-  - Offline-first storage (IndexedDB).
-  - Bulk ingestion of full user history.
-  - Client-side filtering and sorting.
-  - Threaded context reconstruction.
+- **[PR-UARCH-01] Route Activation**: Archive mode activates only on `/reader?view=archive&username=[username]`.
+- **[PR-UARCH-02] Missing Username Fallback**: If `view=archive` is present but `username` is missing, the route falls back to normal `/reader` mode (no archive init).
+- **[PR-UARCH-03] Cache-First Boot**: On init, the archive MUST load IndexedDB data first and render cached items immediately when available.
+- **[PR-UARCH-04] Background Sync**: After cache load, archive mode performs an incremental sync for posts and comments newer than the stored watermark.
+- **[PR-UARCH-05] Stable Sync Watermark**: The persisted `lastSyncDate` watermark MUST be a stable value captured at sync start (not sync end) to avoid skipping in-flight items created during the sync window.
+- **[PR-UARCH-06] Non-Destructive Sync Failure**: If background sync fails after cached items are shown, the UI MUST keep showing cached data and report sync failure in status text (must not replace view with a fatal error screen).
+- **[PR-UARCH-07] Merge Semantics**: New archive items are merged by `_id` without duplicates, then sorted by `postedAt` descending for canonical in-memory order.
+- **[PR-UARCH-08] Search Behavior**: Archive search supports regex filtering; invalid regex input MUST gracefully fall back to case-insensitive text matching.
+- **[PR-UARCH-09] Sort Modes**: Archive supports `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
+- **[PR-UARCH-10] View Modes**: Archive supports `card`, `index`, and `thread` views.
+- **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
+- **[PR-UARCH-12] Progressive Rendering**: Archive initially renders a fixed page of items and supports incremental "Load More" expansion without refetching already loaded data.
+- **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/reader?view=archive&username=[slug-or-username]`.
+- **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
+
+### 27. Profile Archive Injection
+
+- **[PR-INJECT-02] Profile Button Injection**: On user profile routes (`/users/slug` and `/users/id/slug`), inject an `ARCHIVE` button into `.ProfilePage-mobileProfileActions` linking to `/reader?view=archive&username=[slug]`.
+- **[PR-INJECT-03] SPA Route Drift Handling**: During client-side profile navigation, the archive button MUST be re-injected if removed and its existing `href` MUST be updated when the username changes.
 
 ---
 
