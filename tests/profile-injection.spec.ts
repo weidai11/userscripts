@@ -118,4 +118,175 @@ test.describe('Profile Injection [PR-INJECT-02]', () => {
         // Usage of new RegExp to be safe about encoding
         await expect(button).toHaveAttribute('href', new RegExp(`username=${user2}`), { timeout: 5000 });
     });
+
+    test('supports /users/id/slug URL format [PR-INJECT-02]', async ({ page }) => {
+        const userId = 'user-id-12345';
+        const slug = 'john-doe';
+
+        // Mock the profile page with /users/id/slug format
+        await page.route(`https://www.lesswrong.com/users/${userId}/${slug}`, async route => {
+            await route.fulfill({
+                contentType: 'text/html',
+                body: `
+                    <html>
+                        <head></head>
+                        <body>
+                            <div class="ProfilePage-profileHeader">
+                                <div class="ProfilePage-profileNameLink">John Doe</div>
+                            </div>
+                            <div class="ProfilePage-mobileProfileActions">
+                                <button class="MuiButtonBase-root">Subscribe</button>
+                            </div>
+                        </body>
+                    </html>
+                `
+            });
+        });
+
+        const scriptPath = path.join(__dirname, '../dist/power-reader.user.js');
+        const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+
+        // Navigate to /users/id/slug URL
+        await page.goto(`https://www.lesswrong.com/users/${userId}/${slug}`);
+
+        // Mock GM APIs
+        await page.evaluate(() => {
+            (window as any).GM_addStyle = (css: string) => {
+                const style = document.createElement('style');
+                style.textContent = css;
+                document.head.appendChild(style);
+            };
+            (window as any).GM_getValue = () => null;
+            (window as any).GM_setValue = () => { };
+            (window as any).GM_log = () => { };
+        });
+
+        await page.evaluate(scriptContent);
+
+        // Verify button is injected with slug as username
+        const button = page.locator('#pr-profile-archive-button');
+        await expect(button).toBeVisible({ timeout: 5000 });
+        await expect(button).toHaveAttribute('href', `/reader?view=archive&username=${slug}`);
+    });
+
+    test('updates href without container remount on SPA navigation [PR-INJECT-03]', async ({ page }) => {
+        const user1 = 'alice-spa';
+        const user2 = 'bob-spa';
+
+        // Mock routes for both users
+        await page.route('**/users/*', async route => {
+            await route.fulfill({
+                contentType: 'text/html',
+                body: `
+                    <html>
+                        <body>
+                            <div class="ProfilePage-mobileProfileActions">
+                                <button class="MuiButtonBase-root">Subscribe</button>
+                            </div>
+                        </body>
+                    </html>
+                `
+            });
+        });
+
+        // Start at user 1
+        await page.goto(`https://www.lesswrong.com/users/${user1}`);
+
+        // Mock GM APIs
+        await page.evaluate(() => {
+            (window as any).GM_addStyle = () => { };
+            (window as any).GM_getValue = () => null;
+            (window as any).GM_setValue = () => { };
+            (window as any).GM_log = () => { };
+        });
+
+        const scriptPath = path.join(__dirname, '../dist/power-reader.user.js');
+        const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+        await page.evaluate(scriptContent);
+
+        // Verify User 1 button
+        const button = page.locator('#pr-profile-archive-button');
+        await expect(button).toHaveAttribute('href', new RegExp(`username=${user1}`));
+
+        // Simulate SPA navigation - URL change plus DOM mutation to trigger observer
+        await page.evaluate((u) => {
+            window.history.pushState({}, '', `/users/${u}`);
+            // Add a mutation to trigger the observer (append and remove a dummy element)
+            const container = document.querySelector('.ProfilePage-mobileProfileActions');
+            if (container) {
+                const dummy = document.createElement('span');
+                dummy.id = 'spa-nav-trigger';
+                container.appendChild(dummy);
+                dummy.remove();
+            }
+        }, user2);
+
+        // Wait for MutationObserver to detect the change using polling
+        await expect(async () => {
+            const href = await button.getAttribute('href');
+            expect(href).toMatch(new RegExp(`username=${user2}`));
+        }).toPass({ timeout: 5000 });
+    });
+
+    test('re-injects button after node removal on same profile [PR-INJECT-03]', async ({ page }) => {
+        const username = 'persistent-user';
+
+        // Mock the profile page
+        await page.route(`https://www.lesswrong.com/users/${username}`, async route => {
+            await route.fulfill({
+                contentType: 'text/html',
+                body: `
+                    <html>
+                        <head></head>
+                        <body>
+                            <div class="ProfilePage-profileHeader">
+                                <div class="ProfilePage-profileNameLink">Persistent User</div>
+                            </div>
+                            <div class="ProfilePage-mobileProfileActions" id="action-container">
+                                <button class="MuiButtonBase-root">Subscribe</button>
+                            </div>
+                        </body>
+                    </html>
+                `
+            });
+        });
+
+        const scriptPath = path.join(__dirname, '../dist/power-reader.user.js');
+        const scriptContent = fs.readFileSync(scriptPath, 'utf8');
+
+        await page.goto(`https://www.lesswrong.com/users/${username}`);
+
+        // Mock GM APIs
+        await page.evaluate(() => {
+            (window as any).GM_addStyle = (css: string) => {
+                const style = document.createElement('style');
+                style.textContent = css;
+                document.head.appendChild(style);
+            };
+            (window as any).GM_getValue = () => null;
+            (window as any).GM_setValue = () => { };
+            (window as any).GM_log = () => { };
+        });
+
+        await page.evaluate(scriptContent);
+
+        // Verify button is initially injected
+        const button = page.locator('#pr-profile-archive-button');
+        await expect(button).toBeVisible({ timeout: 5000 });
+        await expect(button).toHaveAttribute('href', `/reader?view=archive&username=${username}`);
+
+        // Simulate React re-render by removing and re-adding the entire container content
+        // This mimics what happens when React re-renders the profile actions
+        await page.evaluate(() => {
+            const container = document.querySelector('.ProfilePage-mobileProfileActions');
+            if (container) {
+                // Clear the container (removes button and other elements)
+                container.innerHTML = '<button class="MuiButtonBase-root">Subscribe</button>';
+            }
+        });
+
+        // Wait for MutationObserver to detect the change and re-inject button
+        await expect(page.locator('#pr-profile-archive-button')).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('#pr-profile-archive-button')).toHaveAttribute('href', `/reader?view=archive&username=${username}`);
+    });
 });
