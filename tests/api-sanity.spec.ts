@@ -5,7 +5,7 @@
  *
  * Run with: npx playwright test tests/api-sanity.spec.ts
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 
 const GRAPHQL_URL = 'https://www.lesswrong.com/graphql';
 
@@ -24,31 +24,47 @@ const clip = (s: string, max = 800): string => (s.length > max ? `${s.slice(0, m
 const formatErrors = (errors?: GraphQLError[]): string => JSON.stringify(errors ?? [], null, 2);
 
 const postGraphQL = async (
-  request: any,
+  page: Page,
   label: string,
   query: string,
   variables?: Record<string, unknown>,
 ): Promise<GraphQLResponse> => {
-  const response = await request.post(GRAPHQL_URL, {
-    data: variables ? { query, variables } : { query },
-  });
+  const result: any = await page.evaluate(async ({ url, query, variables }) => {
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(variables ? { query, variables } : { query }),
+      });
+      const text = await resp.text();
+      return {
+        ok: resp.ok,
+        status: resp.status,
+        contentType: resp.headers.get('content-type') || '',
+        text,
+      };
+    } catch (e: any) {
+      return { error: e.toString() };
+    }
+  }, { url: GRAPHQL_URL, query, variables });
 
-  const status = response.status();
-  const headers = response.headers();
-  const contentType = headers['content-type'] || '';
-  const text = await response.text();
+  if (result.error) {
+    throw new Error(`[api-sanity] ${label} fetch failed in browser: ${result.error}`);
+  }
 
-  if (!response.ok()) {
-    console.error(`[api-sanity] ${label} HTTP ${status} content-type=${contentType}`);
-    console.error(`[api-sanity] ${label} raw body: ${clip(text)}`);
+  if (!result.ok) {
+    console.error(`[api-sanity] ${label} HTTP ${result.status} content-type=${result.contentType}`);
+    console.error(`[api-sanity] ${label} raw body: ${clip(result.text)}`);
   }
 
   let json: GraphQLResponse;
   try {
-    json = JSON.parse(text);
+    json = JSON.parse(result.text);
   } catch {
-    console.error(`[api-sanity] ${label} non-JSON response (status=${status}, content-type=${contentType})`);
-    console.error(`[api-sanity] ${label} raw body: ${clip(text)}`);
+    console.error(`[api-sanity] ${label} non-JSON response (status=${result.status}, content-type=${result.contentType})`);
+    console.error(`[api-sanity] ${label} raw body: ${clip(result.text)}`);
     throw new Error(`[api-sanity] ${label} expected JSON but got non-JSON response`);
   }
 
@@ -66,7 +82,16 @@ let expectedTarget: { _id: string; postedAt: string };
 test.describe('Live API Sanity (batched)', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test.beforeAll(async ({ request }) => {
+  test.beforeAll(async ({ browser }) => {
+    // Use a realistic user agent to avoid bot detection/rate limiting
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+    const page = await context.newPage();
+
+    console.log('[api-sanity] Navigating to LessWrong home to initialize session cookies...');
+    await page.goto('https://www.lesswrong.com/', { waitUntil: 'domcontentloaded' });
+
     const queryA = `
       query ApiSanityBatchA {
         core: comments(selector: { allRecentComments: {} }, limit: 20) {
@@ -133,7 +158,7 @@ test.describe('Live API Sanity (batched)', () => {
       }
     `;
 
-    batchA = await postGraphQL(request, 'BatchA', queryA);
+    batchA = await postGraphQL(page, 'BatchA', queryA);
     expect(batchA.errors).toBeUndefined();
 
     const coreResults = batchA.data?.core?.results || [];
@@ -164,11 +189,13 @@ test.describe('Live API Sanity (batched)', () => {
       }
     `;
 
-    batchB = await postGraphQL(request, 'BatchB', queryB, {
+    batchB = await postGraphQL(page, 'BatchB', queryB, {
       id: expectedTarget._id,
       parentCommentId,
     });
     expect(batchB.errors).toBeUndefined();
+
+    await context.close();
   });
 
   test('verify comment, post, and user fields used by power-reader', async () => {
@@ -245,7 +272,14 @@ test.describe('Live API Sanity (batched)', () => {
     expect(batchB.data?.replies?.results).toBeDefined();
   });
 
-  test('verify performVoteComment mutation structure via neutral vote on nonexistent doc', async ({ request }) => {
+  test('verify performVoteComment mutation structure via neutral vote on nonexistent doc', async ({ browser }) => {
+    // Need a fresh page since the beforeAll context is closed
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
+    const page = await context.newPage();
+    await page.goto('https://www.lesswrong.com/', { waitUntil: 'domcontentloaded' });
+
     const mutation = `
       mutation ApiSanityVote($documentId: String!, $voteType: String!, $extendedVote: JSON) {
         performVoteComment(documentId: $documentId, voteType: $voteType, extendedVote: $extendedVote) {
@@ -263,7 +297,7 @@ test.describe('Live API Sanity (batched)', () => {
       }
     `;
 
-    const json = await postGraphQL(request, 'VoteMutation', mutation, {
+    const json = await postGraphQL(page, 'VoteMutation', mutation, {
       documentId: 'nonexistent_sanity_check',
       voteType: 'neutral',
     });
@@ -278,5 +312,7 @@ test.describe('Live API Sanity (batched)', () => {
       fieldErrors,
       `[api-sanity] VoteMutation schema error. Full server errors:\n${formatErrors(json.errors)}`,
     ).toHaveLength(0);
+
+    await context.close();
   });
 });

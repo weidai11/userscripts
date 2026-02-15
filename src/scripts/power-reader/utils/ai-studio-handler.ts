@@ -219,8 +219,10 @@ async function waitForResponse(timeoutMs: number = 180000): Promise<string> {
 
                 const container = lastTurn.querySelector('div.model-response-content, .message-content, .turn-content') || lastTurn;
                 const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ''));
+                const parsed = new DOMParser().parseFromString(cleanHtml, 'text/html');
+                const cleanText = (parsed.body.textContent || '').replace(/\s+/g, ' ').trim();
 
-                if (cleanHtml.length > 10) {
+                if (cleanText.length > 10) {
                     return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
                 }
             }

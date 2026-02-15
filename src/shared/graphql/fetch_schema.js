@@ -100,59 +100,63 @@ const INTROSPECTION_QUERY = `
 `;
 
 async function fetchSchema() {
-    const browser = await chromium.launch();
-    const page = await browser.newPage();
+  const browser = await chromium.launch();
+  // Using a realistic User-Agent to reduce chance of blocking
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  });
+  const page = await context.newPage();
 
-    console.log('Navigating to LessWrong...');
-    await page.goto('https://www.lesswrong.com/', { waitUntil: 'domcontentloaded' });
+  console.log('Navigating to LessWrong...');
+  await page.goto('https://www.lesswrong.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    console.log('Fetching schema...');
+  console.log('Fetching schema...');
 
-    try {
-        const result = await page.evaluate(async (query) => {
-            const response = await fetch('https://www.lesswrong.com/graphql', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
-            });
-            return response.json();
-        }, INTROSPECTION_QUERY);
+  try {
+    const result = await page.evaluate(async (query) => {
+      const response = await fetch('https://www.lesswrong.com/graphql', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      return response.json();
+    }, INTROSPECTION_QUERY);
 
-        if (result.errors) {
-            console.error('GraphQL Errors:', result.errors);
-            process.exit(1);
-        }
-
-        const schema = result.data;
-
-        // --- Workaround for ForumMagnum Schema Bug ---
-        // Some versions of the server return an EmptyViewInput with no fields, 
-        // which is invalid according to GraphQL specifications and crashes graphql-codegen.
-        const emptyViewInput = schema.__schema.types.find(t => t.name === 'EmptyViewInput');
-        if (emptyViewInput && (!emptyViewInput.inputFields || emptyViewInput.inputFields.length === 0)) {
-            console.log('Fixing EmptyViewInput bug in schema (adding dummy field)...');
-            emptyViewInput.inputFields = [{
-                name: "_unused",
-                description: "Unused field to satisfy GraphQL-JS",
-                type: { kind: "SCALAR", name: "Boolean", ofType: null },
-                defaultValue: null
-            }];
-        }
-
-        const outputPath = path.resolve(__dirname, 'lw_schema.json');
-        // Note: We wrap it in { data: ... } to match the format expected by some tools if necessary,
-        // but graphql-codegen usually wants the schema object directly or the { data } wrapper.
-        // The previous successful codegen used a file with { data: { __schema: ... } }.
-        fs.writeFileSync(outputPath, JSON.stringify({ data: schema }, null, 2));
-        console.log(`Schema successfully saved to ${outputPath}`);
-        console.log('You can now run "npm run codegen" to update type definitions.');
-
-    } catch (err) {
-        console.error('Failed to fetch schema:', err);
-        process.exit(1);
-    } finally {
-        await browser.close();
+    if (result.errors) {
+      console.error('GraphQL Errors:', result.errors);
+      process.exit(1);
     }
+
+    const schema = result.data;
+
+    // --- Workaround for ForumMagnum Schema Bug ---
+    // Some versions of the server return an EmptyViewInput with no fields, 
+    // which is invalid according to GraphQL specifications and crashes graphql-codegen.
+    const emptyViewInput = schema.__schema.types.find(t => t.name === 'EmptyViewInput');
+    if (emptyViewInput && (!emptyViewInput.inputFields || emptyViewInput.inputFields.length === 0)) {
+      console.log('Fixing EmptyViewInput bug in schema (adding dummy field)...');
+      emptyViewInput.inputFields = [{
+        name: "_unused",
+        description: "Unused field to satisfy GraphQL-JS",
+        type: { kind: "SCALAR", name: "Boolean", ofType: null },
+        defaultValue: null
+      }];
+    }
+
+    const outputPath = path.resolve(__dirname, 'lw_schema.json');
+    // Note: We wrap it in { data: ... } to match the format expected by some tools if necessary,
+    // but graphql-codegen usually wants the schema object directly or the { data } wrapper.
+    // The previous successful codegen used a file with { data: { __schema: ... } }.
+    fs.writeFileSync(outputPath, JSON.stringify({ data: schema }, null, 2));
+    console.log(`Schema successfully saved to ${outputPath}`);
+    console.log('You can now run "npm run codegen" to update type definitions.');
+
+  } catch (err) {
+    console.error('Failed to fetch schema:', err);
+    process.exit(1);
+  } finally {
+    await browser.close();
+  }
 }
 
 fetchSchema();

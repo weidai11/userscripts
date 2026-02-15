@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.571] - 2026-02-15
+
+### Fixed
+- **Post Collapse Consistency ([P2])**: Restored collapse/expand behavior for pre-load post placeholders by toggling both `.pr-post-body-container` and `.pr-post-content`, so collapsing during load no longer leaves visible placeholder content.
+- **AI Studio Completion Gate ([P2])**: Updated AI response readiness detection to use extracted text length from sanitized HTML instead of raw markup length, preventing early completion on markup-only/empty responses.
+- **Read-More Reachability ([P2])**: Kept the in-body "Read More" control inside the visible truncated overlay so it remains clickable for long posts.
+
 ## [1.2.567] - 2026-02-15
 
 ### Improved

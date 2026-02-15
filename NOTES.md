@@ -269,6 +269,13 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Problem**: Adding logic to check for post content visibility (e.g., in `linkPreviews.ts`) can break existing E2E tests if their mock `Post` objects only contain the `title` and `_id`, but the logic now returns `null` if `htmlBody` is missing.
 - **Solution**: Always provide a non-empty `htmlBody` in your test mocks for "Fully Loaded" posts, and specifically test with empty `htmlBody` for header-only (unloaded) scenarios.
 
+
+
 ### Data Attributes for Test Targeting
 - **Problem**: In complex UI tests (like `preview-smart-positioning.ui.spec.ts`), using generic classes like `.pr-find-parent` and relying on `.first()` or `.last()` is brittle. If worker A and worker B both use the same mock HTML, Playwright might get confused or match multiple elements in a way that breaks "Strict Mode".
 - **Solution**: Inject unique metadata into the test HTML. Using `data-side="left"` and `data-side="right"` allows locators to be perfectly unambiguous even if the DOM structure is identical across different test cases.
+
+### 429 Rate Limiting in API Tests (Vercel)
+- **Problem**: The `tests/api-sanity.spec.ts` suite hits the live `lesswrong.com/graphql` endpoint to verify schema integrity. These requests are frequently blocked by Vercel's security checkpoint with a `429 Too Many Requests` status, causing the test suite to fail even if the application code is correct.
+- **Diagnosis**: Check the test log for `[api-sanity] BatchA HTTP 429` or `Vercel Security Checkpoint`.
+- **Solution**: This is an external environment issue, not a code bug. If this occurs, verify that the other mocked tests pass. You can try to run the test individually (`npx playwright test tests/api-sanity.spec.ts`), but persistent failures may require manual validation or waiting for the rate limit to clear.

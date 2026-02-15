@@ -1,7 +1,7 @@
 {
   "name": "userscripts",
   "private": true,
-  "version": "1.2.571",
+  "version": "1.2.573",
   "type": "module",
   "scripts": {
     "dev:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite",

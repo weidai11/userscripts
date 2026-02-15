@@ -43,8 +43,9 @@ import { isElementFullyVisible } from '../utils/preview';
  */
 export const collapsePost = (post: Element): void => {
   post.querySelector('.pr-post-comments')?.classList.add('collapsed');
-  // Use container to hide entire body including overlay/read-more
+  // Hide both the full-body container and pre-load placeholder content.
   post.querySelector('.pr-post-body-container')?.classList.add('collapsed');
+  post.querySelector('.pr-post-content')?.classList.add('collapsed');
 
   syncPostToggleButtons(post, true);
 };
@@ -54,8 +55,9 @@ export const collapsePost = (post: Element): void => {
  */
 export const expandPost = (post: Element): void => {
   post.querySelector('.pr-post-comments')?.classList.remove('collapsed');
-  // Use container to show entire body
+  // Restore both full-body container and pre-load placeholder content.
   post.querySelector('.pr-post-body-container')?.classList.remove('collapsed');
+  post.querySelector('.pr-post-content')?.classList.remove('collapsed');
 
   syncPostToggleButtons(post, false);
 };

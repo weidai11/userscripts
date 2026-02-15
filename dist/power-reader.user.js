@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.571
+// @version    1.2.573
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1218,7 +1218,9 @@ dirty.indexOf("<") === -1) {
           if (!editIcon) return setTimeout(checkCompletion, 1e3);
           const container = lastTurn.querySelector("div.model-response-content, .message-content, .turn-content") || lastTurn;
           const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ""));
-          if (cleanHtml.length > 10) {
+          const parsed = new DOMParser().parseFromString(cleanHtml, "text/html");
+          const cleanText = (parsed.body.textContent || "").replace(/\s+/g, " ").trim();
+          if (cleanText.length > 10) {
             return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
           }
         }
@@ -2658,7 +2660,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.571"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.573"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6173,7 +6175,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6316,7 +6318,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -7100,11 +7102,13 @@ currentCommentId = null;
   const collapsePost = (post) => {
     post.querySelector(".pr-post-comments")?.classList.add("collapsed");
     post.querySelector(".pr-post-body-container")?.classList.add("collapsed");
+    post.querySelector(".pr-post-content")?.classList.add("collapsed");
     syncPostToggleButtons(post, true);
   };
   const expandPost = (post) => {
     post.querySelector(".pr-post-comments")?.classList.remove("collapsed");
     post.querySelector(".pr-post-body-container")?.classList.remove("collapsed");
+    post.querySelector(".pr-post-content")?.classList.remove("collapsed");
     syncPostToggleButtons(post, false);
   };
   const syncPostToggleButtons = (post, isCollapsed) => {
@@ -8655,7 +8659,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.571"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.573"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
