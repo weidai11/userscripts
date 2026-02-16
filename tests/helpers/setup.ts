@@ -199,12 +199,12 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
 
     await page.addInitScript((data: SerializedMockData) => {
 
-        const win = (window as any);
-        win.__GM_CALLS = {};
-        if (data.testMode) {
-            win.__PR_TEST_MODE__ = true;
-            win.PR_TEST_SCROLL_DELAY = 100;
-        }
+    const win = (window as any);
+    win.__GM_CALLS = {};
+    if (data.testMode) {
+      win.__PR_TEST_MODE__ = true;
+      win.PR_TEST_SCROLL_DELAY = 100;
+    }
 
         const storage: Record<string, any> = {};
         for (const [key, value] of Object.entries(data.storage)) {

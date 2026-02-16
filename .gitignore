@@ -24,6 +24,7 @@ dist-ssr
 *.sln
 *.sw?
 .jj/
+.jujutsu/
 
 # Test reports and results
 playwright-report/
@@ -37,7 +38,6 @@ last-test-report.json
 .env.local
 
 # Tool-specific / Accidental
--p/
 power_reader_screenshot.png
 reactions_update.txt
 
@@ -55,3 +55,5 @@ GEMINI.md
 *.tmp
 *.bak
 *.old
+tmp/
+test-results.json/

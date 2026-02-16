@@ -8,7 +8,7 @@ test.describe('Power Reader Archive Sync', () => {
         scriptContent = getScriptContent();
     });
 
-    test('cached archive remains visible when background sync throws [PR-UARCH-06]', async ({ page }) => {
+    test('[PR-UARCH-03][PR-UARCH-06] cached archive remains visible when background sync throws', async ({ page }) => {
         const username = 'SyncFail_User';
         const userId = 'u-sync-fail-user';
 
@@ -215,7 +215,7 @@ test.describe('Power Reader Archive Sync', () => {
         }).toPass({ timeout: 10000 });
     });
 
-    test('incremental sync fetches new items', async ({ page }) => {
+    test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items', async ({ page }) => {
         const username = 'Test_User';
         const userId = 'u-test-user';
         

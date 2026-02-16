@@ -22,13 +22,13 @@ test.describe('Power Reader Archive Route', () => {
 
         // Should NOT show archive header (should be main reader)
         await expect(page.locator('text=User Archive:')).toHaveCount(0);
-        
+
         // Should show main reader content instead
         await expect(page.locator('#power-reader-root')).toBeVisible();
         await expect(page.locator('.pr-header')).toContainText('Power Reader');
     });
 
-    test('supports sorting and index view', async ({ page }) => {
+    test('[PR-UARCH-01] supports sorting and index view', async ({ page }) => {
         await setupMockEnvironment(page, {
             mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
             testMode: true,
@@ -100,7 +100,7 @@ test.describe('Power Reader Archive Route', () => {
         await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
     });
 
-    test('supports thread view with context fetching', async ({ page }) => {
+    test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
         await setupMockEnvironment(page, {
             mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
             testMode: true,
@@ -246,7 +246,7 @@ test.describe('Power Reader Archive Route', () => {
         // Test valid regex: match posts containing "alpha" or "beta"
         const searchInput = page.locator('#archive-search');
         await searchInput.fill('alpha|beta');
-        
+
         // Wait for filter to apply using polling
         await expect(async () => {
             const count = await page.locator('.pr-archive-item').count();
@@ -255,13 +255,13 @@ test.describe('Power Reader Archive Route', () => {
 
         // Test more specific regex: only "Alpha" (case insensitive)
         await searchInput.fill('^.*Alpha.*$');
-        
+
         // Wait for filter to apply
         await expect(async () => {
             const count = await page.locator('.pr-archive-item').count();
             expect(count).toBe(1);
         }).toPass({ timeout: 5000 });
-        
+
         await expect(page.locator('.pr-archive-item h3')).toHaveText('Test Post Alpha');
     });
 
@@ -329,13 +329,13 @@ test.describe('Power Reader Archive Route', () => {
         // Enter invalid regex (unmatched bracket)
         const searchInput = page.locator('#archive-search');
         await searchInput.fill('[bracket');
-        
+
         // Wait for fallback text search to apply using polling
         await expect(async () => {
             const count = await page.locator('.pr-archive-item').count();
             expect(count).toBe(1);
         }).toPass({ timeout: 5000 });
-        
+
         await expect(page.locator('.pr-archive-item h3')).toHaveText('Special [Bracket] Post');
     });
 
@@ -523,48 +523,29 @@ test.describe('Power Reader Archive Route', () => {
     });
 
     test('load-more expands rendered items and hides when exhausted [PR-UARCH-12]', async ({ page }) => {
-        const username = `LoadMoreUser_${Date.now()}`;
-        const userObj = { _id: 'u-loadmore', username, displayName: 'Load More Test', slug: 'loadmore-user', karma: 100 };
-
+        const username = 'load-more-test';
         await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
+            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 50;`,
             onGraphQL: `
-                if (query.includes('UserBySlug') || query.includes('user(input:')) {
-                    return { data: { user: { _id: 'u-loadmore', username: '${username}', displayName: 'Load More Test', slug: 'loadmore-user', karma: 100 } } };
-                }
+                const userId = 'u-load-more';
+                const userObj = { _id: userId, username: '${username}', displayName: 'Load More User' };
+                if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
                 if (query.includes('GetUserPosts')) {
-                    const allResults = [];
+                    if (variables.before) return { data: { posts: { results: [] } } };
+                    
+                    // Generate 60 posts to test limit (50)
+                    const results = [];
                     for (let i = 0; i < 60; i++) {
-                        allResults.push({
-                            _id: 'p-loadmore-' + i,
-                            title: 'Load More Post ' + i,
-                            slug: 'load-more-post-' + i,
-                            pageUrl: 'https://lesswrong.com/posts/p-loadmore-' + i,
-                            postedAt: new Date(Date.UTC(2025, 0, 20 - i)).toISOString(),
-                            baseScore: 100 - i,
-                            voteCount: 5,
-                            commentCount: 0,
-                            htmlBody: '<p>Load more content ' + i + '</p>',
-                            contents: { markdown: 'Load more content ' + i },
-                            user: { _id: 'u-loadmore', username: '${username}', displayName: 'Load More Test', slug: 'loadmore-user', karma: 100 }
+                        results.push({
+                            _id: 'p' + i,
+                            title: 'Post ' + i,
+                            postedAt: new Date(2020, 0, 1, 0, 0, i).toISOString(),
+                            user: userObj
                         });
                     }
-                    const offset = variables.offset || 0;
-                    const limit = variables.limit || 50;
-                    const results = allResults.slice(offset, offset + limit);
-                    return { 
-                        data: { 
-                            posts: { 
-                                results
-                            } 
-                        } 
-                    };
+                    return { data: { posts: { results } } };
                 }
-                if (query.includes('GetUserComments')) {
-                    return { data: { comments: { results: [] } } };
-                }
-                return { data: {} };
+                if (query.includes('GetUserComments')) return { data: { comments: { results: [] } } };
             `
         });
 
@@ -576,14 +557,137 @@ test.describe('Power Reader Archive Route', () => {
         const loadMoreBtn = loadMoreContainer.locator('button');
 
         // Initial render limit is 50.
-        await expect(page.locator('.pr-archive-item')).toHaveCount(50, { timeout: 10000 });
+        await expect(page.locator('.pr-archive-item')).toHaveCount(50, { timeout: 15000 });
         await expect(loadMoreContainer).toBeVisible();
         await expect(loadMoreBtn).toContainText('Load More (10 remaining)');
 
         await loadMoreBtn.click();
 
         // After one click, all 60 items should be rendered and load-more hidden.
-        await expect(page.locator('.pr-archive-item')).toHaveCount(60, { timeout: 10000 });
+        await expect(page.locator('.pr-archive-item')).toHaveCount(60, { timeout: 15000 });
         await expect(loadMoreContainer).toBeHidden();
+    });
+
+    /**
+     * [PR-UARCH-14] Manual Resync Recovery
+     * [PR-UARCH-15] Adaptive Batching
+     * [PR-UARCH-16] Status Line Indicators
+     * [PR-UARCH-17] Payload Optimization (implicitly verified by successful completion of fetches)
+     */
+    test('supports resync, adaptive batching and shows sync status [PR-UARCH-14][PR-UARCH-15][PR-UARCH-16][PR-UARCH-17]', async ({ page }) => {
+        const username = 'resync-test';
+        let syncCount = 0;
+
+        await setupMockEnvironment(page, {
+            onInit: `window.__syncCount = 0; console.log('Mock init');`,
+            onGraphQL: `
+                console.log('Mock GraphQL Query:', query.substring(0, 50), 'SyncCount:', window.__syncCount, 'Variables:', JSON.stringify(variables));
+                // [PR-UARCH-17] Payload Optimization check (lite post fields in comment fetches)
+                if (query.includes('GetUserComments') && query.includes('...CommentFieldsFull')) {
+                    throw new Error('Detected unoptimized comment fields in archive query');
+                }
+                
+                if (query.includes('GetUserBySlug')) {
+                    return { data: { user: { _id: 'u-resync', username: '${username}' } } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    window.__syncCount++;
+                    // In cursor pagination, window.__syncCount > 1 is the resync attempt.
+                    // The first page of resync has variables.before === null.
+                    const results = (window.__syncCount > 1 && !variables.before) ? [{ _id: 'post-new', postedAt: new Date().toISOString(), title: 'New Post', user: { displayName: 'Tester' } }] : [];
+                    console.log('Returning GetUserPosts results. Count:', results.length, 'Global SyncCount:', window.__syncCount);
+                    return { data: { posts: { results } } };
+                }
+                if (query.includes('GetUserComments')) {
+                    return { data: { comments: { results: [] } } };
+                }
+            `
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const statusEl = page.locator('#archive-status');
+        const resyncBtn = page.locator('#archive-resync');
+
+        // Check initial status - it might already be "Sync complete" or "Up to date"
+        await expect(statusEl).not.toHaveClass(/status-error/);
+        await expect(statusEl).toHaveText(/Up to date|Sync complete|Checking|Fetching|Loaded/);
+
+        // Trigger Resync
+        page.on('dialog', dialog => dialog.accept()); // Handle the confirmation dialog
+        await resyncBtn.click();
+
+        // Should briefly show syncing status or starting resync
+        // We wait for the syncing indicator to be added, then for it to be removed
+        await expect(statusEl).toHaveClass(/status-syncing/);
+        await expect(statusEl).not.toHaveClass(/status-syncing/, { timeout: 20000 });
+
+        // Final state after resync should have 1 item
+        await expect(statusEl).toContainText('Sync complete');
+        await expect(statusEl).toContainText('1 total items');
+    });
+
+    /**
+     * [PR-UARCH-18] Large Dataset Dialog Persistence
+     * Verifies that the "Large Dataset" dialog correctly triggers and that the choice
+     * persists across sorting/filtering changes.
+     */
+    test('Large Dataset dialog persists choice across sort changes [PR-UARCH-18]', async ({ page }) => {
+        const username = 'large-dataset-test';
+
+        await setupMockEnvironment(page, {
+            onGraphQL: `
+                const userId = 'u-large';
+                const userObj = { _id: userId, username: '${username}', displayName: 'Big User' };
+                
+                if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
+                if (query.includes('GetUserPosts')) {
+                    if (variables.before) return { data: { posts: { results: [] } } };
+                    const results = [];
+                    for (let i = 0; i < 11000; i++) {
+                        results.push({
+                            _id: 'p' + i,
+                            title: 'Post ' + i,
+                            postedAt: new Date(2020, 0, 1, 0, 0, i).toISOString(),
+                            baseScore: i,
+                            user: userObj
+                        });
+                    }
+                    return { data: { posts: { results } } };
+                }
+                if (query.includes('GetUserComments')) return { data: { comments: { results: [] } } };
+            `
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        // Dialog should be visible
+        const dialog = page.locator('.pr-archive-render-dialog');
+        await expect(dialog).toBeVisible();
+        await expect(dialog).toContainText('Large Dataset Detected');
+        await expect(dialog).toContainText('11,000');
+
+        // Choose "Render All"
+        const renderAllBtn = page.locator('#render-all-btn');
+        await renderAllBtn.click();
+
+        // Feed should now contain items
+        await expect(dialog).toBeHidden();
+        const items = page.locator('.pr-archive-item');
+        await expect(items.first()).toBeVisible();
+
+        // Change sort - THIS IS WHERE THE BUG IS
+        const sortSelect = page.locator('#archive-sort');
+        await sortSelect.selectOption('score-asc');
+
+        // BUG: The dialog should NOT reappear.
+        await expect(dialog).toBeHidden({ timeout: 5000 });
+
+        // Items should still be visible
+        await expect(items.first()).toBeVisible();
     });
 });

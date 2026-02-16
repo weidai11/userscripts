@@ -40,6 +40,14 @@ let lastReadStateFetch: number = 0;
 let cachedLoadFrom: string | null = null;
 let lastLoadFromFetch: number = 0;
 
+// Clear caches on module load if in test mode to prevent cross-test pollution
+if (typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__) {
+  cachedLoadFrom = null;
+  lastLoadFromFetch = 0;
+  cachedReadState = null;
+  lastReadStateFetch = 0;
+}
+
 /**
  * Get read comment IDs
  */

@@ -127,7 +127,7 @@ export const COMMENT_FIELDS = /* GraphQL */ `
     ...CommentFieldsCore
     contents { markdown }
     post {
-      ...PostFieldsFull
+      ...PostFieldsLite
     }
     latestChildren {
       _id
@@ -146,7 +146,7 @@ export const COMMENT_FIELDS = /* GraphQL */ `
     }
   }
   ${COMMENT_FIELDS_CORE}
-  ${POST_FIELDS_FULL}
+  ${POST_FIELDS_LITE}
 `;
 
 export const GET_ALL_RECENT_COMMENTS_LITE = /* GraphQL */ `
@@ -328,16 +328,16 @@ export const GET_THREAD_COMMENTS = /* GraphQL */ `
 `;
 
 export const GET_USER_POSTS = /* GraphQL */ `
-  query GetUserPosts($userId: String!, $limit: Int, $offset: Int) {
+  query GetUserPosts($userId: String!, $limit: Int, $before: String) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
           sortedBy: "newest"
+          before: $before
         }
       },
-      limit: $limit,
-      offset: $offset
+      limit: $limit
     ) {
       results {
         ...PostFieldsFull
@@ -348,23 +348,23 @@ export const GET_USER_POSTS = /* GraphQL */ `
 `;
 
 export const GET_USER_COMMENTS = /* GraphQL */ `
-  query GetUserComments($userId: String!, $limit: Int, $offset: Int) {
+  query GetUserComments($userId: String!, $limit: Int, $before: String) {
     comments(
       selector: {
-        profileComments: {
+        allRecentComments: {
           userId: $userId
+          before: $before
           sortBy: "newest"
         }
       },
-      limit: $limit,
-      offset: $offset
+      limit: $limit
     ) {
       results {
-        ...CommentFieldsFull
+        ...CommentFieldsLite
       }
     }
   }
-  ${COMMENT_FIELDS}
+  ${COMMENT_FIELDS_LITE}
 `;
 
 

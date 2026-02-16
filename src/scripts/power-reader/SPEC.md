@@ -572,21 +572,27 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-02] Missing Username Fallback**: If `view=archive` is present but `username` is missing, the route falls back to normal `/reader` mode (no archive init).
 - **[PR-UARCH-03] Cache-First Boot**: On init, the archive MUST load IndexedDB data first and render cached items immediately when available.
 - **[PR-UARCH-04] Background Sync**: After cache load, archive mode performs an incremental sync for posts and comments newer than the stored watermark.
+- **[PR-UARCH-15] Adaptive Cursor Pagination**: The background sync loader uses cursor-based pagination (via the `before` filter) to bypass API offset limits (typically 2000 items). It dynamically adjusts the pagination limit (between 50 and 1000 items) based on the measured duration of previous requests, targeting a ~2.5 second response time per batch to ensure reliability on unstable networks.
 - **[PR-UARCH-05] Stable Sync Watermark**: The persisted `lastSyncDate` watermark MUST be a stable value captured at sync start (not sync end) to avoid skipping in-flight items created during the sync window.
-- **[PR-UARCH-06] Non-Destructive Sync Failure**: If background sync fails after cached items are shown, the UI MUST keep showing cached data and report sync failure in status text (must not replace view with a fatal error screen).
+- **[PR-UARCH-06] Non-Destructive Sync Failure**: If background sync fails after cached items are shown, the UI MUST keep showing cached data and report sync failure in the status line. Failure status MUST be highlighted in **red/bold** to differentiate from normal status.
+- **[PR-UARCH-16] Status Line Indicators**: While syncing, the status line MUST show an animated indicator (`...`). Success/Progress messages use neutral colors; Errors use `status-error` styling.
+- **[PR-UARCH-14] Manual Resync Recovery**: A "Resync" button allows users to bypass the `lastSyncDate` watermark and force a full history download from the server to recover from corrupted local states.
 - **[PR-UARCH-07] Merge Semantics**: New archive items are merged by `_id` without duplicates, then sorted by `postedAt` descending for canonical in-memory order.
+- **[PR-UARCH-17] Payload Optimization**: To minimize bandwidth and prevent GraphQL timeouts, archive comment fetches MUST use a "Lite" post fragment (metadata only) rather than full post bodies for parent references.
 - **[PR-UARCH-08] Search Behavior**: Archive search supports regex filtering; invalid regex input MUST gracefully fall back to case-insensitive text matching.
 - **[PR-UARCH-09] Sort Modes**: Archive supports `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
 - **[PR-UARCH-10] View Modes**: Archive supports `card`, `index`, and `thread` views.
 - **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
 - **[PR-UARCH-12] Progressive Rendering**: Archive initially renders a fixed page of items and supports incremental "Load More" expansion without refetching already loaded data.
+- **[PR-UARCH-18] Large Dataset Safety**: When an archive contains > 10,000 items, the UI MUST show a confirmation dialog before rendering to protect browser performance. Once the user selects a render count (or "Render All"), this preference MUST persist across sorting, filtering, and view mode changes for the duration of the session.
 - **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/reader?view=archive&username=[slug-or-username]`.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
-### 27. Profile Archive Injection
+### 27. User Archive Link Injection
 
-- **[PR-INJECT-02] Profile Button Injection**: On user profile routes (`/users/slug` and `/users/id/slug`), inject an `ARCHIVE` button into `.ProfilePage-mobileProfileActions` linking to `/reader?view=archive&username=[slug]`.
-- **[PR-INJECT-03] SPA Route Drift Handling**: During client-side profile navigation, the archive button MUST be re-injected if removed and its existing `href` MUST be updated when the username changes.
+- **[PR-INJECT-02] Archive Link Injection**: On user profile routes (`/users/slug` and `/users/id/slug`), a "User Archive" link is injected into the site header next to the "POWER Reader" link. The link targets `/reader?view=archive&username=[slug]`.
+- **[PR-INJECT-03] Shared Container**: Both the Reader link and Archive link (when present) are wrapped in a shared container (`#pr-header-links-container`) for consistent styling and positioning.
+- **[PR-INJECT-04] URL-Based Visibility**: The Archive link is only visible when the current URL path starts with `/users/`. No SPA navigation handling is required since LW is not a SPA.
 
 ---
 

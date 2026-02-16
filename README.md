@@ -65,16 +65,16 @@ We are actively building a major feature to integrate and supercharge the functi
 The foundation is now live! You can access the archive via `https://www.lesswrong.com/reader?view=archive&username=[Username]`.
 
 **Completed Features (Phase 1 & 2):**
-- ✅ **Bulk Ingestion**: Fetches entire user histories (posts + comments) efficiently.
+- ✅ **Adaptive Ingestion**: Dynamically adjusts batch sizes (50-1000 items) to handle unstable network conditions.
 - ✅ **Offline-First Storage**: Caches history in IndexedDB for instant loads on return visits.
-- ✅ **Incremental Sync**: Only fetches new items since your last visit.
-- ✅ **Unified Feed**: Chronological stream of all user contributions.
-- ✅ **Instant Search**: Real-time Regex/Text filtering of the entire archive.
+- ✅ **Incremental Sync**: Only fetches new items since your last visit with stable watermark handling.
+- ✅ **Search & Sort**: Regex filtering and multiple sort modes (Karma, Date, Interlocutor).
+- ✅ **Unified Feed**: Threaded and chronological views of all user contributions.
 - ✅ **Pagination**: Virtualized "Load More" to handle massive histories smoothly.
+- ✅ **Resync Recovery**: Manual "Resync" button to recover from corrupted states or force a full refreshes.
 
-### Upcoming (Phase 2 Completion & Phase 3)
-- **Sorting**: Controls for Karma, Date, and "Reply To" grouping.
-- **Deep Query Engine**: Advanced filters (e.g., `score:>50`, `date:2020..2023`).
+### Upcoming (Phase 3)
+- **Deep Query Engine**: Advanced metadata filters (e.g., `score:>50`, `date:2020..2023`).
 - **Analytics Dashboard**: Visualizations of user activity and karma trends.
 - **AI Synthesis**: "Chat with Archive" and contradiction checking.
 - **Export**: Download full history as **JSON**, **Markdown**, or **HTML** for personal backups or LLM fine-tuning.

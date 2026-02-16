@@ -433,7 +433,7 @@ export const STYLES = `
     box-shadow: 0 0 8px rgba(0,123,255,0.3);
   }
 
-  .pr-comment.read .pr-comment-body {
+  .pr-comment.read > .pr-comment-body {
     color: #707070;
   }
 

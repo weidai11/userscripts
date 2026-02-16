@@ -1,6 +1,6 @@
 /**
- * Feature: Header Injection
- * Adds a link to /reader in the main site header on all forum pages.
+ * Feature: Unified Header Injection
+ * Injects Power Reader link (always) and User Archive link (on profile pages) into the forum header.
  */
 
 import { Logger } from '../utils/logger';
@@ -8,39 +8,61 @@ import { Logger } from '../utils/logger';
 declare const GM_addStyle: (css: string) => void;
 
 /**
- * Inject the link to /reader into the forum header
+ * Extract username/slug from the current URL
+ * Supports: /users/slug and /users/id/slug
  */
-export const injectReaderLink = (): void => {
-  const container = document.querySelector('.Header-rightHeaderItems');
-  if (!container) return;
+const getUsernameFromUrl = (): string | null => {
+  const path = window.location.pathname;
+  if (!path.startsWith('/users/')) return null;
 
-  // Avoid duplicate injection
-  if (document.getElementById('pr-header-link')) return;
-
-  // Add hover effect style once
-  if (!document.getElementById('pr-header-injection-styles')) {
-    GM_addStyle(`
-      #pr-header-link {
-        transition: opacity 0.2s !important;
-      }
-      #pr-header-link:hover {
-        opacity: 0.7 !important;
-        text-decoration: none !important;
-      }
-    `);
-    const styleMarker = document.createElement('div');
-    styleMarker.id = 'pr-header-injection-styles';
-    styleMarker.style.display = 'none';
-    document.head.appendChild(styleMarker);
+  const parts = path.split('/');
+  if (parts.length >= 4 && parts[3]) {
+    return parts[3];
   }
+  if (parts.length >= 3) {
+    return parts[2];
+  }
+  return null;
+};
 
+/**
+ * Add shared styles once
+ */
+const addSharedStyles = (): void => {
+  if (document.getElementById('pr-header-injection-styles')) return;
+
+  GM_addStyle(`
+    #pr-header-links-container {
+      display: inline-flex;
+      align-items: center;
+      margin-right: 12px;
+    }
+    #pr-header-links-container a {
+      transition: opacity 0.2s !important;
+      text-decoration: none !important;
+    }
+    #pr-header-links-container a:hover {
+      opacity: 0.7 !important;
+    }
+    #pr-archive-link {
+      margin-left: 8px;
+    }
+  `);
+
+  const styleMarker = document.createElement('div');
+  styleMarker.id = 'pr-header-injection-styles';
+  styleMarker.style.display = 'none';
+  document.head.appendChild(styleMarker);
+};
+
+/**
+ * Create the Reader link (always visible)
+ */
+const createReaderLink = (): HTMLAnchorElement => {
   const link = document.createElement('a');
-  link.id = 'pr-header-link';
+  link.id = 'pr-reader-link';
   link.href = '/reader';
-  // Use Mui classes for look & feel
   link.className = 'MuiButtonBase-root MuiButton-root MuiButton-text UsersMenu-userButtonRoot';
-  link.style.marginRight = '12px';
-  link.style.textDecoration = 'none';
   link.style.color = 'inherit';
   link.style.display = 'inline-flex';
   link.style.alignItems = 'center';
@@ -63,33 +85,96 @@ export const injectReaderLink = (): void => {
     </span>
   `;
 
-  // Insert after search bar or at start
-  const searchBar = container.querySelector('.SearchBar-root');
-  if (searchBar) {
-    searchBar.after(link);
-  } else {
-    container.prepend(link);
-  }
-
-  Logger.debug('Header Injection: Reader link injected');
+  return link;
 };
 
 /**
- * Setup a mutation observer to ensure the link persists across SPA navigations.
- * Uses a strict guard and delay to avoid React hydration mismatches (Error #418).
+ * Create the Archive link (profile pages only)
+ */
+const createArchiveLink = (username: string): HTMLAnchorElement => {
+  const link = document.createElement('a');
+  link.id = 'pr-archive-link';
+  link.href = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+  link.className = 'MuiButtonBase-root MuiButton-root MuiButton-text UsersMenu-userButtonRoot';
+  link.style.color = 'inherit';
+  link.style.display = 'inline-flex';
+  link.style.alignItems = 'center';
+
+  link.innerHTML = `
+    <span class="MuiButton-label">
+      <span class="UsersMenu-userButtonContents" style="font-weight: 500;">
+        User Archive
+      </span>
+    </span>
+  `;
+
+  return link;
+};
+
+/**
+ * Inject links into the forum header
+ */
+const injectLinks = (): void => {
+  const container = document.querySelector('.Header-rightHeaderItems');
+  if (!container) return;
+
+  // Get or create container
+  let linksContainer = document.getElementById('pr-header-links-container');
+
+  if (!linksContainer) {
+    addSharedStyles();
+    linksContainer = document.createElement('div');
+    linksContainer.id = 'pr-header-links-container';
+
+    // Insert after search bar or at start of container
+    const searchBar = container.querySelector('.SearchBar-root');
+    if (searchBar) {
+      searchBar.after(linksContainer);
+    } else {
+      container.prepend(linksContainer);
+    }
+  }
+
+  // Ensure Reader link (idempotent)
+  if (!document.getElementById('pr-reader-link')) {
+    linksContainer.appendChild(createReaderLink());
+  }
+
+  // Handle Archive link
+  const username = getUsernameFromUrl();
+  const existingArchiveLink = document.getElementById('pr-archive-link');
+
+  if (username) {
+    if (!existingArchiveLink) {
+      linksContainer.appendChild(createArchiveLink(username));
+      Logger.debug(`Header Injection: Added Archive link for ${username}`);
+    } else {
+      // Update href if username changed (e.g. navigation between profiles)
+      const expectedHref = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+      if (existingArchiveLink.getAttribute('href') !== expectedHref) {
+        existingArchiveLink.setAttribute('href', expectedHref);
+      }
+    }
+  } else {
+    if (existingArchiveLink) {
+      existingArchiveLink.remove();
+      Logger.debug('Header Injection: Removed Archive link');
+    }
+  }
+};
+
+/**
+ * Setup mutation observer to ensure links persist across page loads.
+ * Uses hydration detection to avoid issues with React SSR.
  */
 export const setupHeaderInjection = (): void => {
   let isHydrated = false;
 
-  // Detect hydration by observing when the header container actually appears in the DOM,
-  // rather than relying on a fixed timeout which is fragile on slow connections.
   const detectHydration = () => {
     if (document.querySelector('.Header-rightHeaderItems')) {
       isHydrated = true;
-      injectReaderLink();
-      return;
+      injectLinks();
     }
-    // Header not yet present; a MutationObserver below will catch it when it appears.
   };
 
   if (document.readyState === 'complete') {
@@ -100,23 +185,23 @@ export const setupHeaderInjection = (): void => {
 
   const observer = new MutationObserver(() => {
     if (!isHydrated) {
-      // Check if the header has appeared (hydration complete)
       if (document.querySelector('.Header-rightHeaderItems')) {
         isHydrated = true;
-        injectReaderLink();
+        injectLinks();
       }
       return;
     }
-    // Re-inject if link was removed by SPA navigation
-    if (!document.getElementById('pr-header-link')) {
-      injectReaderLink();
+
+    // Re-inject or update links if anything changes in the header
+    // We check efficiently if the container is missing OR if we just need to update (handled by injectLinks)
+    if (document.querySelector('.Header-rightHeaderItems')) {
+      injectLinks();
     }
   });
 
   if (document.documentElement) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   } else {
-    // Extreme early load fallback
     const earlyCheck = setInterval(() => {
       if (document.documentElement) {
         clearInterval(earlyCheck);
@@ -124,4 +209,6 @@ export const setupHeaderInjection = (): void => {
       }
     }, 100);
   }
+
+  window.addEventListener('beforeunload', () => observer.disconnect());
 };

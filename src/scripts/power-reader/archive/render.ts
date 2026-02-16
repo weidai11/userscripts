@@ -7,7 +7,7 @@ import { fetchCommentsByIds } from './loader';
 import type { ArchiveViewMode } from './state';
 import type { Post, Comment } from '../../../shared/graphql/queries';
 
-let currentRenderLimit = 50;
+let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 10000;
 
 /**
  * Configure view state (called by index.ts)

@@ -2,7 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.619] - 2026-02-16
+
+### Fixed
+- **Read Style Inheritance**: Resolved a visual bug where read comments would transmit their gray font color to unread nested replies. The `.read` style now uses a direct child selector to target only the comment body, preventing unintended inheritance.
+- **Header Injection**: Fixed issues with the "POWER Reader" and "User Archive" links not appearing correctly or updating during SPA navigations. The injection logic is now more robust and idempotent, and consolidates the previously separate profile injection feature.
+- **Profile Injection**: Renamed/Removed `profileInjection.ts` as it was merged into `headerInjection.ts`.
+
+### Added
+- **Tooling**: Added `tooling/jj-parallel-agents.ps1` to facilitate parallel agent workflows with Jujutsu.
+- **DX**: The build script (`tooling/maybe-codegen.js`) now automatically fetches the GraphQL schema if it's missing, simplifying setup for new environments.
+
+## [1.2.615] - 2026-02-16
+
+### Fixed
+- **Read Style Inheritance**: Resolved a visual bug where read comments would transmit their gray font color to unread nested replies. The `.read` style now uses a direct child selector to target only the comment body, preventing unwanted inheritance.
+
+## [1.2.606] - 2026-02-16
+
+### Fixed
+- **Archive Scalability ([P1])**: Bypassed the LessWrong API's hard limit on `offset > 2000` by switching the User Archive loader to **Cursor-Based Pagination**. The sync process now uses the `before` timestamp filter to fetch historical data, ensuring users with large histories (thousands of items) can successfully download their entire archive without hitting server-side limits.
+- **Adaptive Cursor Sync**: Refined the adaptive batching logic to work seamlessly with cursors, maintaining high reliability and optimal batch sizes during long history fetches.
+- **Large Dataset Persistence ([PR-UARCH-18])**: Fixed a bug where the "Large Dataset Detect" performance dialog would reappear on every sort or filter change. The user's rendering preference now correctly persists throughout the session.
+- **Header Version**: Added version number display to the User Archive header (`vX.X.X`) for consistency with the main reader view.
+- **Header Injection SPA Support**: Fixed a bug where the User Archive link would fail to appear when navigating from a non-profile page to a profile page within the Single Page Application (SPA), due to the header container persisting. The injection logic now efficiently updates the links in place if the header exists.
+
+## [1.2.603] - 2026-02-16
+
+### Improved
+- **Build Synchronization**: Rebuilt the distribution file to ensure it matches the latest source code, resolving an ID mismatch (`pr-header-link` vs `pr-reader-link`) that caused inconsistencies.
+
+## [1.2.602] - 2026-02-16
+
+### Improved
+- **Adaptive Batching**: Implemented an intelligent data loading strategy for the User Archive. Instead of a fixed 1000-item page size, the loader now starts at 100 and adaptively adjusts the batch size (between 50 and 1000) to target a ~2.5 second response time per request, ensuring smooth progress on all network conditions.
+- **Sync Recovery**: Added a "Resync" button to the archive toolbar, allowing users to force a full re-download of their history if the local cache becomes corrupted or out of sync.
+
+### Fixed
+- **User Archive Stability ([P1])**: Resolved a critical issue where the archive would fail to load comments due to massive GraphQL payloads. The `COMMENT_FIELDS` query now uses `PostFieldsLite` instead of `PostFieldsFull`, drastically reducing data transfer per block.
+- **Error Propagation**: Fixed a bug where fetch errors were swallowed by the loader, causing partial syncs to be saved as "complete" history. Errors now correctly fail the sync, preventing data corruption.
+
+## [1.2.598] - 2026-02-16
+
+### Fixed
+- **Header Injection SPA Support**: Fixed a bug where the User Archive link would fail to appear when navigating from a non-profile page to a profile page within the Single Page Application (SPA), due to the header container persisting. The injection logic now efficiently updates the links in place if the header exists.
+- **Build Synchronization**: Rebuilt the distribution file to ensure it matches the latest source code, resolving an ID mismatch (`pr-header-link` vs `pr-reader-link`) that caused inconsistencies.
+
+## [1.2.590] - 2026-02-16
+
+### Changed
+- **Unified Header Injection**: Consolidated header and profile injection into a single unified system.
+  - Both "POWER Reader" and "User Archive" links now appear in the site header (`.Header-rightHeaderItems`).
+  - Archive link is only visible on profile pages (`/users/*`), positioned to the right of the Reader link.
+  - Shared container (`#pr-header-links-container`) with consistent MUI-based styling.
+  - Removed SPA navigation handling (LW is not a SPA) and simplified the codebase.
+  - Removed `profileInjection.ts` and `profile-injection.spec.ts` (functionality merged into `headerInjection.ts`).
+
+### Fixed
+- **Profile Archive Link**: Archive link now correctly appears on profile pages by detecting URL pattern instead of searching for profile-specific DOM containers.
+
 ## [1.2.587] - 2026-02-15
+
+### Improved
+- **Build Process**: The build script now automatically fetches the GraphQL schema from LessWrong if `lw_schema.json` is missing, ensuring a smoother first-time setup for new developers.
 
 ### Fixed
 - **Profile Injection Robustness ([P2])**: Added fallback selectors (`.ProfilePage-header`, `.UsersProfile-header`) for profile archive button injection, ensuring Compatibility with desktop views where the mobile-specific container might be absent.

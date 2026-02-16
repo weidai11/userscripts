@@ -13,6 +13,18 @@ const outputs = [
   'src/shared/graphql/lw_schema.graphql'
 ];
 
+const schemaPath = 'src/shared/graphql/lw_schema.json';
+
+if (!fs.existsSync(schemaPath)) {
+  console.log(`Schema file ${schemaPath} not found. Fetching schema...`);
+  try {
+    execSync('node src/shared/graphql/fetch_schema.js', { stdio: 'inherit' });
+  } catch (e) {
+    console.error('Failed to fetch schema.');
+    process.exit(1);
+  }
+}
+
 function needsCodegen() {
   for (const out of outputs) {
     if (!fs.existsSync(out)) {
