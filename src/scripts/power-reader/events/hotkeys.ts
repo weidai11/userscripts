@@ -1,3 +1,4 @@
+
 /**
  * Hotkey management for Power Reader
  */
@@ -8,11 +9,11 @@ import { Logger } from '../utils/logger';
 /**
  * Attach hotkey listeners to the document
  */
-export const attachHotkeyListeners = (state: ReaderState): void => {
+export const attachHotkeyListeners = (state: ReaderState, abortSignal?: AbortSignal): void => {
   document.addEventListener('keydown', (e) => {
-    // Ignore if typing in an input or textarea
+    // Ignore if typing in an input or textarea or select
     const target = e.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) {
       return;
     }
 
@@ -39,7 +40,21 @@ export const attachHotkeyListeners = (state: ReaderState): void => {
       'g': 'send-to-ai-studio',
     };
 
-    const action = actionMap[key];
+    let action = actionMap[key];
+
+    // Expand logic for comments too
+    if (key === '+' || key === '=') {
+      // Check if under mouse is a comment
+      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+      const comment = elementUnderMouse?.closest('.pr-comment');
+      if (comment) action = 'expand';
+    } else if (key === '-') {
+      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+      const comment = elementUnderMouse?.closest('.pr-comment');
+      if (comment) action = 'collapse';
+    }
+
+
     if (!action) return;
 
     // Find the item under the mouse
@@ -56,11 +71,22 @@ export const attachHotkeyListeners = (state: ReaderState): void => {
     // [PR-HK-07] If button not found in current item and we are in a comment, 
     // try finding it in the parent post (falling up for post-level actions like 'n', 'a', 'c', 'e')
     if (!button && prItem.classList.contains('pr-comment')) {
-      const postId = prItem.dataset.postId;
-      if (postId) {
-        const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
-        if (postEl) {
-          button = postEl.querySelector(`[data-action="${action}"]`) as HTMLElement;
+      // Special case for comment collapse/expand which don't have visible buttons sometimes
+      if (action === 'collapse' || action === 'expand') {
+        // Dispatch directly to the comment element if mapped action matches
+        // But wait, the event listener listens on [data-action].
+        // We need a target that has the data-action. 
+        // Use the collapse/expand toggle if available
+        button = prItem.querySelector(`.pr-collapse, .pr-expand`) as HTMLElement;
+      }
+
+      if (!button) {
+        const postId = prItem.dataset.postId;
+        if (postId) {
+          const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+          if (postEl) {
+            button = postEl.querySelector(`[data-action="${action}"]`) as HTMLElement;
+          }
         }
       }
     }
@@ -94,5 +120,5 @@ export const attachHotkeyListeners = (state: ReaderState): void => {
         shiftKey: e.shiftKey
       }));
     }
-  });
+  }, { signal: abortSignal });
 };

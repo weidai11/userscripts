@@ -1,3 +1,4 @@
+
 /**
  * Comment rendering for Power Reader
  */
@@ -10,6 +11,8 @@ import { getReadState, isRead, getLoadFrom } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
 import { sanitizeHtml } from '../utils/sanitize';
+import { renderMetadata } from './components/metadata';
+import { renderBody } from './components/body';
 
 /**
  * Highlight quotes in the comment body based on reactions
@@ -125,10 +128,11 @@ export const renderCommentTree = (
   if (visibleReplies.length > 0) {
     const readState = getReadState();
     visibleReplies.forEach((r: any) => {
+      const isItemRead = !state.isArchiveMode && (readState[r._id] === 1 || isImplicitlyRead(r));
       r.treeKarma = calculateTreeKarma(
         r._id,
         r.baseScore || 0,
-        readState[r._id] === 1 || isImplicitlyRead(r),
+        isItemRead,
         childrenIndex.get(r._id) || [],
         readState,
         childrenIndex,
@@ -194,16 +198,14 @@ const getUnreadDescendantCount = (commentId: string, state: ReaderState, readSta
   return count;
 };
 
-import { renderMetadata } from './components/metadata';
-import { renderBody } from './components/body';
-
 export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
   if (isPlaceholderComment(comment)) {
     return renderMissingParentPlaceholder(comment, repliesHtml);
   }
 
   const readState = getReadState();
-  const isLocallyRead = isRead(comment._id, readState, comment.postedAt);
+  // In archive mode, we ignore the local read state entirely to prevent collapsing context
+  const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
   const commentIsRead = (comment as any).isContext || isLocallyRead;
   const unreadDescendantCount = getUnreadDescendantCount(comment._id, state, readState);
 
@@ -239,7 +241,7 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
     comment.parentComment?.user?.username === state.currentUsername);
 
   // Should auto-hide?
-  const autoHide = shouldAutoHide(normalized) && !commentIsRead && !isContext;
+  const autoHide = !state.isArchiveMode && shouldAutoHide(normalized) && !commentIsRead && !isContext;
 
   // Calculate styles
   const clampedScore = clampScore(normalized);
@@ -317,4 +319,3 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
     </div>
   `;
 };
-

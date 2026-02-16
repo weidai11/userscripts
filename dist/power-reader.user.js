@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.619
+// @version    1.2.658
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2583,7 +2583,8 @@ dirty.indexOf("<") === -1) {
     lastMousePos: { x: 0, y: 0 },
     currentAIRequestId: null,
     activeAIPopup: null,
-    sessionAICache: {}
+    sessionAICache: {},
+    isArchiveMode: false
   });
   const rebuildIndexes = (state2) => {
     state2.commentById.clear();
@@ -2660,7 +2661,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.619"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.658"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -5006,10 +5007,11 @@ isFullPost
     if (visibleReplies.length > 0) {
       const readState = getReadState();
       visibleReplies.forEach((r) => {
+        const isItemRead = !state2.isArchiveMode && (readState[r._id] === 1 || isImplicitlyRead(r));
         r.treeKarma = calculateTreeKarma(
           r._id,
           r.baseScore || 0,
-          readState[r._id] === 1 || isImplicitlyRead(r),
+          isItemRead,
           childrenIndex.get(r._id) || [],
           readState,
           childrenIndex,
@@ -5061,7 +5063,7 @@ isFullPost
       return renderMissingParentPlaceholder(comment, repliesHtml);
     }
     const readState = getReadState();
-    const isLocallyRead = isRead(comment._id, readState, comment.postedAt);
+    const isLocallyRead = !state2.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
     const commentIsRead = comment.isContext || isLocallyRead;
     const unreadDescendantCount = getUnreadDescendantCount(comment._id, state2, readState);
     const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !comment.forceVisible;
@@ -5086,7 +5088,7 @@ isFullPost
     const order = comment._order || 0;
     const isContext = comment.isContext;
     const isReplyToYou = !!(state2.currentUsername && comment.parentComment?.user?.username === state2.currentUsername);
-    const autoHide = shouldAutoHide(normalized) && !commentIsRead && !isContext;
+    const autoHide = !state2.isArchiveMode && shouldAutoHide(normalized) && !commentIsRead && !isContext;
     const clampedScore = clampScore(normalized);
     const scoreColor = normalized > 0 ? getScoreColor(clampedScore) : "";
     const recencyColor = order > 0 ? getRecencyColor(order, CONFIG.highlightLastN) : "";
@@ -6193,7 +6195,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.619"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6336,7 +6338,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.619"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -7052,10 +7054,10 @@ currentCommentId = null;
       }
     }
   };
-  const attachHotkeyListeners = (state2) => {
+  const attachHotkeyListeners = (state2, abortSignal) => {
     document.addEventListener("keydown", (e) => {
       const target = e.target;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable) {
         return;
       }
       if (e.ctrlKey || e.altKey || e.metaKey) {
@@ -7075,7 +7077,16 @@ currentCommentId = null;
 "e": "toggle-post-body",
         "g": "send-to-ai-studio"
       };
-      const action = actionMap[key];
+      let action = actionMap[key];
+      if (key === "+" || key === "=") {
+        const elementUnderMouse2 = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
+        const comment = elementUnderMouse2?.closest(".pr-comment");
+        if (comment) action = "expand";
+      } else if (key === "-") {
+        const elementUnderMouse2 = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
+        const comment = elementUnderMouse2?.closest(".pr-comment");
+        if (comment) action = "collapse";
+      }
       if (!action) return;
       const elementUnderMouse = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
       if (!elementUnderMouse) return;
@@ -7083,11 +7094,16 @@ currentCommentId = null;
       if (!prItem) return;
       let button = prItem.querySelector(`[data-action="${action}"]`);
       if (!button && prItem.classList.contains("pr-comment")) {
-        const postId = prItem.dataset.postId;
-        if (postId) {
-          const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
-          if (postEl) {
-            button = postEl.querySelector(`[data-action="${action}"]`);
+        if (action === "collapse" || action === "expand") {
+          button = prItem.querySelector(`.pr-collapse, .pr-expand`);
+        }
+        if (!button) {
+          const postId = prItem.dataset.postId;
+          if (postId) {
+            const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+            if (postEl) {
+              button = postEl.querySelector(`[data-action="${action}"]`);
+            }
           }
         }
       }
@@ -7115,7 +7131,7 @@ currentCommentId = null;
           shiftKey: e.shiftKey
         }));
       }
-    });
+    }, { signal: abortSignal });
   };
   const collapsePost = (post) => {
     post.querySelector(".pr-post-comments")?.classList.add("collapsed");
@@ -7146,28 +7162,29 @@ currentCommentId = null;
       if (expandBtn) expandBtn.style.display = isCollapsed ? "inline" : "none";
     });
   };
-  const handlePostCollapse = (target, _state) => {
+  const getPostIdFromTarget = (target) => {
+    const post = target.closest(".pr-post");
+    if (post) return post.dataset.postId || post.dataset.id || null;
+    const header = target.closest(".pr-post-header");
+    return header?.getAttribute("data-post-id") || null;
+  };
+  const getCommentIdFromTarget = (target) => {
+    const comment = target.closest(".pr-comment");
+    return comment?.getAttribute("data-id") || null;
+  };
+  const handlePostCollapse = (target) => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
     if (!post) return;
     const isFromSticky = !!target.closest(".pr-sticky-header");
-    let headerTop = null;
-    if (isFromSticky) {
-      const postHeader = post.querySelector(".pr-post-header");
-      if (postHeader) {
-        headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
-      }
-    }
+    const postHeader = post.querySelector(".pr-post-header");
     collapsePost(post);
-    if (headerTop !== null) {
-      window.scrollTo({
-        top: headerTop,
-        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
+    if (isFromSticky && postHeader) {
+      smartScrollTo(postHeader, true);
     }
   };
-  const handlePostExpand = (target, _state) => {
+  const handlePostExpand = (target) => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
     const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
@@ -7177,11 +7194,7 @@ currentCommentId = null;
     if (isFromSticky) {
       const postHeader = post.querySelector(".pr-post-header");
       if (postHeader) {
-        const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
-        window.scrollTo({
-          top: headerTop,
-          behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-        });
+        smartScrollTo(postHeader, true);
       }
     }
   };
@@ -7193,21 +7206,6 @@ currentCommentId = null;
     const comment = target.closest(".pr-comment");
     comment?.classList.remove("collapsed");
   };
-  const handleExpandPlaceholder = (target, state2) => {
-    const commentEl = target.closest(".pr-comment");
-    if (!commentEl) return;
-    const commentId = commentEl.getAttribute("data-id");
-    const postId = commentEl.getAttribute("data-post-id");
-    if (!commentId || !postId) return;
-    const comment = state2.commentById.get(commentId);
-    if (!comment) return;
-    comment.forceVisible = true;
-    comment.justRevealed = true;
-    reRenderPostGroup(postId, state2, commentId);
-    setTimeout(() => {
-      if (comment) comment.justRevealed = false;
-    }, 2e3);
-  };
   const handleCommentCollapseToggle = (replies) => {
     const comment = replies.closest(".pr-comment");
     if (comment) {
@@ -7216,119 +7214,6 @@ currentCommentId = null;
       } else {
         comment.classList.add("collapsed");
       }
-    }
-  };
-  const handleFindParent = async (target, state2) => {
-    const commentEl = target.closest(".pr-comment");
-    const parentId = commentEl?.getAttribute("data-parent-id");
-    if (!parentId) {
-      const postId = commentEl?.getAttribute("data-post-id");
-      if (!postId) return;
-      const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
-      if (postEl) {
-        const postHeader = postEl.querySelector(".pr-post-header");
-        const postBody = postEl.querySelector(".pr-post-body-container");
-        const stickyHeader2 = document.querySelector(`.pr-sticky-header .pr-post-header[data-post-id="${postId}"]`);
-        if (postHeader) smartScrollTo(postHeader, true);
-        const targets = [postHeader, postBody, stickyHeader2].filter(Boolean);
-        targets.forEach((t) => t.classList.add("pr-highlight-parent"));
-        setTimeout(() => targets.forEach((t) => t.classList.remove("pr-highlight-parent")), 2e3);
-      }
-      return;
-    }
-    const parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
-    const isReadPlaceholder = parentEl?.classList.contains("pr-comment-placeholder");
-    const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains("pr-missing-parent") || isReadPlaceholder;
-    if (parentEl && !parentIsPlaceholder) {
-      smartScrollTo(parentEl, false);
-      parentEl.classList.add("pr-highlight-parent");
-      setTimeout(() => parentEl.classList.remove("pr-highlight-parent"), 2e3);
-    } else if (parentEl && isReadPlaceholder) {
-      const postId = commentEl?.getAttribute("data-post-id");
-      const comment = state2.commentById.get(parentId);
-      if (comment && postId) {
-        markAncestorChainForceVisible(parentId, state2);
-        reRenderPostGroup(postId, state2, parentId);
-        const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
-        if (newParentEl) {
-          smartScrollTo(newParentEl, false);
-          newParentEl.classList.add("pr-highlight-parent");
-          setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
-        }
-      }
-    } else {
-      const originalText = target.textContent;
-      target.textContent = "[...]";
-      try {
-        Logger.info(`Find Parent: Fetching missing parent ${parentId} from server...`);
-        const res = await queryGraphQL(GET_COMMENT, { id: parentId });
-        const parentComment = res?.comment?.result;
-        if (parentComment) {
-          if (!state2.commentById.has(parentComment._id)) {
-            parentComment.isContext = true;
-            parentComment.forceVisible = true;
-            parentComment.justRevealed = true;
-            state2.comments.push(parentComment);
-            rebuildIndexes(state2);
-            const postId = parentComment.postId;
-            if (postId) {
-              const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
-              if (postContainer) {
-                Logger.info(`Re-rendering post group ${postId}. Parent ${parentComment._id} present in state? ${state2.commentById.has(parentComment._id)}`);
-                const group = {
-                  postId,
-                  title: parentComment.post?.title || "Unknown Post",
-                  comments: state2.comments.filter((c) => c.postId === postId),
-                  fullPost: state2.postById.get(postId)
-                };
-                postContainer.outerHTML = renderPostGroup(group, state2);
-                setupLinkPreviews(state2.comments);
-                setTimeout(() => {
-                  const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
-                  if (newParentEl) {
-                    smartScrollTo(newParentEl, false);
-                    newParentEl.classList.add("pr-highlight-parent");
-                    setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
-                  }
-                }, 50);
-              } else {
-                renderUI(state2);
-              }
-            }
-          }
-        } else {
-          alert("Parent comment could not be found on the server.");
-        }
-      } catch (err) {
-        Logger.error("Failed to fetch parent comment", err);
-        alert("Error fetching parent comment.");
-      } finally {
-        target.textContent = originalText;
-      }
-    }
-  };
-  const handleAuthorUp = (target, state2) => {
-    const item = target.closest(".pr-item");
-    let author = item?.getAttribute("data-author");
-    if (!author) {
-      const sticky = target.closest(".pr-sticky-header");
-      author = sticky?.getAttribute("data-author");
-    }
-    if (author) {
-      toggleAuthorPreference(author, "up");
-      renderUI(state2);
-    }
-  };
-  const handleAuthorDown = (target, state2) => {
-    const item = target.closest(".pr-item");
-    let author = item?.getAttribute("data-author");
-    if (!author) {
-      const sticky = target.closest(".pr-sticky-header");
-      author = sticky?.getAttribute("data-author");
-    }
-    if (author) {
-      toggleAuthorPreference(author, "down");
-      renderUI(state2);
     }
   };
   const handleReadMore = (target) => {
@@ -7347,74 +7232,64 @@ currentCommentId = null;
       }
     }
   };
-  const reRenderPostGroup = (postId, state2, anchorCommentId) => {
-    const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
-    if (!postContainer) {
-      Logger.warn(`reRenderPostGroup: Container for post ${postId} not found`);
-      return;
+  const handleScrollToComments = (target) => {
+    const postId = getPostIdFromTarget(target);
+    if (!postId) return;
+    const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+    if (!postEl) return;
+    const firstComment = postEl.querySelector(".pr-comment");
+    if (firstComment) smartScrollTo(firstComment, false);
+  };
+  const handleScrollToNextPost = (target) => {
+    const postId = getPostIdFromTarget(target);
+    if (!postId) return;
+    const currentPost = document.querySelector(`.pr-post[data-id="${postId}"]`);
+    if (!currentPost) return;
+    const nextPost = currentPost.nextElementSibling;
+    if (nextPost && nextPost.classList.contains("pr-post")) {
+      const header = nextPost.querySelector(".pr-post-header");
+      if (header) smartScrollTo(header, true);
     }
-    let beforeTop = null;
-    if (anchorCommentId) {
-      const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-      if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
+  };
+  const handleScrollToPostTop = (target, _state) => {
+    const postId = getPostIdFromTarget(target);
+    if (!postId) return;
+    const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`);
+    if (postHeader) {
+      smartScrollTo(postHeader, true);
     }
-    const post = state2.postById.get(postId);
-    const postComments = state2.comments.filter((c) => c.postId === postId);
-    Logger.info(`reRenderPostGroup: p=${postId}, comments=${postComments.length}`);
-    const bodyContainer = postContainer.querySelector(".pr-post-body-container");
-    const wasExpanded = bodyContainer && !bodyContainer.classList.contains("truncated");
-    const group = {
-      postId,
-      title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
-      comments: postComments,
-      fullPost: post
-    };
-    postContainer.outerHTML = renderPostGroup(group, state2);
-    const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
-    if (wasExpanded && newPostContainer) {
-      const newBody = newPostContainer.querySelector(".pr-post-body-container");
-      if (newBody && newBody.classList.contains("truncated")) {
-        newBody.classList.remove("truncated");
-        newBody.style.maxHeight = "none";
-        const overlay = newBody.querySelector(".pr-read-more-overlay");
-        if (overlay) overlay.style.display = "none";
+  };
+  const handleScrollToRoot = (target, topLevelId = null) => {
+    if (topLevelId) {
+      const rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
+      if (rootEl) {
+        smartScrollTo(rootEl, false);
+        rootEl.classList.add("pr-highlight-parent");
+        setTimeout(() => rootEl.classList.remove("pr-highlight-parent"), 2e3);
+        return;
       }
     }
-    setupLinkPreviews(state2.comments);
-    refreshPostActionButtons(postId);
-    if (anchorCommentId && beforeTop !== null) {
-      const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-      if (newAnchor) {
-        const afterTop = newAnchor.getBoundingClientRect().top;
-        const delta = afterTop - beforeTop;
-        const oldScrollY = window.scrollY;
-        Logger.info(`Viewport Preservation [${anchorCommentId}]: beforeTop=${beforeTop.toFixed(2)}, afterTop=${afterTop.toFixed(2)}, delta=${delta.toFixed(2)}, oldScrollY=${oldScrollY.toFixed(2)}`);
-        window.scrollTo(0, Math.max(0, oldScrollY + delta));
-        Logger.info(`New ScrollY: ${window.scrollY.toFixed(2)}`);
+    const commentId = getCommentIdFromTarget(target);
+    if (!commentId && !topLevelId) return;
+    const postId = getPostIdFromTarget(target);
+    if (postId) {
+      const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`);
+      if (postHeader) {
+        smartScrollTo(postHeader, true);
+        postHeader.classList.add("pr-highlight-parent");
+        setTimeout(() => postHeader.classList.remove("pr-highlight-parent"), 2e3);
       }
     }
   };
-  const mergeComments = (newComments, state2, markAsContext = true) => {
-    let added = 0;
-    for (const c of newComments) {
-      if (!state2.commentById.has(c._id)) {
-        if (markAsContext) c.isContext = true;
-        state2.comments.push(c);
-        added++;
-      }
+  let activeHost = null;
+  const setUIHost = (host) => {
+    activeHost = host;
+  };
+  const getUIHost = () => {
+    if (!activeHost) {
+      throw new Error("No UI host registered. Ensure setUIHost is called during initialization.");
     }
-    if (added > 0) rebuildIndexes(state2);
-    return added;
-  };
-  const getPostIdFromTarget = (target) => {
-    const post = target.closest(".pr-post");
-    if (post) return post.dataset.postId || null;
-    const header = target.closest(".pr-post-header");
-    return header?.getAttribute("data-post-id") || null;
-  };
-  const getCommentIdFromTarget = (target) => {
-    const comment = target.closest(".pr-comment");
-    return comment?.getAttribute("data-id") || null;
+    return activeHost;
   };
   const findTopLevelAncestorId = (commentId, state2) => {
     let current = state2.commentById.get(commentId);
@@ -7443,6 +7318,128 @@ currentCommentId = null;
       currentId = comment.parentCommentId || null;
     }
   };
+  const handleExpandPlaceholder = (target, state2) => {
+    const commentEl = target.closest(".pr-comment");
+    if (!commentEl) return;
+    const commentId = commentEl.getAttribute("data-id");
+    const postId = commentEl.getAttribute("data-post-id");
+    if (!commentId || !postId) return;
+    const comment = state2.commentById.get(commentId);
+    if (!comment) return;
+    comment.forceVisible = true;
+    comment.justRevealed = true;
+    getUIHost().rerenderPostGroup(postId, commentId);
+    setTimeout(() => {
+      if (comment) comment.justRevealed = false;
+    }, 2e3);
+  };
+  const handleFindParent = async (target, state2) => {
+    const commentEl = target.closest(".pr-comment");
+    const parentId = commentEl?.getAttribute("data-parent-id");
+    const postId = commentEl?.getAttribute("data-post-id");
+    if (!parentId) {
+      if (!postId) return;
+      const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
+      if (postEl) {
+        const postHeader = postEl.querySelector(".pr-post-header");
+        if (postHeader) smartScrollTo(postHeader, true);
+        const stickyHeader2 = document.querySelector(`.pr-sticky-header .pr-post-header[data-post-id="${postId}"]`);
+        const targets = [postHeader, postEl.querySelector(".pr-post-body-container"), stickyHeader2].filter(Boolean);
+        targets.forEach((t) => t.classList.add("pr-highlight-parent"));
+        setTimeout(() => targets.forEach((t) => t.classList.remove("pr-highlight-parent")), 2e3);
+      }
+      return;
+    }
+    let parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+    const isReadPlaceholder = parentEl?.classList.contains("pr-comment-placeholder");
+    const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains("pr-missing-parent") || isReadPlaceholder;
+    if (parentEl && !parentIsPlaceholder) {
+      smartScrollTo(parentEl, false);
+      parentEl.classList.add("pr-highlight-parent");
+      setTimeout(() => parentEl.classList.remove("pr-highlight-parent"), 2e3);
+      return;
+    }
+    if (parentEl && isReadPlaceholder) {
+      if (postId) {
+        markAncestorChainForceVisible(parentId, state2);
+        getUIHost().rerenderPostGroup(postId, parentId);
+        const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+        if (newParentEl) {
+          smartScrollTo(newParentEl, false);
+          newParentEl.classList.add("pr-highlight-parent");
+          setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
+        }
+      }
+      return;
+    }
+    const originalText = target.textContent;
+    target.textContent = "[...]";
+    try {
+      Logger.info(`Find Parent: Fetching missing parent ${parentId} from server...`);
+      const res = await queryGraphQL(GET_COMMENT, { id: parentId });
+      const parentComment = res?.comment?.result;
+      if (parentComment) {
+        if (!state2.commentById.has(parentComment._id)) {
+          parentComment.justRevealed = true;
+          parentComment.forceVisible = true;
+          getUIHost().mergeComments([parentComment], true);
+          if (parentComment.postId) {
+            getUIHost().rerenderPostGroup(parentComment.postId, parentId);
+            setTimeout(() => {
+              const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+              if (newParentEl) {
+                smartScrollTo(newParentEl, false);
+                newParentEl.classList.add("pr-highlight-parent");
+                setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
+              }
+            }, 50);
+          }
+        }
+      } else {
+        alert("Parent comment could not be found on the server.");
+      }
+    } catch (err) {
+      Logger.error("Failed to fetch parent comment", err);
+      alert("Error fetching parent comment.");
+    } finally {
+      target.textContent = originalText;
+    }
+  };
+  const handleAuthorUp = (target, _state) => {
+    const item = target.closest(".pr-item");
+    let author = item?.getAttribute("data-author");
+    if (!author) {
+      const sticky = target.closest(".pr-sticky-header");
+      author = sticky?.getAttribute("data-author");
+    }
+    if (author) {
+      toggleAuthorPreference(author, "up");
+      getUIHost().rerenderAll();
+    }
+  };
+  const handleAuthorDown = (target, _state) => {
+    const item = target.closest(".pr-item");
+    let author = item?.getAttribute("data-author");
+    if (!author) {
+      const sticky = target.closest(".pr-sticky-header");
+      author = sticky?.getAttribute("data-author");
+    }
+    if (author) {
+      toggleAuthorPreference(author, "down");
+      getUIHost().rerenderAll();
+    }
+  };
+  const fetchAndRenderPost = async (postId, _state) => {
+    const res = await queryGraphQL(
+      GET_POST_BY_ID,
+      { id: postId }
+    );
+    const post = res?.post?.result;
+    if (!post) return null;
+    getUIHost().upsertPost(post);
+    getUIHost().rerenderPostGroup(postId);
+    return post;
+  };
   const handleLoadPost = async (postId, titleLink, state2) => {
     const postContainer = titleLink.closest(".pr-post");
     if (!postContainer) return;
@@ -7459,25 +7456,9 @@ currentCommentId = null;
     }
     contentEl.innerHTML = '<div class="pr-info">Loading post content...</div>';
     try {
-      const res = await queryGraphQL(GET_POST_BY_ID, { id: postId });
-      const post = res?.post?.result;
+      const post = await fetchAndRenderPost(postId, state2);
       if (post) {
-        if (!state2.postById.has(post._id)) {
-          state2.posts.push(post);
-        } else {
-          const idx = state2.posts.findIndex((p) => p._id === post._id);
-          if (idx >= 0) state2.posts[idx] = post;
-        }
-        rebuildIndexes(state2);
         titleLink.removeAttribute("data-action");
-        const group = {
-          postId: post._id,
-          title: post.title,
-          comments: state2.comments.filter((c) => c.postId === post._id),
-          fullPost: post
-        };
-        postContainer.outerHTML = renderPostGroup(group, state2);
-        setupLinkPreviews(state2.comments);
       } else {
         contentEl.innerHTML = '<div class="pr-info" style="color: red;">Failed to load post content.</div>';
       }
@@ -7497,21 +7478,12 @@ currentCommentId = null;
     if (!container) {
       if (eBtn) eBtn.textContent = "[...]";
       try {
-        const res = await queryGraphQL(GET_POST_BY_ID, { id: postId });
-        const post = res?.post?.result;
+        const post = await fetchAndRenderPost(postId, state2);
         if (!post || !post.htmlBody) {
           Logger.warn(`Post ${postId} has no body content`);
           if (eBtn) eBtn.textContent = "[e]";
           return;
         }
-        state2.postById.set(postId, post);
-        const postIdx = state2.posts.findIndex((p) => p._id === postId);
-        if (postIdx >= 0) {
-          state2.posts[postIdx] = post;
-        } else {
-          state2.posts.push(post);
-        }
-        reRenderPostGroup(postId, state2);
         const newContainer = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-body-container`);
         if (newContainer) {
           newContainer.classList.remove("truncated");
@@ -7584,18 +7556,22 @@ currentCommentId = null;
         limit: CONFIG.loadMax
       });
       const comments = res?.comments?.results || [];
-      const added = mergeComments(comments, state2, false);
-      Logger.info(`Load all comments for post ${postId}: ${comments.length} fetched, ${added} new`);
+      comments.forEach((c) => {
+        c.forceVisible = true;
+        c.justRevealed = true;
+      });
       state2.comments.filter((c) => c.postId === postId).forEach((c) => {
         c.forceVisible = true;
         c.justRevealed = true;
       });
+      const added = getUIHost().mergeComments(comments, false);
+      Logger.info(`Load all comments for post ${postId}: ${comments.length} fetched, ${added} new`);
       setTimeout(() => {
         state2.comments.filter((c) => c.postId === postId).forEach((c) => {
           c.justRevealed = false;
         });
       }, 2e3);
-      reRenderPostGroup(postId, state2);
+      getUIHost().rerenderPostGroup(postId);
       if (added === 0) {
         Logger.info(`No new comments found for post ${postId}`);
       }
@@ -7603,51 +7579,6 @@ currentCommentId = null;
       Logger.error("Failed to load all comments", err);
     } finally {
       target.textContent = originalText;
-    }
-  };
-  const handleScrollToPostTop = (target, state2) => {
-    const postId = getPostIdFromTarget(target);
-    if (!postId) return;
-    const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`);
-    if (postHeader) {
-      const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
-      const currentScroll = window.pageYOffset;
-      if (Math.abs(headerTop - currentScroll) < 5) {
-        const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]');
-        if (eBtn && !eBtn.classList.contains("disabled")) {
-          handleTogglePostBody(eBtn, state2).then(() => {
-            const refreshedTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
-            window.scrollTo({
-              top: refreshedTop,
-              behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-            });
-          });
-          return;
-        }
-      }
-      window.scrollTo({
-        top: headerTop,
-        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    }
-  };
-  const handleScrollToComments = (target) => {
-    const postId = getPostIdFromTarget(target);
-    if (!postId) return;
-    const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
-    if (!postEl) return;
-    const firstComment = postEl.querySelector(".pr-comment");
-    if (firstComment) smartScrollTo(firstComment, false);
-  };
-  const handleScrollToNextPost = (target) => {
-    const postId = getPostIdFromTarget(target);
-    if (!postId) return;
-    const currentPost = document.querySelector(`.pr-post[data-id="${postId}"]`);
-    if (!currentPost) return;
-    const nextPost = currentPost.nextElementSibling;
-    if (nextPost && nextPost.classList.contains("pr-post")) {
-      const header = nextPost.querySelector(".pr-post-header");
-      if (header) smartScrollTo(header, true);
     }
   };
   const handleLoadThread = async (target, state2) => {
@@ -7672,9 +7603,7 @@ currentCommentId = null;
           const res = await queryGraphQL(GET_COMMENT, { id: currentParentId });
           const parent = res?.comment?.result;
           if (!parent) break;
-          parent.isContext = true;
-          state2.comments.push(parent);
-          rebuildIndexes(state2);
+          getUIHost().mergeComments([parent], true);
           currentParentId = parent.parentCommentId || null;
         }
         topLevelId = findTopLevelAncestorId(commentId, state2);
@@ -7695,10 +7624,10 @@ currentCommentId = null;
         limit: CONFIG.loadMax
       });
       const comments = res?.comments?.results || [];
-      const added = mergeComments(comments, state2);
+      const added = getUIHost().mergeComments(comments, true);
       Logger.info(`Load thread ${topLevelId}: ${comments.length} fetched, ${added} new`);
       if (added > 0 && comment.postId) {
-        reRenderPostGroup(comment.postId, state2, commentId);
+        getUIHost().rerenderPostGroup(comment.postId, commentId);
       }
     } catch (err) {
       Logger.error("Failed to load thread", err);
@@ -7744,18 +7673,18 @@ currentCommentId = null;
           }
         }
       }
-      const added = mergeComments(fetched, state2);
-      Logger.info(`Load parents for ${commentId}: ${fetched.length} fetched, ${added} new`);
       for (const f of fetched) {
         f.forceVisible = true;
         f.justRevealed = true;
       }
+      const added = getUIHost().mergeComments(fetched, true);
+      Logger.info(`Load parents for ${commentId}: ${fetched.length} fetched, ${added} new`);
       if (comment) {
         comment.forceVisible = true;
         comment.justRevealed = true;
       }
       if (added > 0 && comment.postId) {
-        reRenderPostGroup(comment.postId, state2, commentId);
+        getUIHost().rerenderPostGroup(comment.postId, commentId);
       }
       setTimeout(() => {
         for (const f of fetched) f.justRevealed = false;
@@ -7789,9 +7718,7 @@ currentCommentId = null;
           const parentRes = await queryGraphQL(GET_COMMENT, { id: currentParentId });
           const parent = parentRes?.comment?.result;
           if (!parent) break;
-          parent.isContext = true;
-          state2.comments.push(parent);
-          rebuildIndexes(state2);
+          getUIHost().mergeComments([parent], true);
           currentParentId = parent.parentCommentId || null;
         }
         topLevelId = findTopLevelAncestorId(commentId, state2);
@@ -7802,11 +7729,7 @@ currentCommentId = null;
         limit: CONFIG.loadMax
       });
       const fetchedComments = res?.comments?.results || [];
-      fetchedComments.forEach((c) => {
-        c.forceVisible = true;
-        c.justRevealed = true;
-      });
-      const added = mergeComments(fetchedComments, state2);
+      const added = getUIHost().mergeComments(fetchedComments, true);
       fetchedComments.forEach((c) => {
         const inState = state2.commentById.get(c._id);
         if (inState) {
@@ -7816,7 +7739,7 @@ currentCommentId = null;
       });
       Logger.info(`Load descendants for ${commentId}: ${fetchedComments.length} fetched, ${added} new`);
       if ((added > 0 || fetchedComments.length > 0) && comment.postId) {
-        reRenderPostGroup(comment.postId, state2, commentId);
+        getUIHost().rerenderPostGroup(comment.postId, commentId);
       }
       setTimeout(() => {
         fetchedComments.forEach((c) => {
@@ -7828,29 +7751,6 @@ currentCommentId = null;
       Logger.error("Failed to load descendants", err);
     } finally {
       target.textContent = originalText;
-    }
-  };
-  const handleScrollToRoot = (target, state2) => {
-    const commentId = getCommentIdFromTarget(target);
-    if (!commentId) return;
-    const topLevelId = findTopLevelAncestorId(commentId, state2);
-    if (topLevelId) {
-      const rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
-      if (rootEl) {
-        smartScrollTo(rootEl, false);
-        rootEl.classList.add("pr-highlight-parent");
-        setTimeout(() => rootEl.classList.remove("pr-highlight-parent"), 2e3);
-        return;
-      }
-    }
-    const comment = state2.commentById.get(commentId);
-    if (comment?.postId) {
-      const postHeader = document.querySelector(`.pr-post[data-id="${comment.postId}"] .pr-post-header`);
-      if (postHeader) {
-        smartScrollTo(postHeader, true);
-        postHeader.classList.add("pr-highlight-parent");
-        setTimeout(() => postHeader.classList.remove("pr-highlight-parent"), 2e3);
-      }
     }
   };
   const handleLoadParentsAndScroll = async (target, state2) => {
@@ -7868,7 +7768,7 @@ currentCommentId = null;
       if (rootEl) {
         const comment = state2.commentById.get(commentId);
         if (comment?.postId) {
-          reRenderPostGroup(comment.postId, state2, commentId);
+          getUIHost().rerenderPostGroup(comment.postId, commentId);
           rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
         }
         if (!rootEl) return;
@@ -7884,7 +7784,7 @@ currentCommentId = null;
         return;
       }
     }
-    handleScrollToRoot(target, state2);
+    handleScrollToRoot(target, topLevelId);
   };
   const handleSendToAIStudio = async (state2, includeDescendants = false) => {
     const target = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
@@ -8173,7 +8073,14 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       }
     });
   };
+  let eventsAbort = null;
   const attachEventListeners = (state2) => {
+    if (eventsAbort) {
+      eventsAbort.abort();
+      Logger.debug("Aborted previous event listeners to re-attach.");
+    }
+    eventsAbort = new AbortController();
+    const signal = eventsAbort.signal;
     const isHeaderInteractive = (el) => {
       return !!el.closest(
         ".pr-post-header a, .pr-author, .pr-vote-controls, .pr-reactions-container, .pr-reaction-chip, .pr-add-reaction-btn, .pr-vote-btn, .pr-author-controls, .pr-post-action"
@@ -8202,7 +8109,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         e.stopPropagation();
         openReactionPicker(target, state2);
       }
-    });
+    }, { signal });
     document.addEventListener("click", (e) => {
       const target = e.target;
       const replies = target.closest(".pr-replies");
@@ -8223,10 +8130,10 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         handlePostExpand(actionTarget);
       } else if (action === "author-up") {
         e.stopPropagation();
-        handleAuthorUp(actionTarget, state2);
+        handleAuthorUp(actionTarget);
       } else if (action === "author-down") {
         e.stopPropagation();
-        handleAuthorDown(actionTarget, state2);
+        handleAuthorDown(actionTarget);
       } else if (action === "read-more") {
         e.stopPropagation();
         handleReadMore(actionTarget);
@@ -8248,7 +8155,22 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         e.stopPropagation();
         const rawTarget = e.target;
         if (rawTarget instanceof Element && isHeaderInteractive(rawTarget)) return;
-        handleScrollToPostTop(actionTarget, state2);
+        const postId = actionTarget.closest(".pr-post-header")?.getAttribute("data-post-id") || actionTarget.closest(".pr-post")?.getAttribute("data-id");
+        if (postId) {
+          const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`);
+          if (postHeader) {
+            const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+            const currentScroll = window.scrollY;
+            if (Math.abs(headerTop - currentScroll) < 5) {
+              const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]');
+              if (eBtn && !eBtn.classList.contains("disabled")) {
+                handleTogglePostBody(eBtn, state2);
+                return;
+              }
+            }
+          }
+        }
+        handleScrollToPostTop(actionTarget);
       } else if (action === "scroll-to-comments") {
         e.stopPropagation();
         handleScrollToComments(actionTarget);
@@ -8285,13 +8207,13 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       } else if (action === "scroll-to-root") {
         e.preventDefault();
         e.stopPropagation();
-        handleScrollToRoot(target, state2);
+        handleScrollToRoot(target);
       } else if (action === "load-parents-and-scroll") {
         e.preventDefault();
         e.stopPropagation();
         handleLoadParentsAndScroll(target, state2);
       }
-    });
+    }, { signal });
     document.addEventListener("click", (e) => {
       const target = e.target;
       if (target.id === "pr-inline-react-btn") {
@@ -8299,13 +8221,94 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
           openReactionPicker(target, state2, "");
         }
       }
-    });
+    }, { signal });
     document.addEventListener("mousemove", (e) => {
       state2.lastMousePos.x = e.clientX;
       state2.lastMousePos.y = e.clientY;
-    }, { passive: true });
-    attachHotkeyListeners(state2);
+    }, { passive: true, signal });
+    attachHotkeyListeners(state2, signal);
   };
+  class PowerReaderUIHost {
+    state;
+    constructor(state2) {
+      this.state = state2;
+    }
+    rerenderAll() {
+      renderUI(this.state);
+    }
+    rerenderPostGroup(postId, anchorCommentId) {
+      const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+      if (!postContainer) {
+        Logger.warn(`reRenderPostGroup: Container for post ${postId} not found`);
+        return;
+      }
+      let beforeTop = null;
+      if (anchorCommentId) {
+        const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
+      }
+      const post = this.state.postById.get(postId);
+      const postComments = this.state.comments.filter((c) => c.postId === postId);
+      Logger.info(`reRenderPostGroup: p=${postId}, comments=${postComments.length}`);
+      const bodyContainer = postContainer.querySelector(".pr-post-body-container");
+      const wasExpanded = bodyContainer && !bodyContainer.classList.contains("truncated");
+      const group = {
+        postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      postContainer.outerHTML = renderPostGroup(group, this.state);
+      const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+      if (wasExpanded && newPostContainer) {
+        const newBody = newPostContainer.querySelector(".pr-post-body-container");
+        if (newBody && newBody.classList.contains("truncated")) {
+          newBody.classList.remove("truncated");
+          newBody.style.maxHeight = "none";
+          const overlay = newBody.querySelector(".pr-read-more-overlay");
+          if (overlay) overlay.style.display = "none";
+          const readMoreBtn = newBody.querySelector(".pr-post-read-more");
+          if (readMoreBtn) readMoreBtn.style.display = "none";
+        }
+      }
+      setupLinkPreviews(this.state.comments);
+      refreshPostActionButtons(postId);
+      if (anchorCommentId && beforeTop !== null) {
+        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (newAnchor) {
+          const afterTop = newAnchor.getBoundingClientRect().top;
+          const delta = afterTop - beforeTop;
+          const oldScrollY = window.scrollY;
+          Logger.info(`Viewport Preservation [${anchorCommentId}]: beforeTop=${beforeTop.toFixed(2)}, afterTop=${afterTop.toFixed(2)}, delta=${delta.toFixed(2)}, oldScrollY=${oldScrollY.toFixed(2)}`);
+          window.scrollTo(0, Math.max(0, oldScrollY + delta));
+        }
+      }
+    }
+    mergeComments(newComments, markAsContext = true, postIdMap) {
+      let added = 0;
+      for (const c of newComments) {
+        if (!this.state.commentById.has(c._id)) {
+          if (markAsContext) c.isContext = true;
+          if (postIdMap && postIdMap.has(c._id)) {
+            c.postId = postIdMap.get(c._id);
+          }
+          this.state.comments.push(c);
+          added++;
+        }
+      }
+      if (added > 0) rebuildIndexes(this.state);
+      return added;
+    }
+    upsertPost(post) {
+      if (!this.state.postById.has(post._id)) {
+        this.state.posts.push(post);
+      } else {
+        const idx = this.state.posts.findIndex((p) => p._id === post._id);
+        if (idx >= 0) this.state.posts[idx] = post;
+      }
+      this.state.postById.set(post._id, post);
+    }
+  }
   const getUsernameFromUrl = () => {
     const path = window.location.pathname;
     if (!path.startsWith("/users/")) return null;
@@ -8638,14 +8641,47 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     return allResults;
   };
-  let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 1e4;
+  let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
   const updateRenderLimit = (limit) => {
     currentRenderLimit = limit;
+  };
+  const resetRenderLimit = () => {
+    currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
   };
   const incrementRenderLimit = (delta) => {
     currentRenderLimit += delta;
   };
-  const renderArchiveFeed = async (container, items, viewMode, itemById) => {
+  const ensureContextForItems = async (items, state2) => {
+    const missingIds = new Set();
+    const commentPostIdMap = new Map();
+    for (const item of items) {
+      if ("title" in item) continue;
+      const comment = item;
+      const itemPostId = comment.postId;
+      let current = comment.parentComment;
+      let depth = 0;
+      while (current && depth < 5) {
+        if (!state2.commentById.has(current._id)) {
+          missingIds.add(current._id);
+          if (!commentPostIdMap.has(current._id)) {
+            commentPostIdMap.set(current._id, itemPostId);
+          }
+        }
+        if (current.parentComment) {
+          current = current.parentComment;
+        } else {
+          break;
+        }
+        depth++;
+      }
+    }
+    if (missingIds.size > 0) {
+      Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
+      const fetched = await fetchCommentsByIds(Array.from(missingIds));
+      getUIHost().mergeComments(fetched, true, commentPostIdMap);
+    }
+  };
+  const renderArchiveFeed = async (container, items, viewMode, state2, sortBy) => {
     if (items.length === 0) {
       container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
       return;
@@ -8661,12 +8697,109 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     if (viewMode === "index") {
       container.innerHTML = visibleItems.map((item) => renderIndexItem(item)).join("");
     } else if (viewMode === "thread") {
-      container.innerHTML = `<div class="pr-loading-context">Loading conversation context...</div>`;
-      await ensureContextForItems(visibleItems, itemById);
-      container.innerHTML = visibleItems.map((item) => renderThreadItem(item, itemById)).join("");
+      await ensureContextForItems(visibleItems, state2);
+      renderThreadView(container, visibleItems, state2, sortBy);
     } else {
       container.innerHTML = visibleItems.map((item) => renderCardItem(item)).join("");
     }
+  };
+  const renderThreadView = (container, items, state2, sortBy) => {
+    const visibleCommentIds = new Set();
+    const inclusionCommentIds = new Set();
+    items.forEach((item) => {
+      if (!("title" in item)) {
+        visibleCommentIds.add(item._id);
+        inclusionCommentIds.add(item._id);
+        const comment = item;
+        let currentId = comment.parentCommentId || comment.parentComment?._id || null;
+        let depth = 0;
+        while (currentId && depth < 10) {
+          if (state2.commentById.has(currentId)) {
+            inclusionCommentIds.add(currentId);
+            const parent = state2.commentById.get(currentId);
+            currentId = parent.parentCommentId || parent.parentComment?._id || null;
+          } else {
+            break;
+          }
+          depth++;
+        }
+      }
+    });
+    const postGroups = new Map();
+    const visiblePostIds = new Set();
+    items.forEach((item) => {
+      if ("title" in item) {
+        visiblePostIds.add(item._id);
+      }
+    });
+    inclusionCommentIds.forEach((commentId) => {
+      const comment = state2.commentById.get(commentId);
+      if (!comment) return;
+      const postId = comment.postId;
+      visiblePostIds.add(postId);
+    });
+    visiblePostIds.forEach((postId) => {
+      const comments = [];
+      let maxDate = new Date(0);
+      let maxScore = Number.NEGATIVE_INFINITY;
+      inclusionCommentIds.forEach((commentId) => {
+        const comment = state2.commentById.get(commentId);
+        if (comment && comment.postId === postId) {
+          comments.push(comment);
+          const commentDate = new Date(comment.postedAt);
+          if (commentDate > maxDate) maxDate = commentDate;
+          if (typeof comment.baseScore === "number" && comment.baseScore > maxScore) {
+            maxScore = comment.baseScore;
+          }
+        }
+      });
+      const post = state2.postById.get(postId);
+      if (post) {
+        const postDate = new Date(post.postedAt);
+        if (postDate > maxDate) maxDate = postDate;
+        if (typeof post.baseScore === "number" && post.baseScore > maxScore) {
+          maxScore = post.baseScore;
+        }
+      }
+      postGroups.set(postId, {
+        postId,
+        comments,
+        maxDate,
+maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
+      });
+    });
+    const sortedGroups = Array.from(postGroups.values());
+    switch (sortBy) {
+      case "date-asc":
+      case "replyTo":
+        sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
+        break;
+      case "score":
+        sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
+        break;
+      case "score-asc":
+        sortedGroups.sort((a, b) => a.maxScore - b.maxScore);
+        break;
+      case "date":
+      default:
+        sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
+        break;
+    }
+    container.innerHTML = "";
+    let html2 = "";
+    sortedGroups.forEach((group) => {
+      const post = state2.postById.get(group.postId);
+      const postComments = group.comments;
+      if (!post && postComments.length === 0) return;
+      const postGroup = {
+        postId: group.postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      html2 += renderPostGroup(postGroup, state2);
+    });
+    container.innerHTML = html2;
   };
   const renderCardItem = (item) => {
     const isPost = "title" in item;
@@ -8680,13 +8813,14 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       const comment = item;
       contentHtml = renderBody(comment.htmlBody || "", comment.extendedScore);
     }
+    const dataset = `data-id="${item._id}" ${!isPost && item.postId ? `data-post-id="${item.postId}"` : ""}`;
     return `
-      <div class="${classes}" data-id="${item._id}">
+      <div class="${classes}" ${dataset}>
         <div class="pr-archive-item-header">
            ${metadataHtml}
         </div>
         <div class="pr-archive-item-body">
-          ${contentHtml}
+           ${contentHtml}
         </div>
       </div>
     `;
@@ -8710,93 +8844,6 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         </div>
     `;
   };
-  const renderThreadItem = (item, itemById) => {
-    const isPost = "title" in item;
-    if (isPost) {
-      return renderCardItem(item);
-    }
-    const comment = item;
-    const parents = [];
-    let current = comment.parentComment;
-    while (current) {
-      const fullParent = itemById.get(current._id);
-      if (fullParent && !("title" in fullParent)) {
-        parents.unshift(fullParent);
-        current = fullParent.parentComment;
-      } else if (current._id) {
-        break;
-      } else {
-        break;
-      }
-    }
-    let postContext = "";
-    const post = "post" in comment ? comment.post : null;
-    const fullPost = itemById.get(comment.postId);
-    if (fullPost && "title" in fullPost) {
-      postContext = `
-            <div class="pr-thread-root-post">
-                <a href="${fullPost.pageUrl}" target="_blank" class="pr-thread-post-link">
-                    📝 ${escapeHtml(fullPost.title)}
-                </a>
-                <span class="pr-thread-post-meta">by ${fullPost.user?.displayName || "Unknown"}</span>
-            </div>
-        `;
-    } else if (post) {
-      postContext = `
-            <div class="pr-thread-root-post">
-                <a href="${post.pageUrl}" target="_blank" class="pr-thread-post-link">
-                    📝 ${escapeHtml(post.title)}
-                </a>
-            </div>
-        `;
-    }
-    const parentHtml = parents.map((p) => `
-        <div class="pr-thread-parent">
-            <div class="pr-thread-parent-meta">
-                Replying to <strong>${escapeHtml(p.user?.displayName || p.author || "Unknown")}</strong>
-            </div>
-            <div class="pr-thread-parent-body">
-                ${sanitizeBodySimple(p.htmlBody || "")}
-            </div>
-        </div>
-    `).join("");
-    return `
-        <div class="pr-thread-wrapper" style="margin-bottom: 30px; border: 1px solid var(--pr-border-subtle); border-radius: 8px; overflow: hidden;">
-            ${postContext}
-            <div class="pr-thread-parents" style="background: var(--pr-bg-secondary); padding: 10px;">
-                ${parentHtml}
-            </div>
-            ${renderCardItem(comment)} 
-        </div>
-    `;
-  };
-  const ensureContextForItems = async (items, itemById) => {
-    const missingIds = new Set();
-    for (const item of items) {
-      if ("title" in item) continue;
-      let current = item.parentComment;
-      let depth = 0;
-      while (current && depth < 5) {
-        if (!itemById.has(current._id)) {
-          missingIds.add(current._id);
-        }
-        if (current.parentComment) {
-          current = current.parentComment;
-        } else {
-          break;
-        }
-        depth++;
-      }
-      if (item.postId && !itemById.has(item.postId)) ;
-    }
-    if (missingIds.size > 0) {
-      Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
-      const fetched = await fetchCommentsByIds(Array.from(missingIds));
-      for (const c of fetched) {
-        itemById.set(c._id, c);
-      }
-    }
-  };
   const getInterlocutorName$1 = (item) => {
     if ("title" in item) return " (Original Post)";
     const c = item;
@@ -8804,9 +8851,162 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     if (c.post?.user?.displayName) return c.post.user.displayName;
     return "Unknown";
   };
-  const sanitizeBodySimple = (html2) => {
-    return renderBody(html2, null);
-  };
+  class ArchiveUIHost {
+    archiveState;
+    readerState;
+    feedContainer = null;
+    renderCallback = null;
+    constructor(archiveState, feedContainer, renderCallback) {
+      this.archiveState = archiveState;
+      this.feedContainer = feedContainer;
+      this.renderCallback = renderCallback || null;
+      this.readerState = this.syncReaderState();
+    }
+    syncReaderState() {
+      const state2 = createInitialState();
+      state2.isArchiveMode = true;
+      const currentUser = window.LessWrong?.params?.currentUser;
+      state2.currentUsername = currentUser?.username || null;
+      state2.currentUserId = currentUser?._id || null;
+      this.archiveState.items.forEach((item) => {
+        if ("title" in item) {
+          state2.posts.push(item);
+          state2.postById.set(item._id, item);
+        } else {
+          state2.comments.push(item);
+          state2.commentById.set(item._id, item);
+        }
+      });
+      rebuildIndexes(state2);
+      return state2;
+    }
+    getReaderState() {
+      return this.readerState;
+    }
+setContainer(container) {
+      this.feedContainer = container;
+    }
+syncItemToCanonical(item) {
+      const id = item._id;
+      const exists = this.archiveState.itemById.has(id);
+      this.archiveState.itemById.set(id, item);
+      if (exists) {
+        const existingIndex = this.archiveState.items.findIndex((i) => i._id === id);
+        if (existingIndex >= 0) {
+          this.archiveState.items[existingIndex] = item;
+        }
+      } else {
+        this.archiveState.items.push(item);
+      }
+    }
+sortCanonicalItems() {
+      this.archiveState.items.sort((a, b) => {
+        return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
+      });
+    }
+    rerenderAll() {
+      if (!this.feedContainer) return;
+      const existingContext = this.readerState.comments.filter((c) => c.isContext === true);
+      const existingPosts = this.readerState.posts.filter((p) => p.isContext === true);
+      this.readerState.comments.length = 0;
+      this.readerState.posts.length = 0;
+      this.readerState.commentById.clear();
+      this.readerState.postById.clear();
+      this.readerState.childrenByParentId.clear();
+      this.archiveState.items.forEach((item) => {
+        if ("title" in item) {
+          this.readerState.posts.push(item);
+          this.readerState.postById.set(item._id, item);
+        } else {
+          this.readerState.comments.push(item);
+          this.readerState.commentById.set(item._id, item);
+        }
+      });
+      existingContext.forEach((c) => {
+        if (!this.readerState.commentById.has(c._id)) {
+          this.readerState.comments.push(c);
+          this.readerState.commentById.set(c._id, c);
+        }
+      });
+      existingPosts.forEach((p) => {
+        if (!this.readerState.postById.has(p._id)) {
+          this.readerState.posts.push(p);
+          this.readerState.postById.set(p._id, p);
+        }
+      });
+      rebuildIndexes(this.readerState);
+      if (this.renderCallback) {
+        this.renderCallback();
+      } else if (this.feedContainer) {
+        renderArchiveFeed(this.feedContainer, this.archiveState.items, this.archiveState.viewMode, this.readerState, this.archiveState.sortBy);
+      }
+    }
+    rerenderPostGroup(postId, anchorCommentId) {
+      const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+      if (!postContainer) {
+        Logger.warn(`ArchiveUIHost: Container for post ${postId} not found`);
+        return;
+      }
+      let beforeTop = null;
+      if (anchorCommentId) {
+        const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
+      }
+      const post = this.readerState.postById.get(postId);
+      const postComments = this.readerState.comments.filter((c) => c.postId === postId);
+      const group = {
+        postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      postContainer.outerHTML = renderPostGroup(group, this.readerState);
+      setupLinkPreviews(this.readerState.comments);
+      refreshPostActionButtons(postId);
+      if (anchorCommentId && beforeTop !== null) {
+        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (newAnchor) {
+          const afterTop = newAnchor.getBoundingClientRect().top;
+          const delta = afterTop - beforeTop;
+          const oldScrollY = window.scrollY;
+          window.scrollTo(0, Math.max(0, oldScrollY + delta));
+        }
+      }
+    }
+    mergeComments(newComments, markAsContext = true, postIdMap) {
+      let added = 0;
+      for (const c of newComments) {
+        if (!this.readerState.commentById.has(c._id)) {
+          if (markAsContext) c.isContext = true;
+          if (postIdMap && postIdMap.has(c._id)) {
+            c.postId = postIdMap.get(c._id);
+          }
+          this.readerState.comments.push(c);
+          this.readerState.commentById.set(c._id, c);
+          added++;
+        }
+        if (!markAsContext) {
+          this.syncItemToCanonical(c);
+        }
+      }
+      if (added > 0) {
+        this.sortCanonicalItems();
+        rebuildIndexes(this.readerState);
+      }
+      return added;
+    }
+    upsertPost(post) {
+      if (!this.readerState.postById.has(post._id)) {
+        this.readerState.posts.push(post);
+      } else {
+        const idx = this.readerState.posts.findIndex((p) => p._id === post._id);
+        if (idx >= 0) this.readerState.posts[idx] = post;
+      }
+      this.readerState.postById.set(post._id, post);
+      this.syncItemToCanonical(post);
+      this.sortCanonicalItems();
+    }
+  }
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
   const MAX_AUTO_RETRIES = 50;
   const INITIAL_BACKOFF_MS = 2e3;
@@ -8814,14 +9014,17 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
   const initArchive = async (username) => {
     Logger.info(`Initializing User Archive for: ${username}`);
     try {
+      resetRenderLimit();
       executeTakeover();
       await initializeReactions();
       rebuildDocument();
       const state2 = createInitialArchiveState(username);
       const root = document.getElementById("power-reader-root");
       if (!root) return;
-      const style = document.createElement("style");
-      style.textContent = `
+      if (!document.getElementById("pr-archive-styles")) {
+        const style = document.createElement("style");
+        style.id = "pr-archive-styles";
+        style.textContent = `
         .pr-archive-toolbar {
             display: flex;
             gap: 10px;
@@ -8867,30 +9070,9 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
             text-align: right;
         }
         
-        /* Thread View Styles */
+        /* Thread View Styles - now handled mostly by PostGroup, but shell styles might remain useful */
         .pr-thread-wrapper {
              background: var(--pr-bg-primary);
-        }
-        .pr-thread-root-post {
-            padding: 10px;
-            background: var(--pr-bg-secondary);
-            border-bottom: 1px solid var(--pr-border-subtle);
-            font-size: 0.9em;
-        }
-        .pr-thread-parent {
-            padding: 8px 0;
-            border-left: 2px solid var(--pr-border-color);
-            padding-left: 10px;
-            margin-bottom: 5px;
-        }
-        .pr-thread-parent-meta {
-            font-size: 0.85em;
-            color: var(--pr-text-tertiary);
-            margin-bottom: 4px;
-        }
-        .pr-thread-parent-body {
-            font-size: 0.9em;
-            color: var(--pr-text-secondary);
         }
         
         .pr-status.status-error {
@@ -9019,10 +9201,11 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
             gap: 10px;
         }
     `;
-      document.head.appendChild(style);
+        document.head.appendChild(style);
+      }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.619"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -9065,16 +9248,18 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       const resyncBtn = document.getElementById("archive-resync");
       const errorContainer = document.getElementById("archive-error-container");
       let activeItems = state2.items;
-      const syncErrorState = {
-        isRetrying: false,
-        retryCount: 0,
-        abortController: null
-      };
-      const updateItemMap = (items) => {
-        items.forEach((i) => state2.itemById.set(i._id, i));
-      };
       const LARGE_DATASET_THRESHOLD = 1e4;
       let pendingRenderCount = null;
+      const runPostRenderHooks = () => {
+        setupLinkPreviews(uiHost.getReaderState().comments);
+        if (state2.viewMode === "thread") {
+          const posts = feedEl.querySelectorAll(".pr-post");
+          posts.forEach((p) => {
+            const pid = p.getAttribute("data-id") || p.getAttribute("data-post-id");
+            if (pid) refreshPostActionButtons(pid);
+          });
+        }
+      };
       const refreshView = async () => {
         let filtered = state2.items;
         const query = searchInput.value;
@@ -9101,14 +9286,31 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
           showRenderCountDialog(totalItems, async (count) => {
             pendingRenderCount = count;
             updateRenderLimit(count);
-            await renderArchiveFeed(feedEl, activeItems, state2.viewMode, state2.itemById);
+            await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
+            runPostRenderHooks();
           });
           return;
         }
         if (pendingRenderCount !== null) {
           updateRenderLimit(pendingRenderCount);
         }
-        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, state2.itemById);
+        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
+        runPostRenderHooks();
+      };
+      const uiHost = new ArchiveUIHost(state2, feedEl, refreshView);
+      setUIHost(uiHost);
+      attachEventListeners(uiHost.getReaderState());
+      initAIStudioListener(uiHost.getReaderState());
+      setupExternalLinks();
+      setupInlineReactions(uiHost.getReaderState());
+      const syncErrorState = {
+        isRetrying: false,
+        retryCount: 0,
+        abortController: null
+      };
+      const updateItemMap = (items) => {
+        items.forEach((i) => state2.itemById.set(i._id, i));
+        uiHost.rerenderAll();
       };
       const showRenderCountDialog = (totalCount, onConfirm) => {
         if (!feedEl) return;
@@ -9151,11 +9353,24 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       });
       viewSelect?.addEventListener("change", () => {
         state2.viewMode = viewSelect.value;
+        const replyToOption = sortSelect.querySelector('option[value="replyTo"]');
+        if (replyToOption) {
+          if (state2.viewMode === "thread") {
+            replyToOption.disabled = true;
+            if (state2.sortBy === "replyTo") {
+              state2.sortBy = "date";
+              sortSelect.value = "date";
+            }
+          } else {
+            replyToOption.disabled = false;
+          }
+        }
         refreshView();
       });
-      loadMoreBtn?.querySelector("button")?.addEventListener("click", () => {
+      loadMoreBtn?.querySelector("button")?.addEventListener("click", async () => {
         incrementRenderLimit(PAGE_SIZE);
-        renderArchiveFeed(feedEl, activeItems, state2.viewMode, state2.itemById);
+        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
+        runPostRenderHooks();
       });
       const showErrorUI = (error, onRetry, onCancel) => {
         if (!errorContainer) return;
@@ -9255,7 +9470,6 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
             if (errorContainer) errorContainer.style.display = "none";
             setStatus(`Sync complete. ${state2.items.length} total items.`, false, false);
             updateItemMap(state2.items);
-            await refreshView();
             if (pendingRetryCount === 0) {
               isSyncInProgress = false;
             }
@@ -9329,7 +9543,6 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       activeItems = state2.items;
       if (cached.items.length > 0) {
         statusEl.textContent = `Loaded ${cached.items.length} items from cache.`;
-        refreshView();
       } else {
         dashboardEl.style.display = "block";
         statusEl.textContent = `No local data. Fetching full history for ${username}...`;
@@ -9438,6 +9651,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       return;
     }
     executeTakeover();
+    setUIHost(new PowerReaderUIHost(getState()));
     try {
       await initializeReactions();
     } catch (e) {
@@ -9472,7 +9686,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.619"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

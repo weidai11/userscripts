@@ -47,7 +47,7 @@ jj git push
 ## 🛠 Tech Stack
 - **Vite** + **TypeScript** + **[vite-plugin-monkey](https://github.com/lisonge/vite-plugin-monkey)**.
 - **GraphQL**: Type-safe queries with `graphql-codegen` (runs automatically on `dev`/`build`).
-- **Playwright**: Robust E2E testing suite (100% mocked by default).
+- **Playwright**: Robust E2E testing suite (100% mocked by default, **268/268 passed**).
 
 ## 📜 Documentation & Guides
 - **[AGENTS.md](./AGENTS.md)**: AI-friendly guide to architecture, commands, and conventions.

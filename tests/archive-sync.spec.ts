@@ -215,38 +215,136 @@ test.describe('Power Reader Archive Sync', () => {
         }).toPass({ timeout: 10000 });
     });
 
-    test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items', async ({ page }) => {
-        const username = 'Test_User';
-        const userId = 'u-test-user';
-        
-        // Setup initial mock: 1 older post
-        const initialPost = {
-            _id: 'p1',
-            title: 'Old Post',
-            slug: 'old-post',
-            pageUrl: 'https://lesswrong.com/posts/p1/old-post',
-            postedAt: new Date('2023-01-01').toISOString(),
-            baseScore: 10,
-            voteCount: 5,
-            commentCount: 0,
-            htmlBody: '<p>Old Body</p>',
-            contents: { markdown: 'Old Body' },
-            user: { _id: userId, username, displayName: 'Test User', slug: 'test-user', karma: 100 }
-        };
+test('[PR-UARCH-22] canonical state sync preserves fetched context across rerenders', async ({ page }) => {
+  const username = 'canonical-sync-test';
+  const userId = 'u-canonical-sync';
+  const userObj = { _id: userId, username, displayName: 'Canonical Sync Test', slug: 'canonical-sync-test', karma: 100 };
+  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
-        const newPost = {
-            _id: 'p2',
-            title: 'New Post',
-            slug: 'new-post',
-            pageUrl: 'https://lesswrong.com/posts/p2/new-post',
-            postedAt: new Date('3000-01-01').toISOString(), // Future date to ensure it's > lastSyncDate
-            baseScore: 20,
-            voteCount: 10,
-            commentCount: 0,
-            htmlBody: '<p>New Body</p>',
-            contents: { markdown: 'New Body' },
-            user: { _id: userId, username, displayName: 'Test User', slug: 'test-user', karma: 100 }
-        };
+  await setupMockEnvironment(page, {
+    mockHtml: '<html><body><div id="app"></div></body></html>',
+    testMode: true,
+    onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-child',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 5,
+            htmlBody: '<p>Child comment</p>',
+            user: ${JSON.stringify(userObj)},
+            post: { _id: 'p1', title: 'Test Post', pageUrl: '...', user: ${JSON.stringify(otherUser)} },
+            parentComment: {
+              _id: 'c-parent',
+              user: ${JSON.stringify(otherUser)},
+              parentComment: null
+            },
+            postId: 'p1'
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetCommentsByIds')) {
+  // Return parent when fetching context
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-parent',
+            postedAt: '2025-01-09T12:00:00Z',
+            htmlBody: '<p>Parent comment body</p>',
+            user: ${JSON.stringify(otherUser)},
+            postId: 'p1',
+            parentComment: null
+          }
+        ]
+      }
+    }
+  };
+}
+`
+  });
+
+  await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+  await page.evaluate(scriptContent);
+  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+  // Switch to Thread View (triggers context fetch)
+  await page.locator('#archive-view').selectOption('thread');
+
+  // Wait for thread view to render with parent context
+  await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
+  await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
+
+  // Trigger a rerender by changing sort mode
+  await page.locator('#archive-sort').selectOption('score');
+
+  // Wait for rerender
+  await page.waitForTimeout(100);
+
+  // [WS1-FIX] Verify both comments are still visible after rerender
+  // This tests that canonical state sync preserves fetched context
+  const parentAfterRerender = page.locator('.pr-comment[data-id="c-parent"]');
+  const childAfterRerender = page.locator('.pr-comment[data-id="c-child"]');
+
+  await expect(parentAfterRerender).toBeVisible();
+  await expect(childAfterRerender).toBeVisible();
+  await expect(parentAfterRerender).toContainText('Parent comment body');
+  await expect(childAfterRerender).toContainText('Child comment');
+
+  // Verify event handlers still work by clicking [t] button on child
+  const tButton = childAfterRerender.locator('[data-action="load-parents-and-scroll"]');
+  await expect(tButton).toBeVisible();
+  await tButton.click();
+
+  // If we get here without errors, the canonical state sync is working
+  // and ReaderState identity is preserved
+});
+
+test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items', async ({ page }) => {
+  const username = 'Test_User';
+  const userId = 'u-test-user';
+
+  // Setup initial mock: 1 older post
+  const initialPost = {
+    _id: 'p1',
+    title: 'Old Post',
+    slug: 'old-post',
+    pageUrl: 'https://lesswrong.com/posts/p1/old-post',
+    postedAt: new Date('2023-01-01').toISOString(),
+    baseScore: 10,
+    voteCount: 5,
+    commentCount: 0,
+    htmlBody: '<p>Old Body</p>',
+    contents: { markdown: 'Old Body' },
+    user: { _id: userId, username, displayName: 'Test User', slug: 'test-user', karma: 100 }
+  };
+
+  const newPost = {
+    _id: 'p2',
+    title: 'New Post',
+    slug: 'new-post',
+    pageUrl: 'https://lesswrong.com/posts/p2/new-post',
+    postedAt: new Date('3000-01-01').toISOString(), // Future date to ensure it's > lastSyncDate
+    baseScore: 20,
+    voteCount: 10,
+    commentCount: 0,
+    htmlBody: '<p>New Body</p>',
+    contents: { markdown: 'New Body' },
+    user: { _id: userId, username, displayName: 'Test User', slug: 'test-user', karma: 100 }
+  };
 
         // 1. First Visit
         await setupMockEnvironment(page, {

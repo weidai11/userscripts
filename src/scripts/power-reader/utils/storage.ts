@@ -1,7 +1,10 @@
+
 /**
  * Storage utilities for Power Reader
  * Wraps GM_setValue/GM_getValue with type safety
  */
+
+import { Logger } from './logger';
 
 declare const GM_setValue: (key: string, value: string) => void;
 declare const GM_getValue: (key: string, defaultValue: string) => string;
@@ -224,7 +227,6 @@ export function getAIStudioPrefix(): string {
 export function setAIStudioPrefix(prefix: string): void {
   GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
 }
-import { Logger } from './logger';
 
 export async function exportState(): Promise<void> {
   const exportData: Record<string, string> = {};

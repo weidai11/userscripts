@@ -197,12 +197,18 @@ The `ReadTracker` service updates the global "Unread Count" in the status bar.
   - For non-visual markers, use `{ state: 'attached' }`.
   - For standard UI, **don't assume it's a test fluke**. Check browser logs for re-renders or "Click Outside" logic that might be hiding the element prematurely.
 
-### Test Environment Physics (Scrolling)
-- **Symptom**: `window.scrollTo` calls have no effect; elements never enter the viewport.
-- **Cause**: If you nuke the body (`document.documentElement.innerHTML = ''`) during userscript init, you might lose the page's natural height. Scrolling on a 0px tall body is a no-op.
-- **Fix**: Inject a min-height style in your test *before* attempting scroll actions:
+### Test Environment Physics (Scrolling & Clamping)
+- **Symptom**: `window.scrollTo` appears to have shifted the scroll position, but only partially (e.g., stopping 185px short), or `window.scrollY` remains 0.
+- **Cause 1 (Clamping)**: Browsers "clamp" the scroll position at the bottom. If the target element is 500px from the bottom and you try to scroll to it with `{ top: targetTop }`, the browser will stop when the bottom of the page hits the bottom of the viewport. The element will *never* reach the top of the viewport unless the page is tall enough.
+- **Cause 2 (Height Loss)**: If you nuke the body (`document.documentElement.innerHTML = ''`) during userscript init, you might lose the page's natural height. Scrolling on a 0px tall body is a no-op.
+- **Fix**: Inject a massive min-height style or a decorative spacer in your test *before* attempting scroll actions:
   ```ts
-  await page.evaluate(() => document.body.style.minHeight = '5000px');
+  // In the test setup:
+  await page.evaluate(() => {
+    const spacer = document.createElement('div');
+    spacer.style.height = '5000px';
+    document.body.appendChild(spacer);
+  });
   ```
 
 ### Mock Data Fragility

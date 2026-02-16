@@ -1,3 +1,4 @@
+
 /**
  * Event delegation for Power Reader
  * Centralizes all event handling with a single delegation strategy
@@ -34,10 +35,22 @@ import { handleSendToAIStudio } from '../features/aiStudioPopup';
 import { Logger } from '../utils/logger';
 
 
+let eventsAbort: AbortController | null = null;
+
+
 /**
  * Attach all event listeners using delegation
  */
 export const attachEventListeners = (state: ReaderState): void => {
+
+  // Idempotency guard: Abort previous listeners
+  if (eventsAbort) {
+    eventsAbort.abort();
+    Logger.debug('Aborted previous event listeners to re-attach.');
+  }
+  eventsAbort = new AbortController();
+  const signal = eventsAbort.signal;
+
   const isHeaderInteractive = (el: HTMLElement): boolean => {
     return !!el.closest(
       '.pr-post-header a, .pr-author, .pr-vote-controls, .pr-reactions-container, .pr-reaction-chip, .pr-add-reaction-btn, .pr-vote-btn, .pr-author-controls, .pr-post-action'
@@ -64,9 +77,6 @@ export const attachEventListeners = (state: ReaderState): void => {
     if (action === 'karma-up' || action === 'karma-down' || action === 'agree' || action === 'disagree') {
       handleVoteInteraction(target, action, state);
     }
-    // Placeholder Logic (from SPEC.md)
-    // - [PR-NEST-04] Missing Parent Placeholders: If a loaded comment references a parent comment that is not loaded, render an empty placeholder comment (no header or body) with a read-style border. This check must be re-applied any time comments are loaded or re-rendered.
-    // - Thread Integrity With Placeholders: Thread structure must remain correct whether or not placeholders exist. Replies should nest under their true parent if loaded, or under the placeholder if the parent is missing.
     // Reaction vote
     else if (action === 'reaction-vote') {
       const commentId = target.dataset.id;
@@ -80,7 +90,7 @@ export const attachEventListeners = (state: ReaderState): void => {
       e.stopPropagation();
       openReactionPicker(target, state);
     }
-  });
+  }, { signal });
 
   // Click for general interactions
   document.addEventListener('click', (e) => {
@@ -103,11 +113,11 @@ export const attachEventListeners = (state: ReaderState): void => {
     // Post collapse/expand
     if (action === 'collapse' && actionTarget.classList.contains('pr-post-toggle')) {
       e.stopPropagation();
-      handlePostCollapse(actionTarget, state);
+      handlePostCollapse(actionTarget);
     }
     else if (action === 'expand' && actionTarget.classList.contains('pr-post-toggle')) {
       e.stopPropagation();
-      handlePostExpand(actionTarget, state);
+      handlePostExpand(actionTarget);
     }
     // Author preferences
     else if (action === 'author-up') {
@@ -147,6 +157,26 @@ export const attachEventListeners = (state: ReaderState): void => {
       e.stopPropagation();
       const rawTarget = e.target;
       if (rawTarget instanceof Element && isHeaderInteractive(rawTarget as HTMLElement)) return;
+      
+      // Check if already at top - if so, toggle post body expansion
+      const postId = actionTarget.closest('.pr-post-header')?.getAttribute('data-post-id') || 
+                     actionTarget.closest('.pr-post')?.getAttribute('data-id');
+      if (postId) {
+        const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`) as HTMLElement;
+        if (postHeader) {
+          const headerTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+          const currentScroll = window.scrollY;
+          // If already at top (within 5px), toggle body expansion instead of scrolling
+          if (Math.abs(headerTop - currentScroll) < 5) {
+            const eBtn = postHeader.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
+            if (eBtn && !eBtn.classList.contains('disabled')) {
+              handleTogglePostBody(eBtn, state);
+              return;
+            }
+          }
+        }
+      }
+      
       handleScrollToPostTop(actionTarget, state);
     }
     else if (action === 'scroll-to-comments') {
@@ -196,14 +226,14 @@ export const attachEventListeners = (state: ReaderState): void => {
     else if (action === 'scroll-to-root') {
       e.preventDefault();
       e.stopPropagation();
-      handleScrollToRoot(target, state);
+      handleScrollToRoot(target);
     }
     else if (action === 'load-parents-and-scroll') {
       e.preventDefault();
       e.stopPropagation();
       handleLoadParentsAndScroll(target, state);
     }
-  });
+  }, { signal });
 
   // Global inline reaction button click
   document.addEventListener('click', (e) => {
@@ -213,13 +243,13 @@ export const attachEventListeners = (state: ReaderState): void => {
         openReactionPicker(target, state, '');
       }
     }
-  });
+  }, { signal });
 
   // Track mouse position for AI Studio target identification
   document.addEventListener('mousemove', (e) => {
     state.lastMousePos.x = e.clientX;
     state.lastMousePos.y = e.clientY;
-  }, { passive: true });
+  }, { passive: true, signal });
 
-  attachHotkeyListeners(state);
+  attachHotkeyListeners(state, signal);
 };

@@ -36,10 +36,16 @@ test.describe('Power Reader Highlight Visibility', () => {
         const findParentBtn = page.locator('.pr-comment[data-id="child1"] .pr-find-parent');
         await findParentBtn.scrollIntoViewIfNeeded();
 
+        // Move mouse to trigger intentional hover logic
+        const box = await findParentBtn.boundingBox();
+        if (box) {
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        }
+
         await page.evaluate(() => {
             const btn = document.querySelector('.pr-comment[data-id="child1"] .pr-find-parent') as HTMLElement;
             if (btn) {
-                btn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                btn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, clientX: 1, clientY: 1 }));
             }
         });
 
@@ -150,14 +156,33 @@ test.describe('Power Reader Highlight Visibility', () => {
         const findParentBtn = page.locator('.pr-comment[data-id="child3"] .pr-find-parent');
         await findParentBtn.scrollIntoViewIfNeeded();
 
-        await page.evaluate(() => {
-            const btn = document.querySelector('.pr-comment[data-id="child3"] .pr-find-parent') as HTMLElement;
-            if (btn) {
-                btn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-            }
-        });
+        // Settle time after scroll and before mouse move
+        await page.waitForTimeout(1000);
+
+        // Move mouse to trigger intentional hover logic
+        const box = await findParentBtn.boundingBox();
+        if (box) {
+            const centerX = box.x + box.width / 2;
+            const centerY = box.y + box.height / 2;
+            await page.mouse.move(centerX, centerY);
+
+            // Dispatch with exact coordinates to satisfy visibility/hit-test checks if any
+            await page.evaluate(({ cx, cy }) => {
+                const btn = document.querySelector('.pr-comment[data-id="child3"] .pr-find-parent') as HTMLElement;
+                if (btn) {
+                    btn.dispatchEvent(new MouseEvent('mouseenter', {
+                        bubbles: true,
+                        clientX: cx,
+                        clientY: cy
+                    }));
+                }
+            }, { cx: centerX, cy: centerY });
+        }
 
         // Should highlight the sticky header
-        await page.waitForFunction(() => document.querySelector('.pr-sticky-header.visible .pr-post-header[data-post-id="post3"]')?.classList.contains('pr-parent-hover'), { timeout: 10000 });
+        await page.waitForFunction(() => {
+            const el = document.querySelector('.pr-sticky-header.visible .pr-post-header[data-post-id="post3"]');
+            return el && el.classList.contains('pr-parent-hover');
+        }, { timeout: 10000 });
     });
 });

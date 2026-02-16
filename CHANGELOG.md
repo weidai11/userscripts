@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.630] - 2026-02-16
+
+### Fixed
+- **Sticky Header Scroll UX ([PR-POSTBTN-05])**: Resolved a bug where collapsing or expanding a post via the sticky header could fail to correctly scroll the viewport back to the original post header, or could even reset the scroll position to the top of the page.
+    - Standardized all header-triggered scrolling to use the robust `smartScrollTo` utility.
+    - Improved test stability by adding a definitive bottom spacer, ensuring the page remains scrollable even in headless environments with large viewports.
+    - Fixed a race condition where `window.pageYOffset` was measured before layout stabilization.
+
+## [1.2.629] - 2026-02-16
+
+### Fixed
+- **Archive Sorting UX**: Automatically disabled the "Reply To" sort option when switching to Thread View in the archive, preventing user confusion as threads are grouped by Post. If "Reply To" was active, the sort order resets to Date.
+
+## [1.2.628] - 2026-02-16
+
+### Fixed
+- **Archive Display**: Fixed issue where archived comments were appearing as "collapsed placeholders" if they had been previously read in the main reader. Archive mode now ignores local read state to ensure full visibility of history.
+- **Feature Setup**: Fixed missing initialization for sticky header, external links, and inline reactions in the Archive view.
+- **User Context**: Added missing `currentUsername` population in Archive mode, enabling "Reply to You" highlighting.
+- **Build System**: Cleaned up duplicate function definitions in the final bundle by resolving circular dependencies more thoroughly.
+
+## [1.2.627] - 2026-02-16
+
+### Added
+- **Archive Thread View ([UA-View-03])**: Implemented a fully functional Thread View for the User Archive.
+    - **Contextual Rendering**: Threads now display the root post and parent comment chain, providing full context for every archived comment.
+    - **Smart Fetching**: Automatically fetches missing parent comments and post content when viewing a thread, ensuring no "orphan" comments.
+    - **Unified Rendering**: Refactored the archive to use the same high-fidelity rendering engine as the main Power Reader, including collapsible threads, vote buttons, and author highlights.
+    - **Deep Linking**: Clicking "Context" or "Parent" on an archived comment now correctly loads and scrolls to the relevant ancestor, even if it wasn't in the initial archive snapshot.
+
+### Fixed
+- **Build System**: Resolved circular dependency issues in the build pipeline by reorganizing imports in `events/domActions.ts`, `render/post.ts`, and `utils/storage.ts`.
+- **Navigation Actions**: Added missing `handleScrollToPostTop` export to `domActions.ts`, restoring the "Scroll to Top" functionality for long posts.
+
 ## [1.2.619] - 2026-02-16
 
 ### Fixed

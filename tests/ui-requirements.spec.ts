@@ -81,31 +81,60 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
             user: { username: 'User' }
         }));
 
-        await initPowerReader(page, { 
-            posts, 
-            comments, 
-            testMode: true, 
+        await initPowerReader(page, {
+            posts,
+            comments,
+            testMode: true,
             storage: { 'helpCollapsed': true }
         });
+
+        // Add a definitive spacer at the bottom to ensure the page is ALWAYS scrollable
+        await page.evaluate(() => {
+            const spacer = document.createElement('div');
+            spacer.id = 'test-bottom-spacer';
+            spacer.style.height = '5000px';
+            document.body.appendChild(spacer);
+        });
+
         await page.setViewportSize({ width: 1280, height: 800 });
 
-        // Scroll deep into the post
+        // Scroll deep into the post and wait for scroll stabilization
         await page.evaluate(() => window.scrollTo(0, 1500));
+        // Wait for any scroll momentum/animations to complete
+        await page.waitForTimeout(100);
 
-        // Ensure sticky header is visible
+        // Ensure sticky header is visible with explicit wait
         const stickyHeader = page.locator('#pr-sticky-header');
-        await expect(stickyHeader).toBeVisible();
+        await expect(stickyHeader).toBeVisible({ timeout: 5000 });
 
         const collapseBtn = stickyHeader.locator('[data-action="collapse"]');
-        await expect(collapseBtn).toBeVisible();
+        await expect(collapseBtn).toBeVisible({ timeout: 5000 });
+
+        // Add styles to disable transitions for more reliable testing
+        await page.addStyleTag({
+            content: '* { scroll-behavior: auto !important; transition: none !important; animation: none !important; }'
+        });
+
+        // Get the header reference position before clicking
+        const headerTop = await page.evaluate(() => {
+            const h = document.querySelector('.pr-post[data-id="p1"] .pr-post-header') as HTMLElement;
+            return h.getBoundingClientRect().top + window.pageYOffset;
+        });
 
         // Click collapse
         await collapseBtn.click();
 
-        // Wait for collapse to finish and scroll to stabilize
-        await page.waitForTimeout(1000);
+        // Wait for scroll animation to complete using polling
+        await expect(async () => {
+            const current = await page.evaluate(() => window.scrollY);
+            const expected = await page.evaluate(() => {
+                const h = document.querySelector('.pr-post[data-id="p1"] .pr-post-header') as HTMLElement;
+                return h.getBoundingClientRect().top + window.pageYOffset;
+            });
+            expect(Math.abs(current - expected)).toBeLessThan(60);
+        }).toPass({ timeout: 5000 });
 
-        // Verify scroll position - should be near the top of the post header
+        // Final verification
         const final = await page.evaluate(() => {
             const h = document.querySelector('.pr-post[data-id="p1"] .pr-post-header') as HTMLElement;
             return {
@@ -115,7 +144,6 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         });
 
         // Should be exactly at headerTop (or very close, within sticky header height tolerance)
-        // Original failure showed ~53px diff which usually corresponds to sticky header height or top bar
         expect(Math.abs(final.scrollY - final.headerTop)).toBeLessThan(60);
     });
 

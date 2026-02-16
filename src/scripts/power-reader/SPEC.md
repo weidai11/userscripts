@@ -583,9 +583,17 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-09] Sort Modes**: Archive supports `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
 - **[PR-UARCH-10] View Modes**: Archive supports `card`, `index`, and `thread` views.
 - **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
+- **[PR-UARCH-25] Context Isolation**: Context comments (fetched for thread view ancestry) MUST NOT leak into card or index views. They remain in the `ReaderState` projection for rendering but are excluded from the canonical `ArchiveState.items` collection.
+- **[PR-UARCH-22] Context Persistence**: Context comments fetched during a thread view session MUST be preserved across rerenders (e.g., when switching sort modes or loading more items) within that session.
 - **[PR-UARCH-12] Progressive Rendering**: Archive initially renders a fixed page of items and supports incremental "Load More" expansion without refetching already loaded data.
+- **[PR-UARCH-24] Pagination Stability**: The active sort mode (including thread-specific group sorting) MUST persist and correctly apply to newly rendered items when clicking "Load More".
+- **[PR-UARCH-26] Post-Pagination Initialization**: UI hooks like link previews and post action buttons MUST be re-initialized for newly added items after a "Load More" action.
 - **[PR-UARCH-18] Large Dataset Safety**: When an archive contains > 10,000 items, the UI MUST show a confirmation dialog before rendering to protect browser performance. Once the user selects a render count (or "Render All"), this preference MUST persist across sorting, filtering, and view mode changes for the duration of the session.
 - **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/reader?view=archive&username=[slug-or-username]`.
+- **[PR-UARCH-19] ReaderState Identity Stability**: After archive rerenders (triggered by sort/filter changes or sync updates), event handlers bound to the ReaderState reference MUST continue to function correctly. The ReaderState object identity MUST be preserved across rerenders (mutated in place rather than replaced) to prevent stale references in event listener closures.
+- **[PR-UARCH-23] Authentication Context**: The archive `ReaderState` MUST be correctly populated with the `currentUserId` and `currentUsername` of the logged-in user to enable authenticated actions like voting and reactions within the archive view.
+- **[PR-UARCH-20] Thread Group Date Sorting**: In `thread` view, post groups are sorted based on the timestamp of the newest item within that group (post or comment).
+- **[PR-UARCH-21] Thread Group Karma Sorting**: In `thread` view, post groups are sorted based on the highest karma score among all items within that group.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

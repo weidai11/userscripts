@@ -1,3 +1,4 @@
+
 /**
  * LW Power Reader - Main Entry Point
  * A userscript that provides an enhanced interface for reading LessWrong comments
@@ -22,6 +23,8 @@ import { initializeReactions } from './utils/reactions';
 import { getLoadFrom, setLoadFrom, getReadState } from './utils/storage';
 import { clearAllStorage } from './utils/storage';
 import { Logger } from './utils/logger';
+import { setUIHost } from './render/uiHost';
+import { PowerReaderUIHost } from './render/powerReaderHost';
 
 // Features
 import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
@@ -58,6 +61,9 @@ const initReader = async (): Promise<void> => {
 
   // Reader mode - execute page takeover
   executeTakeover();
+
+  // Initialize UI Host for Power Reader
+  setUIHost(new PowerReaderUIHost(getState()));
 
   // Initialize reactions data (needed for render)
   try {

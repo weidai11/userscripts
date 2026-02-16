@@ -135,10 +135,21 @@ test.describe('Power Reader Parent Highlighting', () => {
             await readMoreBtn.click();
         }
 
+        // Set a standard viewport to ensure consistent scroll metrics
+        await page.setViewportSize({ width: 1280, height: 800 });
+
+        // Add a massive spacer to prevent bottom-clamping during scroll actions
+        await page.evaluate(() => {
+            const spacer = document.createElement('div');
+            spacer.style.height = '5000px';
+            document.body.appendChild(spacer);
+        });
+
         // Scroll down to activate sticky header
         await page.evaluate(() => {
             const header = document.querySelector('.pr-post-header') as HTMLElement | null;
             if (header) {
+                // Scroll to the header, then past it to trigger sticky state
                 header.scrollIntoView({ block: 'start' });
                 window.scrollBy(0, 600);
                 window.dispatchEvent(new Event('scroll'));

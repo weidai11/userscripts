@@ -1,3 +1,4 @@
+
 /**
  * Post rendering for Power Reader
  */
@@ -9,6 +10,7 @@ import { renderPostHeader, escapeHtml } from '../utils/rendering';
 import { renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
 import { Logger } from '../utils/logger';
+import { renderPostBody as renderSharedPostBody } from './components/body';
 
 export interface PostGroup {
   title: string;
@@ -109,7 +111,6 @@ const buildChildrenIndex = (comments: Comment[]): Map<string, Comment[]> => {
   return childrenByParentId;
 };
 
-import { renderPostBody as renderSharedPostBody } from './components/body';
 
 /**
  * Render a post's full content with optional truncation

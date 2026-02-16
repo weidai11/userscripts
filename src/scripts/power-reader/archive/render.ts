@@ -6,14 +6,24 @@ import { escapeHtml } from '../utils/rendering';
 import { fetchCommentsByIds } from './loader';
 import type { ArchiveViewMode } from './state';
 import type { Post, Comment } from '../../../shared/graphql/queries';
+import type { ReaderState } from '../state';
+import { renderPostGroup } from '../render/post';
+import { getUIHost } from '../render/uiHost';
 
-let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 10000;
+let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
 
 /**
  * Configure view state (called by index.ts)
  */
 export const updateRenderLimit = (limit: number) => {
     currentRenderLimit = limit;
+};
+
+/**
+ * Reset view limit to default (called by initArchive)
+ */
+export const resetRenderLimit = () => {
+    currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
 };
 
 /**
@@ -24,39 +34,235 @@ export const incrementRenderLimit = (delta: number) => {
 };
 
 /**
- * Main Render Function
+ * [P2-FIX] Fetch missing parent context comments for thread view
+ * Ensures parent comments are loaded so thread structure is complete
  */
-export const renderArchiveFeed = async (container: HTMLElement, items: (Post | Comment)[], viewMode: ArchiveViewMode, itemById: Map<string, Post | Comment>): Promise<void> => {
-    if (items.length === 0) {
-        container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
-        return;
-    }
+const ensureContextForItems = async (
+  items: (Post | Comment)[],
+  state: ReaderState
+): Promise<void> => {
+  // Track missing IDs with their associated postId
+  const missingIds = new Set<string>();
+  const commentPostIdMap = new Map<string, string>(); // Maps comment ID to its postId
 
-    const visibleItems = items.slice(0, currentRenderLimit);
-    const loadMoreBtn = document.getElementById('archive-load-more');
+  for (const item of items) {
+    if ('title' in item) continue; // It's a post, no parents needed
 
-    if (loadMoreBtn) {
-        loadMoreBtn.style.display = items.length > currentRenderLimit ? 'block' : 'none';
-        if (items.length > currentRenderLimit && loadMoreBtn.querySelector('button')) {
-            loadMoreBtn.querySelector('button')!.textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
+    const comment = item as Comment;
+    const itemPostId = comment.postId;
+    let current: any = comment.parentComment;
+    let depth = 0;
+
+    // Traverse up to 5 levels to get context
+    while (current && depth < 5) {
+      if (!state.commentById.has(current._id)) {
+        missingIds.add(current._id);
+        // Track which post this context belongs to
+        if (!commentPostIdMap.has(current._id)) {
+          commentPostIdMap.set(current._id, itemPostId);
         }
+      }
+
+      // Continue traversing if parent reference exists
+      if (current.parentComment) {
+        current = current.parentComment;
+      } else {
+        break;
+      }
+      depth++;
     }
+  }
 
-    if (viewMode === 'index') {
-        container.innerHTML = visibleItems.map(item => renderIndexItem(item)).join('');
-    } else if (viewMode === 'thread') {
-        // Render shell first
-        container.innerHTML = `<div class="pr-loading-context">Loading conversation context...</div>`;
+  if (missingIds.size > 0) {
+    Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
+    const fetched = await fetchCommentsByIds(Array.from(missingIds));
 
-        // Ensure context is loaded
-        await ensureContextForItems(visibleItems, itemById);
-
-        // Render
-        container.innerHTML = visibleItems.map(item => renderThreadItem(item, itemById)).join('');
-    } else {
-        container.innerHTML = visibleItems.map(item => renderCardItem(item)).join('');
-    }
+    // [WS2-FIX] Use UIHost to merge comments and set postIds (Deduplicated logic)
+    getUIHost().mergeComments(fetched, true, commentPostIdMap);
+  }
 };
+
+/**
+ * Main Render Function
+ * [P2-FIX] Thread view now loads parent context before rendering
+ * [WS3-FIX] Accepts sortBy parameter for group-level thread sorting
+ */
+export const renderArchiveFeed = async (
+  container: HTMLElement,
+  items: (Post | Comment)[],
+  viewMode: ArchiveViewMode,
+  state: ReaderState,
+  sortBy?: 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+): Promise<void> => {
+  if (items.length === 0) {
+    container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
+    return;
+  }
+
+  const visibleItems = items.slice(0, currentRenderLimit);
+  const loadMoreBtn = document.getElementById('archive-load-more');
+
+  if (loadMoreBtn) {
+    loadMoreBtn.style.display = items.length > currentRenderLimit ? 'block' : 'none';
+    if (items.length > currentRenderLimit && loadMoreBtn.querySelector('button')) {
+      loadMoreBtn.querySelector('button')!.textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
+    }
+  }
+
+  if (viewMode === 'index') {
+    container.innerHTML = visibleItems.map(item => renderIndexItem(item)).join('');
+  } else if (viewMode === 'thread') {
+    // [P2-FIX] Load parent context first, then render thread view
+    // [WS3-FIX] Pass sortBy for group-level sorting
+    await ensureContextForItems(visibleItems, state);
+    renderThreadView(container, visibleItems, state, sortBy);
+  } else {
+    container.innerHTML = visibleItems.map(item => renderCardItem(item)).join('');
+  }
+};
+
+/**
+ * Render items grouped by Thread (Post)
+ * [WS2-FIX] Renders visible comments plus ancestor context
+ * [WS3-FIX] Implements true group-level sorting based on sort mode
+ */
+const renderThreadView = (
+  container: HTMLElement,
+  items: (Post | Comment)[],
+  state: ReaderState,
+  sortBy?: 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+) => {
+  // 1. Build inclusion set: visible comments + their ancestors
+  const visibleCommentIds = new Set<string>();
+  const inclusionCommentIds = new Set<string>();
+
+  items.forEach(item => {
+    if (!('title' in item)) {
+      visibleCommentIds.add(item._id);
+      inclusionCommentIds.add(item._id);
+
+      // [WS2-FIX] Add ancestor IDs from state.commentById
+      const comment = item as Comment;
+      // Handle both parentCommentId string and parentComment object
+      let currentId: string | null = comment.parentCommentId || (comment as any).parentComment?._id || null;
+      let depth = 0;
+      while (currentId && depth < 10) {
+        if (state.commentById.has(currentId)) {
+          inclusionCommentIds.add(currentId);
+          const parent = state.commentById.get(currentId)!;
+          currentId = parent.parentCommentId || (parent as any).parentComment?._id || null;
+        } else {
+          break;
+        }
+        depth++;
+      }
+    }
+  });
+
+  // 2. Group comments by postId
+  const postGroups = new Map<string, { postId: string; comments: Comment[]; maxDate: Date; maxScore: number }>();
+
+  // [WS2-FIX] Also collect post IDs from visible items (posts without comments)
+  const visiblePostIds = new Set<string>();
+  items.forEach(item => {
+    if ('title' in item) {
+      visiblePostIds.add(item._id);
+    }
+  });
+
+  // Initialize groups for all post IDs (from comments and from visible posts)
+  inclusionCommentIds.forEach(commentId => {
+    const comment = state.commentById.get(commentId);
+    if (!comment) return;
+    const postId = comment.postId;
+    visiblePostIds.add(postId);
+  });
+
+  // Create post groups with metrics
+  visiblePostIds.forEach(postId => {
+    const comments: Comment[] = [];
+    let maxDate = new Date(0);
+    let maxScore = Number.NEGATIVE_INFINITY;
+
+    // Collect comments for this post
+    inclusionCommentIds.forEach(commentId => {
+      const comment = state.commentById.get(commentId);
+      if (comment && comment.postId === postId) {
+        comments.push(comment);
+        const commentDate = new Date(comment.postedAt);
+        if (commentDate > maxDate) maxDate = commentDate;
+        if (typeof comment.baseScore === 'number' && comment.baseScore > maxScore) {
+          maxScore = comment.baseScore;
+        }
+      }
+    });
+
+    // If no comments, use post date/score for metrics
+    const post = state.postById.get(postId);
+    if (post) {
+      const postDate = new Date(post.postedAt);
+      if (postDate > maxDate) maxDate = postDate;
+      if (typeof post.baseScore === 'number' && post.baseScore > maxScore) {
+        maxScore = post.baseScore;
+      }
+    }
+
+    postGroups.set(postId, {
+      postId,
+      comments,
+      maxDate,
+      // Preserve negative karma; fallback to 0 only when no numeric score exists.
+      maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
+    });
+  });
+
+  // 3. [WS3-FIX] Sort post groups by computed metrics
+  const sortedGroups = Array.from(postGroups.values());
+  switch (sortBy) {
+    case 'date-asc':
+    case 'replyTo': // Fallback to date for replyTo in thread view
+      sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
+      break;
+    case 'score':
+      sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
+      break;
+    case 'score-asc':
+      sortedGroups.sort((a, b) => a.maxScore - b.maxScore);
+      break;
+    case 'date':
+    default:
+      sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
+      break;
+  }
+
+  // 4. Clear container
+  container.innerHTML = '';
+
+  // 5. Render each post group with all inclusion comments
+  let html = '';
+
+  sortedGroups.forEach(group => {
+    const post = state.postById.get(group.postId);
+
+    // [WS2-FIX] Include all comments in the inclusion set (visible + ancestors)
+    const postComments = group.comments;
+
+    // If we have neither post nor comments, skip (shouldn't happen directly from items)
+    if (!post && postComments.length === 0) return;
+
+    const postGroup = {
+      postId: group.postId,
+      title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
+      comments: postComments,
+      fullPost: post
+    };
+
+    html += renderPostGroup(postGroup, state);
+  });
+
+  container.innerHTML = html;
+};
+
 
 /**
  * 1. Card View (Existing Logic)
@@ -75,13 +281,16 @@ const renderCardItem = (item: Post | Comment): string => {
         contentHtml = renderBody(comment.htmlBody || '', comment.extendedScore);
     }
 
+    // Ensure we have a data-post-id for fallback navigation lookups
+    const dataset = `data-id="${item._id}" ${!isPost && (item as Comment).postId ? `data-post-id="${(item as Comment).postId}"` : ''}`;
+
     return `
-      <div class="${classes}" data-id="${item._id}">
+      <div class="${classes}" ${dataset}>
         <div class="pr-archive-item-header">
            ${metadataHtml}
         </div>
         <div class="pr-archive-item-body">
-          ${contentHtml}
+           ${contentHtml}
         </div>
       </div>
     `;
@@ -111,128 +320,6 @@ const renderIndexItem = (item: Post | Comment): string => {
     `;
 };
 
-/**
- * 3. Thread View Logic
- */
-const renderThreadItem = (item: Post | Comment, itemById: Map<string, Post | Comment>): string => {
-    const isPost = 'title' in item;
-
-    // If it's a post, regular card view is enough, but maybe labelled "Thread Starter"
-    if (isPost) {
-        return renderCardItem(item);
-    }
-
-    const comment = item as Comment;
-    const parents: Comment[] = [];
-
-    // Traverse up using itemById to find parents with bodies
-    // Note: comment.parentComment typically lacks htmlBody, so we check itemById
-    let current: any = comment.parentComment;
-    while (current) {
-        const fullParent = itemById.get(current._id);
-        if (fullParent && !('title' in fullParent)) { // Ensure it's a comment
-            parents.unshift(fullParent as Comment);
-            current = (fullParent as Comment).parentComment;
-        } else if (current._id) {
-            // We might have hit a parent we didn't fetch or it's a post (roots are posts)
-            // If parent is a post, we don't add it to 'parents' array of comments
-            break;
-        } else {
-            break;
-        }
-    }
-
-    // Always include the root post context if available
-    let postContext = '';
-    const post = 'post' in comment ? (comment as any).post : null; // Check if post is embedded
-    // or try fetching from itemById if we have postId
-    const fullPost = itemById.get(comment.postId);
-    if (fullPost && 'title' in fullPost) {
-        postContext = `
-            <div class="pr-thread-root-post">
-                <a href="${fullPost.pageUrl}" target="_blank" class="pr-thread-post-link">
-                    📝 ${escapeHtml((fullPost as Post).title)}
-                </a>
-                <span class="pr-thread-post-meta">by ${(fullPost as Post).user?.displayName || 'Unknown'}</span>
-            </div>
-        `;
-    } else if (post) {
-        postContext = `
-            <div class="pr-thread-root-post">
-                <a href="${post.pageUrl}" target="_blank" class="pr-thread-post-link">
-                    📝 ${escapeHtml(post.title)}
-                </a>
-            </div>
-        `;
-    }
-
-
-    const parentHtml = parents.map(p => `
-        <div class="pr-thread-parent">
-            <div class="pr-thread-parent-meta">
-                Replying to <strong>${escapeHtml(p.user?.displayName || p.author || 'Unknown')}</strong>
-            </div>
-            <div class="pr-thread-parent-body">
-                ${sanitizeBodySimple(p.htmlBody || '')}
-            </div>
-        </div>
-    `).join('');
-
-    return `
-        <div class="pr-thread-wrapper" style="margin-bottom: 30px; border: 1px solid var(--pr-border-subtle); border-radius: 8px; overflow: hidden;">
-            ${postContext}
-            <div class="pr-thread-parents" style="background: var(--pr-bg-secondary); padding: 10px;">
-                ${parentHtml}
-            </div>
-            ${renderCardItem(comment)} 
-        </div>
-    `;
-};
-
-/**
- * Fetch missing parent comments for the visible items
- */
-const ensureContextForItems = async (items: (Post | Comment)[], itemById: Map<string, Post | Comment>): Promise<void> => {
-    const missingIds = new Set<string>();
-
-    for (const item of items) {
-        if ('title' in item) continue; // It's a post, no parents needed (it is the root)
-
-        let current: any = (item as Comment).parentComment;
-        let depth = 0;
-        // Traverse up to 5 levels to get context
-        while (current && depth < 5) {
-            if (!itemById.has(current._id)) {
-                missingIds.add(current._id);
-            }
-            // If we don't have the item in itemById, we can't continue traversing up easily 
-            // unless the shallow parent object has a parent reference (which it does in GraphQL usually)
-            // But we need to be careful not to traverse indefinitely on shallow objects
-            if (current.parentComment) {
-                current = current.parentComment;
-            } else {
-                break;
-            }
-            depth++;
-        }
-
-        // Also ensure Post is loaded if not
-        if (item.postId && !itemById.has(item.postId)) {
-            // Actually we don't have a fetchPostsByIds yet, and usually post info is embedded.
-            // Let's assume post info is sufficient in the comment object for now (comment.post).
-        }
-    }
-
-    if (missingIds.size > 0) {
-        Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
-        const fetched = await fetchCommentsByIds(Array.from(missingIds));
-
-        for (const c of fetched) {
-            itemById.set(c._id, c);
-        }
-    }
-};
-
 const getInterlocutorName = (item: Post | Comment): string => {
     if ('title' in item) return " (Original Post)";
     const c = item as Comment;
@@ -241,9 +328,4 @@ const getInterlocutorName = (item: Post | Comment): string => {
     return "Unknown";
 };
 
-// Simple stripper for parent context to avoid rendering full widgets
-const sanitizeBodySimple = (html: string): string => {
-    // We just want text and basic formatting, no massive widgets or buttons
-    // But renderBody handles sanitization. We might want a "micro" renderBody.
-    return renderBody(html, null);
-};
+// ... unused helpers removed (renderThreadItem, ensureContextForItems, sanitizeBodySimple)

@@ -184,9 +184,13 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
     2. **Explicit Mouse Move**: Use `page.mouse.move(0, 0)` followed by a move to the target's center. 
     3. **Event Dispatch**: Manually dispatching `dispatchEvent('mouseenter')` after moving the mouse is the most reliable way to satisfy both Playwright's hit-testing and the script's `lastMouseMoveTime` requirements.
 
-### Post-Aware Height Measurement for Scrolling
-- **Problem**: When jumping to a parent comment or post, using a global sticky header's height as a scroll offset can be inaccurate if you're transitioning between posts with different title lengths (e.g., 1-line vs 3-lines).
-- **Solution**: Use **post-aware measurement**. In `smartScrollTo`, identify the target element's parent `.pr-post`, find *its* `.pr-post-header`, and use its specific `offsetHeight`. This ensures the scroll lands exactly where that post's specific header will be stickied.
+### Standardized Scrolling Logic (`smartScrollTo`)
+- **Problem**: Manual `window.scrollTo` with `behavior: 'smooth'` is unpredictable in tests and doesn't handle fixed headers (like the sticky header) consistently across different posts.
+- **Solution**: Use the `smartScrollTo` utility in `src/scripts/power-reader/utils/dom.ts`.
+- **Features**:
+  - Automatically respects `(window as any).__PR_TEST_MODE__` to use `instant` instead of `smooth` behavior.
+  - Dynamically calculates offsets based on the target post's specific header height (handling variable line counts in titles).
+  - Handles the "Bottom Clamping" syndrome in tests by providing a reliable target calculation.
 - **Gotcha**: If you navigate to a post itself, avoid `block: 'center'`. Using `window.scrollTo` to align the `postHeader`'s top with `window.pageYOffset` ensures a perfectly seamless transition to the sticky state (which triggers at `top < 0`).
 
 ### CSS Highlight Specificity

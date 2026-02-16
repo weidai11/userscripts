@@ -36,6 +36,9 @@ export interface ReaderState {
   currentAIRequestId: string | null;
   activeAIPopup: HTMLElement | null;
   sessionAICache: Record<string, string>;
+
+  // Feature flags / Modes
+  isArchiveMode: boolean;
 }
 
 /**
@@ -59,6 +62,7 @@ export const createInitialState = (): ReaderState => ({
   currentAIRequestId: null,
   activeAIPopup: null,
   sessionAICache: {},
+  isArchiveMode: false,
 });
 
 /**

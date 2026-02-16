@@ -1,3 +1,4 @@
+
 import { executeTakeover, rebuildDocument, signalReady } from '../takeover';
 import { initializeReactions } from '../utils/reactions';
 import { Logger } from '../utils/logger';
@@ -5,7 +6,15 @@ import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode } f
 import { loadArchiveData, saveArchiveData } from './storage';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
-import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit } from './render';
+import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit, resetRenderLimit } from './render';
+import { setUIHost } from '../render/uiHost';
+import { ArchiveUIHost } from './uiHost';
+import { attachEventListeners } from '../events/index';
+import { initAIStudioListener } from '../features/aiStudioPopup';
+import { setupExternalLinks } from '../features/externalLinks';
+import { setupInlineReactions } from '../features/inlineReactions';
+import { setupLinkPreviews } from '../features/linkPreviews';
+import { refreshPostActionButtons } from '../utils/dom';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -31,6 +40,7 @@ export const initArchive = async (username: string): Promise<void> => {
   Logger.info(`Initializing User Archive for: ${username}`);
 
   try {
+    resetRenderLimit();
     executeTakeover();
     await initializeReactions();
     rebuildDocument();
@@ -39,9 +49,11 @@ export const initArchive = async (username: string): Promise<void> => {
     const root = document.getElementById('power-reader-root');
     if (!root) return;
 
-    // Inject styles for archive specific layouts
-    const style = document.createElement('style');
-    style.textContent = `
+    // Inject styles for archive specific layouts - Idempotent check
+    if (!document.getElementById('pr-archive-styles')) {
+        const style = document.createElement('style');
+        style.id = 'pr-archive-styles';
+        style.textContent = `
         .pr-archive-toolbar {
             display: flex;
             gap: 10px;
@@ -87,30 +99,9 @@ export const initArchive = async (username: string): Promise<void> => {
             text-align: right;
         }
         
-        /* Thread View Styles */
+        /* Thread View Styles - now handled mostly by PostGroup, but shell styles might remain useful */
         .pr-thread-wrapper {
              background: var(--pr-bg-primary);
-        }
-        .pr-thread-root-post {
-            padding: 10px;
-            background: var(--pr-bg-secondary);
-            border-bottom: 1px solid var(--pr-border-subtle);
-            font-size: 0.9em;
-        }
-        .pr-thread-parent {
-            padding: 8px 0;
-            border-left: 2px solid var(--pr-border-color);
-            padding-left: 10px;
-            margin-bottom: 5px;
-        }
-        .pr-thread-parent-meta {
-            font-size: 0.85em;
-            color: var(--pr-text-tertiary);
-            margin-bottom: 4px;
-        }
-        .pr-thread-parent-body {
-            font-size: 0.9em;
-            color: var(--pr-text-secondary);
         }
         
         .pr-status.status-error {
@@ -239,7 +230,8 @@ export const initArchive = async (username: string): Promise<void> => {
             gap: 10px;
         }
     `;
-    document.head.appendChild(style);
+        document.head.appendChild(style);
+    }
 
     root.innerHTML = `
     <div class="pr-header">
@@ -288,19 +280,21 @@ export const initArchive = async (username: string): Promise<void> => {
     const errorContainer = document.getElementById('archive-error-container');
 
     let activeItems = state.items;
-    const syncErrorState: SyncErrorState = {
-      isRetrying: false,
-      retryCount: 0,
-      abortController: null
-    };
-
-    // Helper to batch updates to map
-    const updateItemMap = (items: any[]) => {
-      items.forEach(i => state.itemById.set(i._id, i));
-    };
-
     const LARGE_DATASET_THRESHOLD = 10000;
     let pendingRenderCount: number | null = null;
+
+    const runPostRenderHooks = () => {
+      setupLinkPreviews(uiHost.getReaderState().comments);
+
+      // Initialize post action buttons for thread view
+      if (state.viewMode === 'thread') {
+        const posts = feedEl!.querySelectorAll('.pr-post');
+        posts.forEach(p => {
+          const pid = p.getAttribute('data-id') || p.getAttribute('data-post-id');
+          if (pid) refreshPostActionButtons(pid);
+        });
+      }
+    };
 
     const refreshView = async () => {
       // 1. Filter
@@ -333,20 +327,55 @@ export const initArchive = async (username: string): Promise<void> => {
       if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
         // Show dialog to ask user how many to render
         showRenderCountDialog(totalItems, async (count: number) => {
-      pendingRenderCount = count;
-      updateRenderLimit(count);
-      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, state.itemById);
+          pendingRenderCount = count;
+          updateRenderLimit(count);
+          // Render!
+          await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+          runPostRenderHooks();
         });
         return;
       }
 
-    // 4. Render
-    // Only override render limit for large datasets where user explicitly chose a count
-    // For normal datasets, keep the default limit to enable pagination
-    if (pendingRenderCount !== null) {
-      updateRenderLimit(pendingRenderCount);
-    }
-    await renderArchiveFeed(feedEl!, activeItems, state.viewMode, state.itemById);
+      // 4. Render
+      // Only override render limit for large datasets where user explicitly chose a count
+      // For normal datasets, keep the default limit to enable pagination
+      if (pendingRenderCount !== null) {
+        updateRenderLimit(pendingRenderCount);
+      }
+
+  // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
+  // [WS3-FIX] Pass sortBy for thread view group-level sorting
+  await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+
+      runPostRenderHooks();
+    };
+
+    const uiHost = new ArchiveUIHost(state, feedEl, refreshView);
+    setUIHost(uiHost);
+
+    // Attach standard event listeners using the host's reader state
+    attachEventListeners(uiHost.getReaderState());
+    initAIStudioListener(uiHost.getReaderState());
+
+    // Sticky header currently depends on main-reader singleton state (`getState()`).
+    // Do not enable it in archive mode until it is wired to archive-local ReaderState.
+    setupExternalLinks();
+    setupInlineReactions(uiHost.getReaderState());
+
+    const syncErrorState: SyncErrorState = {
+      isRetrying: false,
+      retryCount: 0,
+      abortController: null
+    };
+
+    // Helper to batch updates to map
+    const updateItemMap = (items: any[]) => {
+      items.forEach(i => state.itemById.set(i._id, i));
+
+      // Update UI Host when we have new items
+      // We trigger a re-sync of reader state
+      // This is a bit brute-force but ensures consistency
+      uiHost.rerenderAll(); // This rebuilds ReaderState from ArchiveState (and calls refreshView via callback)
     };
 
     /**
@@ -401,14 +430,31 @@ export const initArchive = async (username: string): Promise<void> => {
 
     viewSelect?.addEventListener('change', () => {
       state.viewMode = viewSelect.value as ArchiveViewMode;
+
+      // [PR-SORT-04] Disable "Reply To" sort in Thread View as it organizes by Post
+      const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
+      if (replyToOption) {
+        if (state.viewMode === 'thread') {
+          replyToOption.disabled = true;
+          if (state.sortBy === 'replyTo') {
+            state.sortBy = 'date';
+            sortSelect.value = 'date';
+          }
+        } else {
+          replyToOption.disabled = false;
+        }
+      }
+
       refreshView();
     });
 
-    // Setup Load More
-    loadMoreBtn?.querySelector('button')?.addEventListener('click', () => {
-      incrementRenderLimit(PAGE_SIZE);
-      renderArchiveFeed(feedEl!, activeItems, state.viewMode, state.itemById);
-    });
+  // Setup Load More
+  loadMoreBtn?.querySelector('button')?.addEventListener('click', async () => {
+    incrementRenderLimit(PAGE_SIZE);
+    // [P2-FIX] Pass sortBy to maintain thread sort mode during pagination
+    await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+    runPostRenderHooks();
+  });
 
     /**
      * Show error UI with retry options
@@ -481,20 +527,20 @@ export const initArchive = async (username: string): Promise<void> => {
       errorContainer.style.display = 'block';
     };
 
-/**
- * Perform sync with error handling and retry logic
- */
-let isSyncInProgress = false;
-let pendingRetryCount = 0;
-const performSync = async (forceFull = false): Promise<void> => {
-  // Guard against concurrent syncs
-  if (isSyncInProgress) {
-    Logger.debug('Sync already in progress, skipping duplicate request');
-    return;
-  }
-  isSyncInProgress = true;
-  pendingRetryCount = 0;
-  const cached = await loadArchiveData(username);
+    /**
+     * Perform sync with error handling and retry logic
+     */
+    let isSyncInProgress = false;
+    let pendingRetryCount = 0;
+    const performSync = async (forceFull = false): Promise<void> => {
+      // Guard against concurrent syncs
+      if (isSyncInProgress) {
+        Logger.debug('Sync already in progress, skipping duplicate request');
+        return;
+      }
+      isSyncInProgress = true;
+      pendingRetryCount = 0;
+      const cached = await loadArchiveData(username);
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
         if (!statusEl) return;
@@ -503,10 +549,10 @@ const performSync = async (forceFull = false): Promise<void> => {
         statusEl.classList.toggle('status-syncing', isSyncing);
       };
 
-    const attemptSync = async (useAutoRetry: boolean, attemptNumber: number = 1): Promise<void> => {
-      syncErrorState.isRetrying = true;
-      syncErrorState.retryCount = attemptNumber;
-      syncErrorState.abortController = new AbortController();
+      const attemptSync = async (useAutoRetry: boolean, attemptNumber: number = 1): Promise<void> => {
+        syncErrorState.isRetrying = true;
+        syncErrorState.retryCount = attemptNumber;
+        syncErrorState.abortController = new AbortController();
 
         try {
           if (attemptNumber > 1) {
@@ -538,7 +584,6 @@ const performSync = async (forceFull = false): Promise<void> => {
 
           // Update view with new data
           updateItemMap(state.items);
-          await refreshView();
 
           // If this attempt completed and no retry callbacks are still pending,
           // release the sync lock even when this call originated from a scheduled/manual retry.
@@ -546,90 +591,90 @@ const performSync = async (forceFull = false): Promise<void> => {
             isSyncInProgress = false;
           }
 
-    } catch (error) {
-      syncErrorState.isRetrying = false;
-      const errorMessage = (error as Error).message;
-      const displayError = `Sync failed: ${errorMessage}`;
+        } catch (error) {
+          syncErrorState.isRetrying = false;
+          const errorMessage = (error as Error).message;
+          const displayError = `Sync failed: ${errorMessage}`;
 
-      // Show error in status line
-      setStatus(displayError, true, false);
+          // Show error in status line
+          setStatus(displayError, true, false);
 
-      // Check if aborted
-      if (syncErrorState.abortController?.signal.aborted) {
-        Logger.info('Sync was cancelled by user');
-        setStatus(`Sync cancelled. Showing cached data (${cached.items.length} items).`, false, false);
-        pendingRetryCount = 0;
-        isSyncInProgress = false;
-        return;
-      }
+          // Check if aborted
+          if (syncErrorState.abortController?.signal.aborted) {
+            Logger.info('Sync was cancelled by user');
+            setStatus(`Sync cancelled. Showing cached data (${cached.items.length} items).`, false, false);
+            pendingRetryCount = 0;
+            isSyncInProgress = false;
+            return;
+          }
 
-      const shouldAutoRetry = useAutoRetry || GM_getValue(AUTO_RETRY_KEY, false);
+          const shouldAutoRetry = useAutoRetry || GM_getValue(AUTO_RETRY_KEY, false);
 
-      if (shouldAutoRetry && attemptNumber < MAX_AUTO_RETRIES) {
-        // Calculate exponential backoff
-        const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, attemptNumber - 1);
+          if (shouldAutoRetry && attemptNumber < MAX_AUTO_RETRIES) {
+            // Calculate exponential backoff
+            const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, attemptNumber - 1);
 
-        showRetryProgress(attemptNumber, MAX_AUTO_RETRIES, backoffMs);
+            showRetryProgress(attemptNumber, MAX_AUTO_RETRIES, backoffMs);
 
-        // Setup force retry and cancel handlers
-        const forceRetryBtn = document.getElementById('archive-force-retry');
-        const cancelRetryBtn = document.getElementById('archive-cancel-retry');
+            // Setup force retry and cancel handlers
+            const forceRetryBtn = document.getElementById('archive-force-retry');
+            const cancelRetryBtn = document.getElementById('archive-cancel-retry');
 
-        let retryTimeout: number | null = null;
+            let retryTimeout: number | null = null;
 
-        // Track this pending retry
-        pendingRetryCount++;
+            // Track this pending retry
+            pendingRetryCount++;
 
-        const doRetry = () => {
-          if (retryTimeout) clearTimeout(retryTimeout);
-          pendingRetryCount--;
-          attemptSync(true, attemptNumber + 1);
-        };
+            const doRetry = () => {
+              if (retryTimeout) clearTimeout(retryTimeout);
+              pendingRetryCount--;
+              attemptSync(true, attemptNumber + 1);
+            };
 
-        const doCancel = () => {
-          if (retryTimeout) clearTimeout(retryTimeout);
-          syncErrorState.abortController?.abort();
-          if (errorContainer) errorContainer.style.display = 'none';
-          setStatus(`Sync cancelled. Showing cached data (${cached.items.length} items).`, false, false);
-          pendingRetryCount = 0;
+            const doCancel = () => {
+              if (retryTimeout) clearTimeout(retryTimeout);
+              syncErrorState.abortController?.abort();
+              if (errorContainer) errorContainer.style.display = 'none';
+              setStatus(`Sync cancelled. Showing cached data (${cached.items.length} items).`, false, false);
+              pendingRetryCount = 0;
+              isSyncInProgress = false;
+            };
+
+            forceRetryBtn?.addEventListener('click', doRetry, { once: true });
+            cancelRetryBtn?.addEventListener('click', doCancel, { once: true });
+
+            // Schedule automatic retry - retry handler will decrement counter
+            retryTimeout = window.setTimeout(doRetry, backoffMs);
+            // Don't clear isSyncInProgress here - retry is still pending
+            return;
+
+          } else {
+            // Max retries reached or manual retry preferred
+            // Wrap callbacks to track retry state
+            pendingRetryCount++;
+            showErrorUI(error as Error, (retryMode) => {
+              pendingRetryCount--;
+              attemptSync(retryMode, 1);
+            }, () => {
+              pendingRetryCount = 0;
+              isSyncInProgress = false;
+              setStatus(`Sync failed. Showing cached data (${cached.items.length} items).`, true, false);
+            });
+          }
+        }
+      };
+
+      // Start sync - check if auto-retry is enabled
+      const isAutoRetryEnabled = GM_getValue(AUTO_RETRY_KEY, false);
+      try {
+        await attemptSync(isAutoRetryEnabled);
+      } finally {
+        // Only clear isSyncInProgress when no retries are pending
+        if (pendingRetryCount === 0) {
           isSyncInProgress = false;
-        };
-
-        forceRetryBtn?.addEventListener('click', doRetry, { once: true });
-        cancelRetryBtn?.addEventListener('click', doCancel, { once: true });
-
-        // Schedule automatic retry - retry handler will decrement counter
-        retryTimeout = window.setTimeout(doRetry, backoffMs);
-        // Don't clear isSyncInProgress here - retry is still pending
-        return;
-
-    } else {
-      // Max retries reached or manual retry preferred
-      // Wrap callbacks to track retry state
-      pendingRetryCount++;
-      showErrorUI(error as Error, (retryMode) => {
-        pendingRetryCount--;
-        attemptSync(retryMode, 1);
-      }, () => {
-        pendingRetryCount = 0;
-        isSyncInProgress = false;
-        setStatus(`Sync failed. Showing cached data (${cached.items.length} items).`, true, false);
-      });
-    }
-    }
-  };
-
-  // Start sync - check if auto-retry is enabled
-  const isAutoRetryEnabled = GM_getValue(AUTO_RETRY_KEY, false);
-  try {
-    await attemptSync(isAutoRetryEnabled);
-  } finally {
-    // Only clear isSyncInProgress when no retries are pending
-    if (pendingRetryCount === 0) {
-      isSyncInProgress = false;
-    }
-  }
-};
+        }
+      }
+    };
 
     resyncBtn?.addEventListener('click', () => {
       // Clear current view
@@ -641,12 +686,14 @@ const performSync = async (forceFull = false): Promise<void> => {
     // 1. Try loading from IndexedDB
     const cached = await loadArchiveData(username);
     state.items = cached.items;
+
+    // Initial sync of host state
     updateItemMap(state.items);
+
     activeItems = state.items;
 
     if (cached.items.length > 0) {
       statusEl!.textContent = `Loaded ${cached.items.length} items from cache.`;
-      refreshView();
     } else {
       dashboardEl!.style.display = 'block';
       statusEl!.textContent = `No local data. Fetching full history for ${username}...`;
