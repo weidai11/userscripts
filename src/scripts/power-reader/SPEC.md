@@ -583,8 +583,10 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-14] Manual Resync Recovery**: A "Resync" button allows users to bypass the `lastSyncDate` watermark and force a full history download from the server to recover from corrupted local states.
 - **[PR-UARCH-07] Merge Semantics**: New archive items are merged by `_id` without duplicates, then sorted by `postedAt` descending for canonical in-memory order.
 - **[PR-UARCH-17] Payload Optimization**: To minimize bandwidth and prevent GraphQL timeouts, archive comment fetches MUST use a "Lite" post fragment (metadata only) rather than full post bodies for parent references.
-- **[PR-UARCH-08] Search Behavior**: Archive search supports regex filtering; invalid regex input MUST gracefully fall back to case-insensitive text matching.
-- **[PR-UARCH-09] Sort Modes**: Archive supports `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
+- **[PR-UARCH-08] Structured Search Behavior**: Archive search uses a structured query grammar (`author:`, `replyto:`, `date:`, `score:`, `type:`, `scope:`) with plain terms and quoted phrases. Regex is supported only through explicit regex literals (`/pattern/flags`). Invalid regex literals MUST produce a non-fatal warning and be excluded from execution.
+- **[PR-UARCH-39] Search Result Count Status**: The archive top status line (`#archive-status`) MUST include the current search result count (`N search result(s)`) alongside sync/status messaging.
+- **[PR-UARCH-40] Strict Date Filter Validation**: Structured `date:` filters MUST reject impossible calendar dates (for example, `2025-02-31`) instead of normalizing overflowed dates.
+- **[PR-UARCH-09] Sort Modes**: Archive supports `relevance` (search ranking), `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
 - **[PR-UARCH-10] View Modes**: Archive supports `card`, `index`, and `thread` views.
 - **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
 - **[PR-UARCH-25] Context Isolation**: Context comments (fetched for thread view ancestry) MUST NOT leak into card or index views. They remain in the `ReaderState` projection for rendering but are excluded from the canonical `ArchiveState.items` collection.

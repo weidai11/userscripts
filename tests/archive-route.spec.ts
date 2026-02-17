@@ -346,7 +346,7 @@ return { data: {} };
         }).toPass({ timeout: 5000 });
     });
 
-    test('search supports valid regex filtering [PR-UARCH-08]', async ({ page }) => {
+    test('search supports explicit regex literal filtering [PR-UARCH-08]', async ({ page }) => {
         const userId = 'u-search-user';
         const userObj = { _id: userId, username: 'Search_User', displayName: 'Search User', slug: 'search-user', karma: 100 };
 
@@ -407,9 +407,9 @@ return { data: {} };
         // Both items should be visible initially
         await expect(page.locator('.pr-item')).toHaveCount(2);
 
-        // Test valid regex: match posts containing "alpha" or "beta"
+        // Regex literals are explicit in structured mode.
         const searchInput = page.locator('#archive-search');
-        await searchInput.fill('alpha|beta');
+        await searchInput.fill('/alpha|beta/i');
 
         // Wait for filter to apply using polling
         await expect(async () => {
@@ -417,8 +417,8 @@ return { data: {} };
             expect(count).toBe(2);
         }).toPass({ timeout: 5000 });
 
-        // Test more specific regex: only "Alpha" (case insensitive)
-        await searchInput.fill('^.*Alpha.*$');
+        // Match only the alpha post.
+        await searchInput.fill('/^.*alpha.*$/i');
 
         // Wait for filter to apply
         await expect(async () => {
@@ -429,7 +429,120 @@ return { data: {} };
         await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
     });
 
-    test('invalid regex falls back to case-insensitive text search [PR-UARCH-08]', async ({ page }) => {
+    test('search index refreshes after in-place canonical load-all merge [PR-UARCH-22]', async ({ page }) => {
+        const userId = 'u-search-refresh-user';
+        const userObj = { _id: userId, username: 'SearchRefresh_User', displayName: 'Search Refresh User', slug: 'search-refresh-user', karma: 100 };
+        const otherUser = { _id: 'u-other-search-refresh', username: 'OtherSearchRefresh', displayName: 'Other Search Refresh', slug: 'other-search-refresh', karma: 50 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [{
+          _id: 'p-load',
+          title: 'Search Refresh Post',
+          slug: 'search-refresh-post',
+          pageUrl: 'https://lesswrong.com/posts/p-load',
+          postedAt: '2025-01-05T12:00:00Z',
+          baseScore: 10,
+          voteCount: 2,
+          commentCount: 2,
+          htmlBody: '<p>Post body</p>',
+          contents: { markdown: 'Post body' },
+          user: ${JSON.stringify(userObj)}
+        }]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [{
+          _id: 'c-load-authored',
+          postedAt: '2025-01-05T12:30:00Z',
+          baseScore: 5,
+          voteCount: 1,
+          htmlBody: '<p>Baseline authored comment</p>',
+          contents: { markdown: 'Baseline authored comment' },
+          user: ${JSON.stringify(userObj)},
+          post: { _id: 'p-load', title: 'Search Refresh Post', pageUrl: 'https://lesswrong.com/posts/p-load', user: ${JSON.stringify(otherUser)} },
+          parentComment: null,
+          postId: 'p-load',
+          parentCommentId: null
+        }]
+      }
+    }
+  };
+}
+if (query.includes('query GetPostComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-load-authored',
+            postedAt: '2025-01-05T12:30:00Z',
+            baseScore: 5,
+            voteCount: 1,
+            htmlBody: '<p>Baseline authored comment</p>',
+            contents: { markdown: 'Baseline authored comment' },
+            user: ${JSON.stringify(userObj)},
+            post: { _id: 'p-load', title: 'Search Refresh Post', pageUrl: 'https://lesswrong.com/posts/p-load', user: ${JSON.stringify(otherUser)} },
+            parentComment: null,
+            postId: 'p-load',
+            parentCommentId: null
+          },
+          {
+            _id: 'c-load-new',
+            postedAt: '2025-01-05T13:00:00Z',
+            baseScore: 15,
+            voteCount: 3,
+            htmlBody: '<p>searchindexneedle</p>',
+            contents: { markdown: 'searchindexneedle' },
+            user: ${JSON.stringify(otherUser)},
+            post: { _id: 'p-load', title: 'Search Refresh Post', pageUrl: 'https://lesswrong.com/posts/p-load', user: ${JSON.stringify(otherUser)} },
+            parentComment: null,
+            postId: 'p-load',
+            parentCommentId: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=SearchRefresh_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await page.locator('#archive-view').selectOption('thread-full');
+        const loadAllBtn = page.locator('.pr-post[data-id="p-load"] [data-action="load-all-comments"]');
+        await expect(loadAllBtn).toBeVisible();
+        await loadAllBtn.click();
+        await expect(loadAllBtn).toHaveText('[a]', { timeout: 10000 });
+
+        await page.locator('#archive-search').fill('searchindexneedle');
+
+        await expect(async () => {
+            await expect(page.locator('#archive-status')).toContainText('1 search result');
+            await expect(page.locator('.pr-comment[data-id="c-load-new"]')).toHaveCount(1);
+            await expect(page.locator('.pr-comment[data-id="c-load-authored"]')).toHaveCount(0);
+        }).toPass({ timeout: 5000 });
+    });
+
+    test('invalid regex literals are excluded with warning [PR-UARCH-08]', async ({ page }) => {
         const userId = 'u-regex-fail-user';
         const userObj = { _id: userId, username: 'RegexFail_User', displayName: 'Regex Fail User', slug: 'regex-fail-user', karma: 100 };
 
@@ -490,17 +603,362 @@ return { data: {} };
         // Both items should be visible initially
         await expect(page.locator('.pr-item')).toHaveCount(2);
 
-        // Enter invalid regex (unmatched bracket)
+        // Enter invalid regex literal (unterminated character class)
         const searchInput = page.locator('#archive-search');
-        await searchInput.fill('[bracket');
+        await searchInput.fill('/[bracket/i');
 
-        // Wait for fallback text search to apply using polling
+        // Invalid regex is excluded; query resolves to browse-all and keeps both items.
         await expect(async () => {
             const count = await page.locator('.pr-item').count();
-            expect(count).toBe(1);
+            expect(count).toBe(2);
         }).toPass({ timeout: 5000 });
 
-        await expect(page.locator('.pr-item h2')).toHaveText('Special [Bracket] Post');
+        await expect(page.locator('#archive-search-status')).toContainText('Invalid regex literal');
+    });
+
+    test('structured field operators filter deterministically [PR-UARCH-08]', async ({ page }) => {
+        const userId = 'u-field-user';
+        const userObj = { _id: userId, username: 'Field_User', displayName: 'Field User', slug: 'field-user', karma: 100 };
+        const appleUser = { _id: 'u-apple', username: 'Apple_User', displayName: 'Apple Author', slug: 'apple-user', karma: 50 };
+        const zebraUser = { _id: 'u-zebra', username: 'Zebra_User', displayName: 'Zebra Author', slug: 'zebra-user', karma: 50 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: ${JSON.stringify(userObj)} } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return {
+                        data: {
+                            posts: {
+                                results: [
+                                    {
+                                        _id: 'p-field-1',
+                                        title: 'Post January',
+                                        slug: 'post-jan',
+                                        pageUrl: 'https://lesswrong.com/posts/p-field-1',
+                                        postedAt: '2025-01-05T12:00:00Z',
+                                        baseScore: 5,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>January content</p>',
+                                        contents: { markdown: 'January content' },
+                                        user: ${JSON.stringify(userObj)}
+                                    },
+                                    {
+                                        _id: 'p-field-2',
+                                        title: 'Post February',
+                                        slug: 'post-feb',
+                                        pageUrl: 'https://lesswrong.com/posts/p-field-2',
+                                        postedAt: '2025-02-05T12:00:00Z',
+                                        baseScore: 30,
+                                        voteCount: 4,
+                                        commentCount: 0,
+                                        htmlBody: '<p>February content</p>',
+                                        contents: { markdown: 'February content' },
+                                        user: ${JSON.stringify(userObj)}
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                if (query.includes('GetUserComments')) {
+                    return {
+                        data: {
+                            comments: {
+                                results: [
+                                    {
+                                        _id: 'c-field-1',
+                                        postedAt: '2025-01-10T12:00:00Z',
+                                        baseScore: 8,
+                                        htmlBody: '<p>Comment to Zebra</p>',
+                                        user: ${JSON.stringify(userObj)},
+                                        post: { _id: 'p-field-1', title: 'Post January', pageUrl: '...', user: ${JSON.stringify(zebraUser)} },
+                                        parentComment: null,
+                                        postId: 'p-field-1',
+                                        parentCommentId: null
+                                    },
+                                    {
+                                        _id: 'c-field-2',
+                                        postedAt: '2025-01-20T12:00:00Z',
+                                        baseScore: 40,
+                                        htmlBody: '<p>Comment to Apple</p>',
+                                        user: ${JSON.stringify(userObj)},
+                                        post: { _id: 'p-field-1', title: 'Post January', pageUrl: '...', user: ${JSON.stringify(appleUser)} },
+                                        parentComment: null,
+                                        postId: 'p-field-1',
+                                        parentCommentId: null
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                return { data: {} };
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Field_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const searchInput = page.locator('#archive-search');
+        await searchInput.fill('type:comment replyto:apple score:>10 date:2025-01-01..2025-01-31');
+
+        await expect(async () => {
+            await expect(page.locator('.pr-comment[data-id="c-field-2"]')).toHaveCount(1);
+            await expect(page.locator('.pr-comment[data-id="c-field-1"]')).toHaveCount(0);
+            await expect(page.locator('.pr-post[data-id="p-field-1"]')).toHaveCount(0);
+            await expect(page.locator('.pr-post[data-id="p-field-2"]')).toHaveCount(0);
+        }).toPass({ timeout: 5000 });
+    });
+
+    test('top status line reports search result count [PR-UARCH-39]', async ({ page }) => {
+        const userId = 'u-status-count-user';
+        const userObj = { _id: userId, username: 'StatusCount_User', displayName: 'Status Count User', slug: 'status-count-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: ${JSON.stringify(userObj)} } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return {
+                        data: {
+                            posts: {
+                                results: [
+                                    {
+                                        _id: 'p-status-1',
+                                        title: 'First Status Post',
+                                        slug: 'first-status-post',
+                                        pageUrl: 'https://lesswrong.com/posts/p-status-1',
+                                        postedAt: '2025-01-05T12:00:00Z',
+                                        baseScore: 5,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Alpha body</p>',
+                                        contents: { markdown: 'Alpha body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    },
+                                    {
+                                        _id: 'p-status-2',
+                                        title: 'Second Status Post',
+                                        slug: 'second-status-post',
+                                        pageUrl: 'https://lesswrong.com/posts/p-status-2',
+                                        postedAt: '2025-01-04T12:00:00Z',
+                                        baseScore: 3,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Beta body</p>',
+                                        contents: { markdown: 'Beta body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                if (query.includes('GetUserComments')) {
+                    return { data: { comments: { results: [] } } };
+                }
+                return { data: {} };
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=StatusCount_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const statusEl = page.locator('#archive-status');
+        await expect(statusEl).toContainText('2 search results');
+
+        await page.locator('#archive-search').fill('first');
+        await expect(statusEl).toContainText('1 search result');
+
+        await page.locator('#archive-search').fill('definitely-no-match-token');
+        await expect(statusEl).toContainText('0 search results');
+    });
+
+    test('URL restores structured query/sort/scope and canonicalizes in-query scope [PR-UARCH-08]', async ({ page }) => {
+        const userId = 'u-url-search-user';
+        const userObj = { _id: userId, username: 'UrlSearch_User', displayName: 'URL Search User', slug: 'url-search-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: ${JSON.stringify(userObj)} } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return {
+                        data: {
+                            posts: {
+                                results: [
+                                    {
+                                        _id: 'p-url-1',
+                                        title: 'URL Post One',
+                                        slug: 'url-post-one',
+                                        pageUrl: 'https://lesswrong.com/posts/p-url-1',
+                                        postedAt: '2025-01-03T12:00:00Z',
+                                        baseScore: 5,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Post one body</p>',
+                                        contents: { markdown: 'Post one body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    },
+                                    {
+                                        _id: 'p-url-2',
+                                        title: 'URL Post Two',
+                                        slug: 'url-post-two',
+                                        pageUrl: 'https://lesswrong.com/posts/p-url-2',
+                                        postedAt: '2025-01-02T12:00:00Z',
+                                        baseScore: 1,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Post two body</p>',
+                                        contents: { markdown: 'Post two body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                if (query.includes('GetUserComments')) {
+                    return {
+                        data: {
+                            comments: {
+                                results: [
+                                    {
+                                        _id: 'c-url-1',
+                                        postedAt: '2025-01-04T12:00:00Z',
+                                        baseScore: 100,
+                                        htmlBody: '<p>Comment should be filtered out by type:post</p>',
+                                        user: ${JSON.stringify(userObj)},
+                                        post: { _id: 'p-url-1', title: 'URL Post One', pageUrl: '...', user: ${JSON.stringify(userObj)} },
+                                        parentComment: null,
+                                        postId: 'p-url-1',
+                                        parentCommentId: null
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                return { data: {} };
+            `
+        });
+
+        const q = encodeURIComponent('scope:all type:post');
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=UrlSearch_User&q=${q}&sort=score-asc`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('#archive-sort')).toHaveValue('score-asc');
+        await expect(page.locator('#archive-scope')).toHaveValue('all');
+        await expect(page.locator('.pr-post[data-id="p-url-1"]')).toHaveCount(1);
+        await expect(page.locator('.pr-post[data-id="p-url-2"]')).toHaveCount(1);
+        await expect(page.locator('.pr-comment[data-id="c-url-1"]')).toHaveCount(0);
+
+        const finalUrl = page.url();
+        expect(finalUrl).toContain('scope=all');
+        expect(finalUrl).toContain('q=type%3Apost');
+    });
+
+    test('scope:all context-only hits stay renderable in index expand and thread views [PR-UARCH-08]', async ({ page }) => {
+        const userId = 'u-scope-all-context';
+        const userObj = { _id: userId, username: 'ScopeAll_User', displayName: 'Scope All User', slug: 'scope-all-user', karma: 100 };
+        const otherUser = { _id: 'u-other-scope', username: 'OtherScopeUser', displayName: 'Other Scope User', slug: 'other-scope-user', karma: 50 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-scope-child',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 5,
+            htmlBody: '<p>Child by archive owner</p>',
+            user: ${JSON.stringify(userObj)},
+            post: { _id: 'p-scope', title: 'Scope All Post', pageUrl: '...', user: ${JSON.stringify(otherUser)} },
+            parentComment: { _id: 'c-scope-parent', user: ${JSON.stringify(otherUser)}, parentComment: null },
+            postId: 'p-scope',
+            parentCommentId: 'c-scope-parent'
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetCommentsByIds')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-scope-parent',
+            postedAt: '2025-01-09T12:00:00Z',
+            baseScore: 7,
+            htmlBody: '<p>Parent context comment by other user</p>',
+            user: ${JSON.stringify(otherUser)},
+            post: { _id: 'p-scope', title: 'Scope All Post', pageUrl: '...', user: ${JSON.stringify(otherUser)} },
+            postId: 'p-scope',
+            parentComment: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ScopeAll_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        // Load parent context into runtime maps.
+        await page.locator('#archive-view').selectOption('thread-full');
+        await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+
+        // Search for context-only hit.
+        await page.locator('#archive-scope').selectOption('all');
+        await page.locator('#archive-search').fill('author:"other scope user"');
+
+        await expect(async () => {
+            await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+            await expect(page.locator('.pr-comment[data-id="c-scope-child"]')).toHaveCount(0);
+        }).toPass({ timeout: 5000 });
+
+        // Context hit should remain actionable in index expand path.
+        await page.locator('#archive-view').selectOption('index');
+        const indexRow = page.locator('.pr-archive-index-item').first();
+        await expect(indexRow).toContainText('Parent context comment by other user');
+        await indexRow.click();
+        await expect(page.locator('.pr-index-expanded .pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+
+        // And still render in thread mode without getting dropped.
+        await page.locator('#archive-view').selectOption('thread-full');
+        await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
     });
 
     test('all sort modes work: date-asc, score-asc, replyTo [PR-UARCH-09]', async ({ page }) => {

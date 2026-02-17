@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.682] - 2026-02-17
+
+### Added
+- **Structured Archive Search ([PR-UARCH-08])**: Implemented a comprehensive greenfield search engine for the User Archive.
+    - **Structured Query Grammar**: Supports field operators (`author:`, `replyto:`, `date:`, `score:`, `type:`, `scope:`) alongside plain terms and quoted phrases.
+    - **Multi-Stage Acceleration**:
+        - **Stage-A**: High-speed in-memory token index for instant filtering of positive/negative term matches.
+        - **Stage-B**: Targeted regex-based corpus matching for phrases and complex operators.
+    - **Advanced Ranking**: Implemented a custom ranker using BM25-lite scoring, prioritizing exact phrase matches and term frequency while accounting for field weights.
+    - **Search Scope**: Added `scope:all` to search across both user-authored content and loaded thread context.
+    - **Result Status ([PR-UARCH-39])**: Real-time reporting of search result counts in the archive status line.
+- **URL State Sync**: Fully synchronized archive search query, sort mode, and scope with the browser URL for shareable search results and stable refreshes.
+- **Strict Validation ([PR-UARCH-40])**: Added strict calendar date validation for `date:` filters to prevent overflowed/impossible dates.
+
+### Fixed
+- **Archive Search Resilience**: Improved tokenization to correctly handle escaped quotes inside phrases and malformed regex literals.
+- **Search Dedup**: Ensured `scope:all` searches prefer authored items over context items when IDs overlap.
+
 ## [1.2.672] - 2026-02-17
 
 ### Fixed

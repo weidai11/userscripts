@@ -3,7 +3,7 @@ import { executeTakeover, rebuildDocument, signalReady } from '../takeover';
 import { initializeReactions } from '../utils/reactions';
 import { Logger } from '../utils/logger';
 import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode, isThreadMode } from './state';
-import { loadArchiveData, saveArchiveData } from './storage';
+import { loadAllContextualItems, loadArchiveData, saveArchiveData } from './storage';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
 import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
@@ -16,6 +16,14 @@ import { setupInlineReactions } from '../features/inlineReactions';
 import { setupLinkPreviews } from '../features/linkPreviews';
 import { initPreviewSystem } from '../utils/preview';
 import { refreshPostActionButtons } from '../utils/dom';
+import { ArchiveSearchRuntime } from './search/engine';
+import { parseArchiveUrlState, writeArchiveUrlState } from './search/urlState';
+import type {
+  ArchiveItem,
+  ArchiveSearchScope,
+  ArchiveSearchSortMode,
+  SearchDiagnostics
+} from './search/types';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -27,6 +35,7 @@ const MAX_AUTO_RETRIES = 50;
 const INITIAL_BACKOFF_MS = 2000;
 
 const PAGE_SIZE = 10000;
+const SEARCH_DEBOUNCE_MS = 180;
 
 interface SyncErrorState {
   isRetrying: boolean;
@@ -68,6 +77,30 @@ export const initArchive = async (username: string): Promise<void> => {
             border: 1px solid var(--pr-border-color);
             background: var(--pr-bg-secondary);
             color: var(--pr-text-primary);
+        }
+        .pr-archive-search-status {
+            margin-top: 8px;
+            font-size: 0.9em;
+            color: var(--pr-text-secondary);
+        }
+        .pr-archive-search-status.warning {
+            color: #f6c453;
+        }
+        .pr-archive-search-status.error {
+            color: #ff6b6b;
+        }
+        .pr-search-retry-btn {
+            margin-left: 8px;
+            padding: 2px 8px;
+            font-size: 0.85em;
+            cursor: pointer;
+            background: var(--pr-bg-secondary);
+            border: 1px solid var(--pr-border-color);
+            border-radius: 4px;
+            color: var(--pr-text-primary);
+        }
+        .pr-search-retry-btn:hover {
+            background: var(--pr-bg-hover, #333);
         }
         .pr-archive-index-item {
             display: flex;
@@ -249,8 +282,13 @@ export const initArchive = async (username: string): Promise<void> => {
     
     <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder="Search archive (Regex supported)..." class="pr-input" style="flex: 2; min-width: 200px;">
+            <input type="text" id="archive-search" placeholder="Search archive (structured query: author:, date:, score:, /regex/)" class="pr-input" style="flex: 2; min-width: 260px;">
+            <select id="archive-scope">
+                <option value="authored">Scope: Authored</option>
+                <option value="all">Scope: Authored + Context</option>
+            </select>
             <select id="archive-sort">
+                <option value="relevance">Relevance</option>
                 <option value="date">Date (Newest)</option>
                 <option value="date-asc">Date (Oldest)</option>
                 <option value="score">Karma (High-Low)</option>
@@ -265,6 +303,7 @@ export const initArchive = async (username: string): Promise<void> => {
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
+        <div id="archive-search-status" class="pr-archive-search-status">Structured query enabled.</div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -283,14 +322,72 @@ export const initArchive = async (username: string): Promise<void> => {
     const feedEl = document.getElementById('archive-feed');
     const loadMoreBtn = document.getElementById('archive-load-more');
     const searchInput = document.getElementById('archive-search') as HTMLInputElement;
+    const scopeSelect = document.getElementById('archive-scope') as HTMLSelectElement;
     const sortSelect = document.getElementById('archive-sort') as HTMLSelectElement;
     const viewSelect = document.getElementById('archive-view') as HTMLSelectElement;
     const resyncBtn = document.getElementById('archive-resync');
     const errorContainer = document.getElementById('archive-error-container');
+    const searchStatusEl = document.getElementById('archive-search-status');
+    let statusBaseMessage = 'Checking local database...';
+    let statusSearchResultCount: number | null = null;
+
+    const renderTopStatusLine = (): void => {
+      if (!statusEl) return;
+
+      if (statusSearchResultCount === null) {
+        statusEl.textContent = statusBaseMessage;
+        return;
+      }
+
+      const resultLabel = `${statusSearchResultCount.toLocaleString()} search result${statusSearchResultCount === 1 ? '' : 's'}`;
+      statusEl.textContent = statusBaseMessage
+        ? `${statusBaseMessage} | ${resultLabel}`
+        : resultLabel;
+    };
+
+    const setStatusBaseMessage = (msg: string, isError = false, isSyncing = false): void => {
+      statusBaseMessage = msg;
+      if (!statusEl) return;
+      statusEl.classList.toggle('status-error', isError);
+      statusEl.classList.toggle('status-syncing', isSyncing);
+      renderTopStatusLine();
+    };
+
+    const setStatusSearchResultCount = (count: number | null): void => {
+      statusSearchResultCount = count;
+      renderTopStatusLine();
+    };
+
+    renderTopStatusLine();
 
     let activeItems = state.items;
+    const searchRuntime = new ArchiveSearchRuntime();
+    const urlState = parseArchiveUrlState();
+    let persistedContextItems: ArchiveItem[] = [];
+    let useDedicatedScopeParam = urlState.scopeFromUrl;
+    let searchDispatchTimer: number | null = null;
+    let activeQueryRequestId = 0;
+    let activeItemById = new Map<string, ArchiveItem>();
+    let authoredIndexItemsRef: readonly ArchiveItem[] | null = null;
+    let authoredIndexCanonicalRevision = -1;
+    let authoredItemsVersion = 0;
+    let contextSearchItemsCache:
+      | {
+        persistedRef: readonly ArchiveItem[];
+        authoredVersion: number;
+        readerRevision: number;
+        items: ArchiveItem[];
+      }
+      | null = null;
     const LARGE_DATASET_THRESHOLD = (window as any).__PR_ARCHIVE_LARGE_THRESHOLD || 10000;
     let pendingRenderCount: number | null = null;
+
+    searchInput.value = urlState.query;
+    sortSelect.value = urlState.sort;
+    if (!sortSelect.value) sortSelect.value = 'date';
+    scopeSelect.value = urlState.scope;
+    if (!scopeSelect.value) scopeSelect.value = 'authored';
+    state.sortBy = sortSelect.value as ArchiveSortBy;
 
     const runPostRenderHooks = () => {
       setupLinkPreviews(uiHost.getReaderState().comments);
@@ -303,31 +400,161 @@ export const initArchive = async (username: string): Promise<void> => {
       });
     };
 
-    const refreshView = async () => {
-      // 1. Filter
-      let filtered = state.items;
-      const query = searchInput.value;
-      if (query) {
-        try {
-          const regex = new RegExp(query, 'i');
-          filtered = state.items.filter((item: any) => {
-            // Prefer markdown, fallback to stripped HTML
-            const bodyText = item.contents?.markdown || (item.htmlBody || '').replace(/<[^>]+>/g, ' ');
-            const text = (item.title || '') + ' ' + bodyText;
-            return regex.test(text);
-          });
-        } catch (e) {
-          const lower = query.toLowerCase();
-          filtered = state.items.filter((item: any) => {
-            const bodyText = item.contents?.markdown || (item.htmlBody || '').replace(/<[^>]+>/g, ' ');
-            const text = ((item.title || '') + ' ' + bodyText).toLowerCase();
-            return text.includes(lower);
-          });
+    const syncAuthoredSearchIndex = (): void => {
+      const canonicalRevision = uiHost.getCanonicalStateRevision();
+      if (authoredIndexItemsRef === state.items && authoredIndexCanonicalRevision === canonicalRevision) return;
+      searchRuntime.setAuthoredItems(state.items, canonicalRevision);
+      authoredIndexItemsRef = state.items;
+      authoredIndexCanonicalRevision = canonicalRevision;
+      authoredItemsVersion += 1;
+      contextSearchItemsCache = null;
+    };
+
+    const collectContextSearchItems = (): ArchiveItem[] => {
+      const readerRevision = uiHost.getSearchStateRevision();
+      if (
+        contextSearchItemsCache &&
+        contextSearchItemsCache.persistedRef === persistedContextItems &&
+        contextSearchItemsCache.authoredVersion === authoredItemsVersion &&
+        contextSearchItemsCache.readerRevision === readerRevision
+      ) {
+        return contextSearchItemsCache.items;
+      }
+
+      const merged = new Map<string, ArchiveItem>();
+      for (const item of persistedContextItems) {
+        if (state.itemById.has(item._id)) continue;
+        merged.set(item._id, item);
+      }
+
+      const readerState = uiHost.getReaderState();
+      for (const post of readerState.posts) {
+        if (state.itemById.has(post._id)) continue;
+        merged.set(post._id, post);
+      }
+      for (const comment of readerState.comments) {
+        if (state.itemById.has(comment._id)) continue;
+        merged.set(comment._id, comment);
+      }
+
+      const items = Array.from(merged.values());
+      contextSearchItemsCache = {
+        persistedRef: persistedContextItems,
+        authoredVersion: authoredItemsVersion,
+        readerRevision,
+        items
+      };
+      return items;
+    };
+
+    const updateSearchStatus = (
+      diagnostics: SearchDiagnostics,
+      resolvedScope: ArchiveSearchScope,
+      contextItemCount: number,
+      sortMode: ArchiveSearchSortMode
+    ) => {
+      if (!searchStatusEl) return;
+
+      const messages: string[] = [];
+      if (resolvedScope === 'all') {
+        messages.push(`Searching authored + cached context (${contextItemCount} items)`);
+        if (contextItemCount === 0) {
+          messages.push('Context cache may be incomplete');
+        }
+        if (sortMode === 'replyTo') {
+          messages.push('replyTo ordering is computed over mixed authored/context semantics');
+        }
+      }
+      if (diagnostics.partialResults) {
+        messages.push(`Partial results (${diagnostics.tookMs}ms budget hit)`);
+      }
+      if (diagnostics.warnings.length > 0) {
+        messages.push(diagnostics.warnings[0].message);
+      }
+
+      searchStatusEl.textContent = '';
+      searchStatusEl.appendChild(document.createTextNode(messages.join(' | ') || 'Structured query enabled.'));
+
+      if (diagnostics.partialResults) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'pr-search-retry-btn';
+        retryBtn.textContent = 'Run without time limit';
+        retryBtn.addEventListener('click', () => {
+          refreshView(0);
+        });
+        searchStatusEl.appendChild(retryBtn);
+      }
+
+      searchStatusEl.classList.remove('warning', 'error');
+      if (diagnostics.parseState === 'invalid') {
+        searchStatusEl.classList.add('error');
+      } else if (diagnostics.parseState === 'warning' || diagnostics.degradedMode || diagnostics.partialResults) {
+        searchStatusEl.classList.add('warning');
+      }
+    };
+
+    const ensureSearchResultContextLoaded = (items: readonly ArchiveItem[]): void => {
+      const contextComments: ArchiveItem[] = [];
+      const contextPosts: ArchiveItem[] = [];
+      const readerState = uiHost.getReaderState();
+
+      for (const item of items) {
+        if (state.itemById.has(item._id)) continue;
+        if ('title' in item) {
+          if (!readerState.postById.has(item._id)) {
+            contextPosts.push(item);
+          }
+          continue;
+        }
+        if (!readerState.commentById.has(item._id)) {
+          contextComments.push(item);
         }
       }
 
-      // 2. Sort
-      activeItems = sortItems(filtered, sortSelect.value as string);
+      if (contextComments.length > 0) {
+        uiHost.mergeComments(contextComments as any, true);
+      }
+      if (contextPosts.length > 0) {
+        for (const post of contextPosts) {
+          uiHost.upsertPost(post as any, false);
+        }
+      }
+    };
+
+    const refreshView = async (budgetMs?: number) => {
+      const requestId = ++activeQueryRequestId;
+      const sortMode = sortSelect.value as ArchiveSearchSortMode;
+
+      syncAuthoredSearchIndex();
+      const contextItems = collectContextSearchItems();
+      searchRuntime.setContextItems(contextItems);
+      const scopeParam = useDedicatedScopeParam ? (scopeSelect.value as ArchiveSearchScope) : undefined;
+      const result = searchRuntime.runSearch({
+        query: searchInput.value,
+        scopeParam,
+        sortMode,
+        limit: state.items.length + contextItems.length + 5,
+        ...(budgetMs !== undefined ? { budgetMs } : {})
+      });
+
+      if (requestId !== activeQueryRequestId) {
+        return;
+      }
+
+      activeItems = result.items;
+      activeItemById = new Map(activeItems.map(item => [item._id, item]));
+      ensureSearchResultContextLoaded(activeItems);
+      if (!useDedicatedScopeParam && result.resolvedScope !== 'authored') {
+        useDedicatedScopeParam = true;
+      }
+      scopeSelect.value = result.resolvedScope;
+      writeArchiveUrlState({
+        query: result.canonicalQuery,
+        scope: result.resolvedScope,
+        sort: sortMode
+      });
+      setStatusSearchResultCount(result.total);
+      updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
 
       // 3. Check if we need to ask user about render count for large datasets
       const totalItems = activeItems.length;
@@ -376,8 +603,10 @@ export const initArchive = async (username: string): Promise<void> => {
     };
 
     // Helper to batch updates to map
-    const updateItemMap = (items: any[]) => {
+    const updateItemMap = (items: ArchiveItem[]) => {
       items.forEach(i => state.itemById.set(i._id, i));
+      syncAuthoredSearchIndex();
+      contextSearchItemsCache = null;
 
       // Update UI Host when we have new items
       // We trigger a re-sync of reader state
@@ -426,13 +655,37 @@ export const initArchive = async (username: string): Promise<void> => {
     };
 
     // Event Listeners
+    const scheduleSearchRefresh = () => {
+      if (searchDispatchTimer) {
+        window.clearTimeout(searchDispatchTimer);
+      }
+      searchDispatchTimer = window.setTimeout(() => {
+        void refreshView();
+      }, SEARCH_DEBOUNCE_MS);
+    };
+
     searchInput?.addEventListener('input', () => {
-      refreshView();
+      scheduleSearchRefresh();
+    });
+
+    searchInput?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+          searchDispatchTimer = null;
+        }
+        void refreshView();
+      }
+    });
+
+    scopeSelect?.addEventListener('change', () => {
+      useDedicatedScopeParam = true;
+      void refreshView();
     });
 
     sortSelect?.addEventListener('change', () => {
       state.sortBy = sortSelect.value as ArchiveSortBy;
-      refreshView();
+      void refreshView();
     });
 
     viewSelect?.addEventListener('change', () => {
@@ -440,19 +693,22 @@ export const initArchive = async (username: string): Promise<void> => {
 
       // [PR-SORT-04] Disable "Reply To" sort in Thread View as it organizes by Post
       const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
+      const relevanceOption = sortSelect.querySelector('option[value="relevance"]') as HTMLOptionElement;
       if (replyToOption) {
         if (isThreadMode(state.viewMode)) {
           replyToOption.disabled = true;
-          if (state.sortBy === 'replyTo') {
+          if (relevanceOption) relevanceOption.disabled = true;
+          if (state.sortBy === 'replyTo' || state.sortBy === 'relevance') {
             state.sortBy = 'date';
             sortSelect.value = 'date';
           }
         } else {
           replyToOption.disabled = false;
+          if (relevanceOption) relevanceOption.disabled = false;
         }
       }
 
-      refreshView();
+      void refreshView();
     });
 
     // Setup Load More
@@ -471,7 +727,7 @@ export const initArchive = async (username: string): Promise<void> => {
       const expandTarget = target.closest('[data-action="expand-index-item"]');
       if (expandTarget) {
         const id = expandTarget.getAttribute('data-id');
-        const item = id ? state.itemById.get(id) : null;
+        const item = id ? (activeItemById.get(id) || state.itemById.get(id)) : null;
         if (!item) return;
 
         const wrapper = document.createElement('div');
@@ -491,7 +747,7 @@ export const initArchive = async (username: string): Promise<void> => {
       const collapseTarget = target.closest('[data-action="collapse-index-item"]');
       if (collapseTarget) {
         const id = collapseTarget.getAttribute('data-id');
-        const item = id ? state.itemById.get(id) : null;
+        const item = id ? (activeItemById.get(id) || state.itemById.get(id)) : null;
         if (!item) return;
 
         const expanded = collapseTarget.closest('.pr-index-expanded');
@@ -562,7 +818,7 @@ export const initArchive = async (username: string): Promise<void> => {
     const showRetryProgress = (attempt: number, maxAttempts: number, nextRetryIn?: number) => {
       if (!errorContainer || !statusEl) return;
 
-      statusEl.textContent = `Sync failed. Retry ${attempt}/${maxAttempts}...`;
+      setStatusBaseMessage(`Sync failed. Retry ${attempt}/${maxAttempts}...`, true, false);
 
       errorContainer.innerHTML = `
         <div class="pr-archive-error">
@@ -594,10 +850,7 @@ export const initArchive = async (username: string): Promise<void> => {
       const cached = await loadArchiveData(username);
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
-        if (!statusEl) return;
-        statusEl.textContent = msg;
-        statusEl.classList.toggle('status-error', isError);
-        statusEl.classList.toggle('status-syncing', isSyncing);
+        setStatusBaseMessage(msg, isError, isSyncing);
       };
 
       const attemptSync = async (useAutoRetry: boolean, attemptNumber: number = 1): Promise<void> => {
@@ -741,13 +994,26 @@ export const initArchive = async (username: string): Promise<void> => {
     // Initial sync of host state
     updateItemMap(state.items);
 
+    try {
+      const cachedContext = await loadAllContextualItems(username);
+      persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+      contextSearchItemsCache = null;
+      if (persistedContextItems.length > 0 && (scopeSelect.value === 'all' || searchInput.value.trim().length > 0)) {
+        await refreshView();
+      }
+    } catch (e) {
+      Logger.warn('Failed to load contextual cache for archive search scope:all', e);
+      persistedContextItems = [];
+      contextSearchItemsCache = null;
+    }
+
     activeItems = state.items;
 
     if (cached.items.length > 0) {
-      statusEl!.textContent = `Loaded ${cached.items.length} items from cache.`;
+      setStatusBaseMessage(`Loaded ${cached.items.length} items from cache.`, false, false);
     } else {
       dashboardEl!.style.display = 'block';
-      statusEl!.textContent = `No local data. Fetching full history for ${username}...`;
+      setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
     }
 
     // 2. Perform Sync with error handling
@@ -767,38 +1033,6 @@ export const initArchive = async (username: string): Promise<void> => {
       root.replaceChildren(errorEl);
     }
   }
-};
-
-/**
- * Sort helper
- */
-const sortItems = (items: any[], sortMode: string): any[] => {
-  const sorted = [...items];
-  switch (sortMode) {
-    case 'date-asc':
-      return sorted.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
-    case 'date':
-    default:
-      return sorted.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
-    case 'score':
-      return sorted.sort((a, b) => (b.baseScore || 0) - (a.baseScore || 0));
-    case 'score-asc':
-      return sorted.sort((a, b) => (a.baseScore || 0) - (b.baseScore || 0));
-    case 'replyTo':
-      return sorted.sort((a, b) => {
-        const nameA = getInterlocutorName(a).toLowerCase();
-        const nameB = getInterlocutorName(b).toLowerCase();
-        return nameA.localeCompare(nameB);
-      });
-  }
-};
-
-const getInterlocutorName = (item: any): string => {
-  if (item.title) return " (Original Post)"; // It's a post
-  // It's a comment
-  if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;
-  if (item.post?.user?.displayName) return item.post.user.displayName;
-  return "Unknown";
 };
 
 /**

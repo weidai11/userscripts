@@ -136,7 +136,7 @@ export const renderArchiveFeed = async (
   items: (Post | Comment)[],
   viewMode: ArchiveViewMode,
   state: ReaderState,
-  sortBy?: 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+  sortBy?: 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
 ): Promise<void> => {
   if (items.length === 0) {
     container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
@@ -178,7 +178,7 @@ const renderThreadView = (
   container: HTMLElement,
   items: (Post | Comment)[],
   state: ReaderState,
-  sortBy?: 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+  sortBy?: 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
 ) => {
   // 1. Build inclusion set: visible comments + their ancestors
   const visibleCommentIds = new Set<string>();
@@ -269,6 +269,7 @@ const renderThreadView = (
   switch (sortBy) {
     case 'date-asc':
     case 'replyTo': // Fallback to date for replyTo in thread view
+    case 'relevance': // Fallback to date for relevance in thread view
       sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
       break;
     case 'score':

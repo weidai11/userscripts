@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.676
+// @version    1.2.682
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2662,7 +2662,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.676"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.682"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6257,7 +6257,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6403,7 +6403,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -8771,6 +8771,30 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     await transactionToPromise(tx);
     return { comments: dedupeById(comments), missingIds };
   };
+  const loadAllContextualItems = async (username) => {
+    const db = await openDB();
+    const tx = db.transaction(STORE_CONTEXTUAL, "readonly");
+    const store = tx.objectStore(STORE_CONTEXTUAL);
+    const index = store.index("username");
+    const entries2 = await requestToPromise(index.getAll(IDBKeyRange.only(username)));
+    const now = Date.now();
+    const comments = [];
+    const posts = [];
+    for (const entry of entries2) {
+      if (now - entry.updatedAt > CONTEXT_MAX_AGE_MS) {
+        continue;
+      }
+      if (entry.itemType === "comment") {
+        comments.push(entry.payload);
+      } else if (entry.itemType === "post") {
+        posts.push(entry.payload);
+      }
+    }
+    return {
+      comments: dedupeById(comments),
+      posts: dedupeById(posts)
+    };
+  };
   const pruneContextualCache = async (username) => {
     const db = await openDB();
     const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
@@ -9125,6 +9149,7 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     switch (sortBy) {
       case "date-asc":
       case "replyTo":
+case "relevance":
         sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
         break;
       case "score":
@@ -9201,7 +9226,7 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
   const renderIndexItem = (item) => {
     const isPost2 = "title" in item;
     const title = isPost2 ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
-    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName$1(item)}`;
+    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName(item)}`;
     const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
     return `
         <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
@@ -9217,7 +9242,7 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
         </div>
     `;
   };
-  const getInterlocutorName$1 = (item) => {
+  const getInterlocutorName = (item) => {
     if ("title" in item) return " (Original Post)";
     const c = item;
     if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
@@ -9229,6 +9254,8 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     readerState;
     feedContainer = null;
     renderCallback = null;
+    searchStateRevision = 0;
+    canonicalStateRevision = 0;
     constructor(archiveState, feedContainer, renderCallback) {
       this.archiveState = archiveState;
       this.feedContainer = feedContainer;
@@ -9257,6 +9284,18 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     getReaderState() {
       return this.readerState;
     }
+    getSearchStateRevision() {
+      return this.searchStateRevision;
+    }
+    getCanonicalStateRevision() {
+      return this.canonicalStateRevision;
+    }
+    bumpSearchStateRevision() {
+      this.searchStateRevision += 1;
+    }
+    bumpCanonicalStateRevision() {
+      this.canonicalStateRevision += 1;
+    }
 setContainer(container) {
       this.feedContainer = container;
     }
@@ -9272,6 +9311,7 @@ syncItemToCanonical(item) {
       } else {
         this.archiveState.items.push(item);
       }
+      this.bumpCanonicalStateRevision();
     }
 sortCanonicalItems() {
       this.archiveState.items.sort((a, b) => {
@@ -9366,6 +9406,7 @@ sortCanonicalItems() {
         }
       });
       rebuildIndexes(this.readerState);
+      this.bumpSearchStateRevision();
       if (this.renderCallback) {
         this.renderCallback();
       } else if (this.feedContainer) {
@@ -9450,6 +9491,9 @@ sortCanonicalItems() {
       if (changed > 0) {
         rebuildIndexes(this.readerState);
       }
+      if (changed > 0 || canonicalTouched) {
+        this.bumpSearchStateRevision();
+      }
       if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
         this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
       }
@@ -9473,12 +9517,1182 @@ sortCanonicalItems() {
           this.persistContextualData([], [post]);
         }
       }
+      this.bumpSearchStateRevision();
     }
   }
+  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";
+  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;
+  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";
+  const HTML_TAG_PATTERN = /<[^>]+>/g;
+  const WHITESPACE_PATTERN = /\s+/g;
+  const MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\(([^)]+)\)/g;
+  const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  const MARKDOWN_FORMATTING_PATTERN = /(^|\s)[>#*_~`-]+(?=\s|$)/gm;
+  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;
+  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;
+  const MARKDOWN_LATEX_PATTERN = /\$\$?/g;
+  const PUNCT_FOLD_PATTERN = /[^\p{L}\p{N}\s]/gu;
+  const APOSTROPHE_PATTERN = /['’]/g;
+  const TOKEN_SPLIT_PATTERN = /\s+/g;
+  const COMMON_ENTITIES = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&apos;": "'",
+    "&nbsp;": " ",
+    "&#x27;": "'",
+    "&#x2F;": "/"
+  };
+  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\d+)|[a-z][a-z0-9]*);/gi;
+  const decodeHtmlEntities = (html2) => {
+    if (typeof document !== "undefined") {
+      const textarea = document.createElement("textarea");
+      textarea.innerHTML = html2;
+      return textarea.value;
+    }
+    return html2.replace(ENTITY_PATTERN, (entity) => {
+      const known = COMMON_ENTITIES[entity.toLowerCase()];
+      if (known) return known;
+      if (entity.startsWith("&#x")) {
+        const code = parseInt(entity.slice(3, -1), 16);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
+      }
+      if (entity.startsWith("&#")) {
+        const code = parseInt(entity.slice(2, -1), 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
+      }
+      return entity;
+    });
+  };
+  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();
+  const stripHtmlToText = (html2) => {
+    const decoded = decodeHtmlEntities(html2);
+    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));
+  };
+  const stripMarkdownFormatting = (markdown) => {
+    let text2 = markdown;
+    text2 = text2.replace(MARKDOWN_IMAGE_PATTERN, "$1");
+    text2 = text2.replace(MARKDOWN_LINK_PATTERN, "$1");
+    text2 = text2.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");
+    text2 = text2.replace(MARKDOWN_INLINE_CODE_PATTERN, "");
+    text2 = text2.replace(MARKDOWN_LATEX_PATTERN, "");
+    text2 = text2.replace(MARKDOWN_FORMATTING_PATTERN, "$1");
+    return collapseWhitespace(text2);
+  };
+  const normalizeForSearch = (value) => {
+    if (!value) return "";
+    const nfkc = value.normalize("NFKC").toLowerCase();
+    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));
+  };
+  const normalizeBody = (item) => {
+    const markdown = item.contents?.markdown;
+    if (typeof markdown === "string" && markdown.trim().length > 0) {
+      return normalizeForSearch(stripMarkdownFormatting(markdown));
+    }
+    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";
+    return normalizeForSearch(stripHtmlToText(htmlBody));
+  };
+  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";
+  const getItemType = (item) => "title" in item ? "post" : "comment";
+  const getAuthorDisplayName = (item) => {
+    if (item.user?.displayName) return item.user.displayName;
+    if (item.user?.username) return item.user.username;
+    return "";
+  };
+  const getReplyToDisplayName = (item) => {
+    if ("title" in item) return "";
+    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;
+    if (item.post?.user?.displayName) return item.post.user.displayName;
+    return "";
+  };
+  const buildArchiveSearchDoc = (item, source) => {
+    const titleNorm = normalizeTitle(item);
+    const bodyNorm = normalizeBody(item);
+    const combinedNorm = collapseWhitespace(`${titleNorm} ${bodyNorm}`);
+    return {
+      id: item._id,
+      itemType: getItemType(item),
+      source,
+      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,
+      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,
+      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),
+      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),
+      titleNorm,
+      bodyNorm,
+      combinedNorm,
+      item
+    };
+  };
+  const tokenizeForIndex = (normText) => {
+    if (!normText) return [];
+    const tokens = normText.split(TOKEN_SPLIT_PATTERN);
+    const output = [];
+    const seen = new Set();
+    for (const token of tokens) {
+      if (!token || token.length < 2) continue;
+      if (seen.has(token)) continue;
+      seen.add(token);
+      output.push(token);
+    }
+    return output;
+  };
+  const MAX_REGEX_PATTERN_LENGTH = 512;
+  const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;
+  const tokenizeQuery = (query) => {
+    const tokens = [];
+    let i = 0;
+    while (i < query.length) {
+      while (i < query.length && /\s/.test(query[i])) i++;
+      if (i >= query.length) break;
+      const start = i;
+      let cursor = i;
+      let inQuote = false;
+      const startsWithNegation = query[cursor] === "-";
+      if (startsWithNegation) cursor++;
+      const startsRegexLiteral = query[cursor] === "/";
+      if (startsRegexLiteral) {
+        cursor++;
+        let escaped2 = false;
+        while (cursor < query.length) {
+          const ch = query[cursor];
+          if (!escaped2 && ch === "/") {
+            cursor++;
+            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {
+              cursor++;
+            }
+            break;
+          }
+          if (!escaped2 && ch === "\\") {
+            escaped2 = true;
+          } else {
+            escaped2 = false;
+          }
+          cursor++;
+        }
+        while (cursor < query.length && !/\s/.test(query[cursor])) {
+          cursor++;
+        }
+        tokens.push(query.slice(start, cursor));
+        i = cursor;
+        continue;
+      }
+      let escaped = false;
+      while (cursor < query.length) {
+        const ch = query[cursor];
+        if (!escaped && ch === '"') {
+          inQuote = !inQuote;
+          cursor++;
+          continue;
+        }
+        if (!inQuote && /\s/.test(ch)) {
+          break;
+        }
+        escaped = !escaped && ch === "\\";
+        cursor++;
+      }
+      tokens.push(query.slice(start, cursor));
+      i = cursor;
+    }
+    return tokens;
+  };
+  const parseRegexLiteral = (token) => {
+    if (!token.startsWith("/")) return null;
+    let i = 1;
+    let escaped = false;
+    while (i < token.length) {
+      const ch = token[i];
+      if (!escaped && ch === "/") {
+        const pattern = token.slice(1, i);
+        const flags = token.slice(i + 1);
+        if (!/^[a-z]*$/i.test(flags)) return null;
+        return { raw: token, pattern, flags };
+      }
+      if (!escaped && ch === "\\") {
+        escaped = true;
+      } else {
+        escaped = false;
+      }
+      i++;
+    }
+    return null;
+  };
+  const addWarning = (warnings, type, token, message) => {
+    warnings.push({ type, token, message });
+  };
+  const removeOuterQuotes = (value) => {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      return value.slice(1, -1);
+    }
+    return value;
+  };
+  const parseNumber = (value) => {
+    if (!/^-?\d+$/.test(value.trim())) return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    return parsed;
+  };
+  const parseScoreClause = (value, negated) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith(">")) {
+      const n = parseNumber(trimmed.slice(1));
+      if (n === null) return null;
+      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: true };
+    }
+    if (trimmed.startsWith("<")) {
+      const n = parseNumber(trimmed.slice(1));
+      if (n === null) return null;
+      return { kind: "score", negated, op: "lt", max: n, includeMin: true, includeMax: false };
+    }
+    if (trimmed.includes("..")) {
+      const [minRaw, maxRaw] = trimmed.split("..");
+      const min = parseNumber(minRaw);
+      const max = parseNumber(maxRaw);
+      if (min === null || max === null) return null;
+      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };
+    }
+    const exact = parseNumber(trimmed);
+    if (exact === null) return null;
+    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };
+  };
+  const parseUtcDayBounds = (value) => {
+    if (!DATE_PATTERN.test(value)) return null;
+    const [yearRaw, monthRaw, dayRaw] = value.split("-");
+    const year = Number(yearRaw);
+    const month = Number(monthRaw);
+    const day = Number(dayRaw);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const startMs = Date.UTC(year, month - 1, day);
+    const parsed = new Date(startMs);
+    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+      return null;
+    }
+    return {
+      startMs,
+      endMs: startMs + UTC_DAY_MS - 1
+    };
+  };
+  const parseDateClause = (value, negated) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith(">")) {
+      const bounds = parseUtcDayBounds(trimmed.slice(1));
+      if (!bounds) return null;
+      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: true };
+    }
+    if (trimmed.startsWith("<")) {
+      const bounds = parseUtcDayBounds(trimmed.slice(1));
+      if (!bounds) return null;
+      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: true, includeMax: false };
+    }
+    if (trimmed.includes("..")) {
+      const [startRaw, endRaw] = trimmed.split("..");
+      const hasStart = startRaw.trim().length > 0;
+      const hasEnd = endRaw.trim().length > 0;
+      if (!hasStart && !hasEnd) return null;
+      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;
+      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;
+      if (hasStart && !startBounds || hasEnd && !endBounds) return null;
+      return {
+        kind: "date",
+        negated,
+        op: "range",
+        minMs: startBounds?.startMs,
+        maxMs: endBounds?.endMs,
+        includeMin: true,
+        includeMax: true
+      };
+    }
+    const day = parseUtcDayBounds(trimmed);
+    if (!day) return null;
+    return {
+      kind: "date",
+      negated,
+      op: "range",
+      minMs: day.startMs,
+      maxMs: day.endMs,
+      includeMin: true,
+      includeMax: true
+    };
+  };
+  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {
+    const colonIndex = token.indexOf(":");
+    if (colonIndex <= 0) return { handled: false, clause: null };
+    const operator = token.slice(0, colonIndex).toLowerCase();
+    const valueRaw = token.slice(colonIndex + 1);
+    const value = removeOuterQuotes(valueRaw);
+    switch (operator) {
+      case "type": {
+        const normalized = value.toLowerCase();
+        if (normalized !== "post" && normalized !== "comment") {
+          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);
+          return { handled: true, clause: null };
+        }
+        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);
+        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };
+      }
+      case "author": {
+        const normalized = normalizeForSearch(value);
+        if (!normalized) {
+          addWarning(warnings, "invalid-query", token, "author filter requires a value");
+          return { handled: true, clause: null };
+        }
+        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);
+        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };
+      }
+      case "replyto": {
+        const normalized = normalizeForSearch(value);
+        if (!normalized) {
+          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");
+          return { handled: true, clause: null };
+        }
+        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);
+        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };
+      }
+      case "scope": {
+        const normalized = value.toLowerCase();
+        if (normalized === "authored" || normalized === "all") {
+          scopeDirectives.push(normalized);
+        } else {
+          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);
+        }
+        return { handled: true, clause: null };
+      }
+      case "score": {
+        const parsed = parseScoreClause(valueRaw, negated);
+        if (!parsed) {
+          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);
+          return { handled: true, clause: null };
+        }
+        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);
+        return { handled: true, clause: parsed };
+      }
+      case "date": {
+        const parsed = parseDateClause(valueRaw, negated);
+        if (!parsed) {
+          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);
+          return { handled: true, clause: null };
+        }
+        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);
+        return { handled: true, clause: parsed };
+      }
+      case "sort": {
+        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");
+        return { handled: true, clause: null };
+      }
+      default:
+        return { handled: false, clause: null };
+    }
+  };
+  const containsUnsafeRegexPattern = (pattern) => /(\([^)]*[+*][^)]*\)[+*])/.test(pattern) || /(\+|\*|\{[^}]+\})\s*(\+|\*|\{[^}]+\})/.test(pattern);
+  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\s+/g, "-") : termNorm;
+  const parseStructuredQuery = (query) => {
+    const trimmed = query.trim();
+    const warnings = [];
+    const scopeDirectives = [];
+    const clauses = [];
+    const executableTokens = [];
+    let wildcardSeen = false;
+    if (!trimmed) {
+      return {
+        rawQuery: query,
+        executableQuery: "",
+        clauses,
+        scopeDirectives,
+        warnings
+      };
+    }
+    const tokens = tokenizeQuery(trimmed);
+    for (const rawToken of tokens) {
+      if (!rawToken) continue;
+      const negated = rawToken.startsWith("-");
+      const token = negated ? rawToken.slice(1) : rawToken;
+      if (!token) continue;
+      const regexLiteral = parseRegexLiteral(token);
+      if (regexLiteral) {
+        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {
+          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");
+          continue;
+        }
+        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {
+          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");
+          continue;
+        }
+        try {
+          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");
+          const regex = new RegExp(regexLiteral.pattern, safeFlags);
+          clauses.push({
+            kind: "regex",
+            negated,
+            raw: rawToken,
+            pattern: regexLiteral.pattern,
+            flags: safeFlags,
+            regex
+          });
+          executableTokens.push(rawToken);
+          continue;
+        } catch {
+          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");
+          continue;
+        }
+      }
+      if (token.startsWith("/")) {
+        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");
+        continue;
+      }
+      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);
+      if (fieldResult.handled) {
+        if (fieldResult.clause) {
+          clauses.push(fieldResult.clause);
+        }
+        continue;
+      }
+      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {
+        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);
+      }
+      if (token === "*") {
+        if (!wildcardSeen) {
+          clauses.push({ kind: "wildcard", negated });
+          executableTokens.push(rawToken);
+          wildcardSeen = true;
+        }
+        continue;
+      }
+      if (token.startsWith('"') && token.endsWith('"') && token.length >= 2) {
+        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));
+        if (phraseNorm) {
+          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });
+          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);
+        }
+        continue;
+      }
+      const termNorm = normalizeForSearch(token);
+      if (termNorm) {
+        clauses.push({ kind: "term", negated, valueNorm: termNorm });
+        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);
+      }
+    }
+    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);
+    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));
+    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);
+    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);
+    if (hasNegatedClause && !hasAnyPositiveClause) {
+      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");
+    }
+    return {
+      rawQuery: query,
+      executableQuery: executableTokens.join(" ").trim(),
+      clauses: filteredClauses,
+      scopeDirectives,
+      warnings
+    };
+  };
+  const buildExecutionPlan = (clauses) => {
+    const stageA = [];
+    const stageB = [];
+    const negations = [];
+    for (const clause of clauses) {
+      if (clause.negated) {
+        negations.push(clause);
+        continue;
+      }
+      switch (clause.kind) {
+        case "type":
+        case "author":
+        case "replyto":
+        case "score":
+        case "date":
+          stageA.push(clause);
+          break;
+        case "term":
+          if (clause.valueNorm.length >= 2) {
+            stageA.push(clause);
+          } else {
+            stageB.push(clause);
+          }
+          break;
+        case "phrase":
+        case "regex":
+        case "wildcard":
+          stageB.push(clause);
+          break;
+        default:
+          stageB.push(clause);
+          break;
+      }
+    }
+    return { stageA, stageB, negations };
+  };
+  const compareSourcePriority = (a, b) => {
+    if (a.source === b.source) return 0;
+    return a.source === "authored" ? -1 : 1;
+  };
+  const compareStableTail = (a, b) => {
+    const sourceCmp = compareSourcePriority(a, b);
+    if (sourceCmp !== 0) return sourceCmp;
+    const dateCmp = b.postedAtMs - a.postedAtMs;
+    if (dateCmp !== 0) return dateCmp;
+    return a.id.localeCompare(b.id);
+  };
+  const compareReplyTo = (a, b) => {
+    const aEmpty = a.replyToNorm.length === 0;
+    const bEmpty = b.replyToNorm.length === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);
+    if (nameCmp !== 0) return nameCmp;
+    return compareStableTail(a, b);
+  };
+  const computeRelevanceScore = (signals) => {
+    let score = 0;
+    score += signals.tokenHits * 10;
+    score += signals.phraseHits * 15;
+    if (signals.authorHit) score += 8;
+    if (signals.replyToHit) score += 6;
+    return score;
+  };
+  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {
+    const sorted = [...docs];
+    switch (sortMode) {
+      case "date-asc":
+        sorted.sort((a, b) => {
+          const cmp = a.postedAtMs - b.postedAtMs;
+          if (cmp !== 0) return cmp;
+          return compareStableTail(a, b);
+        });
+        return sorted;
+      case "score":
+        sorted.sort((a, b) => {
+          const cmp = b.baseScore - a.baseScore;
+          if (cmp !== 0) return cmp;
+          return compareStableTail(a, b);
+        });
+        return sorted;
+      case "score-asc":
+        sorted.sort((a, b) => {
+          const cmp = a.baseScore - b.baseScore;
+          if (cmp !== 0) return cmp;
+          return compareStableTail(a, b);
+        });
+        return sorted;
+      case "replyTo":
+        sorted.sort(compareReplyTo);
+        return sorted;
+      case "relevance":
+        sorted.sort((a, b) => {
+          const aSignals = relevanceSignalsById.get(a.id) || {
+            tokenHits: 0,
+            phraseHits: 0,
+            authorHit: false,
+            replyToHit: false
+          };
+          const bSignals = relevanceSignalsById.get(b.id) || {
+            tokenHits: 0,
+            phraseHits: 0,
+            authorHit: false,
+            replyToHit: false
+          };
+          const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);
+          if (scoreCmp !== 0) return scoreCmp;
+          const dateCmp = b.postedAtMs - a.postedAtMs;
+          if (dateCmp !== 0) return dateCmp;
+          return a.id.localeCompare(b.id);
+        });
+        return sorted;
+      case "date":
+      default:
+        sorted.sort((a, b) => {
+          const cmp = b.postedAtMs - a.postedAtMs;
+          if (cmp !== 0) return cmp;
+          return compareStableTail(a, b);
+        });
+        return sorted;
+    }
+  };
+  const addPosting = (index, token, ordinal) => {
+    const postings = index.get(token);
+    if (postings) {
+      postings.push(ordinal);
+      return;
+    }
+    index.set(token, [ordinal]);
+  };
+  const compactPostings = (mutable) => {
+    const compact = new Map();
+    mutable.forEach((postings, token) => {
+      postings.sort((a, b) => a - b);
+      compact.set(token, Uint32Array.from(postings));
+    });
+    return compact;
+  };
+  const buildIndexes = (docs) => {
+    const tokenMutable = new Map();
+    const authorMutable = new Map();
+    const replyToMutable = new Map();
+    for (let ordinal = 0; ordinal < docs.length; ordinal++) {
+      const doc = docs[ordinal];
+      for (const token of tokenizeForIndex(doc.combinedNorm)) {
+        addPosting(tokenMutable, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.authorNameNorm)) {
+        addPosting(authorMutable, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.replyToNorm)) {
+        addPosting(replyToMutable, token, ordinal);
+      }
+    }
+    return {
+      tokenIndex: compactPostings(tokenMutable),
+      authorIndex: compactPostings(authorMutable),
+      replyToIndex: compactPostings(replyToMutable)
+    };
+  };
+  const buildCorpusIndex = (source, items) => {
+    const docs = items.map((item) => buildArchiveSearchDoc(item, source));
+    const docOrdinalsById = new Map();
+    docs.forEach((doc, ordinal) => docOrdinalsById.set(doc.id, ordinal));
+    const indexes = buildIndexes(docs);
+    return {
+      source,
+      docs,
+      docOrdinalsById,
+      ...indexes
+    };
+  };
+  const DEFAULT_BUDGET_MS = 150;
+  const createEmptySignals = () => ({
+    tokenHits: 0,
+    phraseHits: 0,
+    authorHit: false,
+    replyToHit: false
+  });
+  const upsertSignal = (signalMap, ordinal) => {
+    const existing = signalMap.get(ordinal);
+    if (existing) return existing;
+    const created = createEmptySignals();
+    signalMap.set(ordinal, created);
+    return created;
+  };
+  const allOrdinalsSet = (docCount) => {
+    const output = new Set();
+    for (let i = 0; i < docCount; i++) output.add(i);
+    return output;
+  };
+  const intersectSets = (a, b) => {
+    const [small, large] = a.size < b.size ? [a, b] : [b, a];
+    const out = new Set();
+    small.forEach((value) => {
+      if (large.has(value)) out.add(value);
+    });
+    return out;
+  };
+  const postingsToSet = (postings) => {
+    const out = new Set();
+    for (let i = 0; i < postings.length; i++) out.add(postings[i]);
+    return out;
+  };
+  const maybeIntersectWithCandidate = (candidate, current) => {
+    if (!candidate) return current;
+    return intersectSets(candidate, current);
+  };
+  const getTokenPostingIntersection = (index, tokens, docCount) => {
+    if (tokens.length === 0) return allOrdinalsSet(docCount);
+    let result = null;
+    for (const token of tokens) {
+      const postings = index.get(token);
+      if (!postings) return new Set();
+      const postingSet = postingsToSet(postings);
+      result = result ? intersectSets(result, postingSet) : postingSet;
+      if (result.size === 0) return result;
+    }
+    return result || new Set();
+  };
+  const matchesScoreClause = (doc, clause) => {
+    const value = doc.baseScore;
+    if (clause.op === "gt") {
+      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);
+    }
+    if (clause.op === "lt") {
+      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);
+    }
+    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;
+    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;
+    return minOk && maxOk;
+  };
+  const matchesDateClause = (doc, clause) => {
+    const value = doc.postedAtMs;
+    if (clause.op === "gt") {
+      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);
+    }
+    if (clause.op === "lt") {
+      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);
+    }
+    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;
+    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;
+    return minOk && maxOk;
+  };
+  const matchesClause = (doc, clause) => {
+    switch (clause.kind) {
+      case "term":
+        return doc.combinedNorm.includes(clause.valueNorm);
+      case "phrase":
+        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);
+      case "regex":
+        clause.regex.lastIndex = 0;
+        if (clause.regex.test(doc.titleNorm)) return true;
+        clause.regex.lastIndex = 0;
+        return clause.regex.test(doc.bodyNorm);
+      case "wildcard":
+        return true;
+      case "type":
+        return doc.itemType === clause.itemType;
+      case "author":
+        return doc.authorNameNorm.includes(clause.valueNorm);
+      case "replyto":
+        return doc.replyToNorm.includes(clause.valueNorm);
+      case "score":
+        return matchesScoreClause(doc, clause);
+      case "date":
+        return matchesDateClause(doc, clause);
+      default:
+        return false;
+    }
+  };
+  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {
+    const plan = buildExecutionPlan(clauses);
+    const docCount = corpus.docs.length;
+    const relevanceSignalsByOrdinal = new Map();
+    let partialResults = false;
+    let stageBScanned = 0;
+    const deferredStageAClauses = [];
+    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;
+    let candidateOrdinals = null;
+    for (const clause of plan.stageA) {
+      if (budgetExceeded()) {
+        partialResults = true;
+        deferredStageAClauses.push(clause);
+        continue;
+      }
+      let matched = new Set();
+      switch (clause.kind) {
+        case "term": {
+          const termTokens = tokenizeForIndex(clause.valueNorm);
+          if (termTokens.length === 0) {
+            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+              if (budgetExceeded()) {
+                partialResults = true;
+                break;
+              }
+              const doc = corpus.docs[ordinal];
+              if (doc.combinedNorm.includes(clause.valueNorm)) {
+                matched.add(ordinal);
+              }
+            }
+          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {
+            const postings = corpus.tokenIndex.get(clause.valueNorm);
+            matched = postings ? postingsToSet(postings) : new Set();
+          } else {
+            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);
+            accelerated.forEach((ordinal) => {
+              const doc = corpus.docs[ordinal];
+              if (!doc.combinedNorm.includes(clause.valueNorm)) return;
+              matched.add(ordinal);
+            });
+          }
+          matched.forEach((ordinal) => {
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.tokenHits += 1;
+          });
+          break;
+        }
+        case "author": {
+          const nameTokens = tokenizeForIndex(clause.valueNorm);
+          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens, docCount);
+          accelerated.forEach((ordinal) => {
+            const doc = corpus.docs[ordinal];
+            if (!doc.authorNameNorm.includes(clause.valueNorm)) return;
+            matched.add(ordinal);
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.authorHit = true;
+          });
+          break;
+        }
+        case "replyto": {
+          const nameTokens = tokenizeForIndex(clause.valueNorm);
+          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens, docCount);
+          accelerated.forEach((ordinal) => {
+            const doc = corpus.docs[ordinal];
+            if (!doc.replyToNorm.includes(clause.valueNorm)) return;
+            matched.add(ordinal);
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.replyToHit = true;
+          });
+          break;
+        }
+        case "type":
+        case "score":
+        case "date": {
+          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+            if (budgetExceeded()) {
+              partialResults = true;
+              break;
+            }
+            const doc = corpus.docs[ordinal];
+            if (matchesClause(doc, clause)) {
+              matched.add(ordinal);
+            }
+          }
+          break;
+        }
+      }
+      candidateOrdinals = maybeIntersectWithCandidate(candidateOrdinals, matched);
+      if (candidateOrdinals.size === 0) {
+        break;
+      }
+    }
+    const hasPositiveContent = clauses.some(isPositiveContentClause);
+    const stageASeeded = candidateOrdinals !== null;
+    if (!candidateOrdinals) {
+      candidateOrdinals = allOrdinalsSet(docCount);
+    }
+    for (const clause of deferredStageAClauses) {
+      const filtered = new Set();
+      candidateOrdinals.forEach((ordinal) => {
+        const doc = corpus.docs[ordinal];
+        if (matchesClause(doc, clause)) {
+          filtered.add(ordinal);
+        }
+      });
+      candidateOrdinals = filtered;
+      if (candidateOrdinals.size === 0) break;
+    }
+    if (hasPositiveContent) {
+      const filtered = new Set();
+      candidateOrdinals.forEach((ordinal) => {
+        if (budgetExceeded()) {
+          partialResults = true;
+          return;
+        }
+        const doc = corpus.docs[ordinal];
+        stageBScanned++;
+        let matched = true;
+        for (const clause of plan.stageB) {
+          if (!matchesClause(doc, clause)) {
+            matched = false;
+            break;
+          }
+          if (clause.kind === "phrase") {
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.phraseHits += 1;
+          }
+          if (clause.kind === "term") {
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.tokenHits += 1;
+          }
+        }
+        if (matched) {
+          filtered.add(ordinal);
+        }
+      });
+      candidateOrdinals = filtered;
+    } else if (!stageASeeded && plan.stageB.length > 0) {
+      const filtered = new Set();
+      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+        if (budgetExceeded()) {
+          partialResults = true;
+          break;
+        }
+        const doc = corpus.docs[ordinal];
+        stageBScanned++;
+        let matched = true;
+        for (const clause of plan.stageB) {
+          if (!matchesClause(doc, clause)) {
+            matched = false;
+            break;
+          }
+        }
+        if (matched) filtered.add(ordinal);
+      }
+      candidateOrdinals = filtered;
+    }
+    if (plan.negations.length > 0) {
+      const filtered = new Set();
+      candidateOrdinals.forEach((ordinal) => {
+        if (budgetExceeded()) {
+          partialResults = true;
+          return;
+        }
+        const doc = corpus.docs[ordinal];
+        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));
+        if (!excluded) filtered.add(ordinal);
+      });
+      candidateOrdinals = filtered;
+    }
+    const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);
+    const relevanceSignalsById = new Map();
+    relevanceSignalsByOrdinal.forEach((signals, ordinal) => {
+      const doc = corpus.docs[ordinal];
+      relevanceSignalsById.set(doc.id, signals);
+    });
+    return {
+      docs,
+      relevanceSignalsById,
+      stageACandidateCount: candidateOrdinals.size,
+      stageBScanned,
+      partialResults
+    };
+  };
+  class ArchiveSearchRuntime {
+    authoredIndex = buildCorpusIndex("authored", []);
+    contextIndex = buildCorpusIndex("context", []);
+    authoredItemsRef = null;
+    authoredRevisionToken = 0;
+    contextItemsRef = null;
+    setAuthoredItems(items, revisionToken = 0) {
+      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;
+      this.authoredItemsRef = items;
+      this.authoredRevisionToken = revisionToken;
+      this.authoredIndex = buildCorpusIndex("authored", items);
+    }
+    setContextItems(items) {
+      if (this.contextItemsRef === items) return;
+      this.contextItemsRef = items;
+      this.contextIndex = buildCorpusIndex("context", items);
+    }
+    runSearch(request) {
+      const startMs = Date.now();
+      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;
+      const parsed = parseStructuredQuery(request.query);
+      const warnings = [...parsed.warnings];
+      let resolvedScope = request.scopeParam || "authored";
+      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {
+        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];
+      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {
+        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];
+        if (parsedScope !== request.scopeParam) {
+          warnings.push({
+            type: "invalid-scope",
+            token: `scope:${parsedScope}`,
+            message: "URL scope parameter takes precedence over in-query scope"
+          });
+        }
+      }
+      const hasNegation = parsed.clauses.some((clause) => clause.negated);
+      const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);
+      if (hasNegation && !hasPositiveClause) {
+        warnings.push({
+          type: "negation-only",
+          token: parsed.rawQuery,
+          message: 'Add a positive clause or use "*" before negations'
+        });
+        const diagnostics2 = {
+          warnings,
+          parseState: "invalid",
+          degradedMode: false,
+          partialResults: false,
+          tookMs: Date.now() - startMs,
+          stageACandidateCount: 0,
+          stageBScanned: 0,
+          totalCandidatesBeforeLimit: 0,
+          explain: ["Query rejected: negations require at least one positive clause"]
+        };
+        return {
+          ids: [],
+          total: 0,
+          items: [],
+          canonicalQuery: parsed.executableQuery,
+          resolvedScope,
+          diagnostics: diagnostics2
+        };
+      }
+      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];
+      let stageACandidateCount = 0;
+      let stageBScanned = 0;
+      let partialResults = false;
+      const mergedWarnings = [...warnings];
+      const mergedDocs = new Map();
+      const mergedSignals = new Map();
+      for (const corpus of corpora) {
+        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);
+        stageACandidateCount += result.stageACandidateCount;
+        stageBScanned += result.stageBScanned;
+        partialResults = partialResults || result.partialResults;
+        result.docs.forEach((doc) => {
+          const existing = mergedDocs.get(doc.id);
+          if (!existing) {
+            mergedDocs.set(doc.id, doc);
+            const signal = result.relevanceSignalsById.get(doc.id);
+            if (signal) mergedSignals.set(doc.id, signal);
+            return;
+          }
+          if (existing.source === "authored") return;
+          if (doc.source === "authored") {
+            mergedDocs.set(doc.id, doc);
+            const signal = result.relevanceSignalsById.get(doc.id);
+            if (signal) mergedSignals.set(doc.id, signal);
+          }
+        });
+      }
+      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);
+      const total = sortedDocs.length;
+      const limitedDocs = sortedDocs.slice(0, request.limit);
+      const ids = limitedDocs.map((doc) => doc.id);
+      const items = limitedDocs.map((doc) => doc.item);
+      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";
+      const diagnostics = {
+        warnings: mergedWarnings,
+        parseState,
+        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),
+        partialResults,
+        tookMs: Date.now() - startMs,
+        stageACandidateCount,
+        stageBScanned,
+        totalCandidatesBeforeLimit: total,
+        explain: [
+          `scope=${resolvedScope}`,
+          `stageA_candidates=${stageACandidateCount}`,
+          `stageB_scanned=${stageBScanned}`,
+          `total=${total}`
+        ]
+      };
+      return {
+        ids,
+        total,
+        items,
+        canonicalQuery: parsed.executableQuery,
+        resolvedScope,
+        diagnostics
+      };
+    }
+  }
+  const MAX_ENCODED_QUERY_LENGTH = 2e3;
+  const QUERY_POINTER_PARAM = "qk";
+  const QUERY_PARAM = "q";
+  const SCOPE_PARAM = "scope";
+  const SORT_PARAM = "sort";
+  const SESSION_KEY_PREFIX = "pr-archive-search-query:";
+  const VALID_SORTS = new Set([
+    "relevance",
+    "date",
+    "date-asc",
+    "score",
+    "score-asc",
+    "replyTo"
+  ]);
+  const VALID_SCOPES = new Set(["authored", "all"]);
+  const canUseSessionStorage = () => {
+    try {
+      return typeof sessionStorage !== "undefined";
+    } catch {
+      return false;
+    }
+  };
+  const readSessionQuery = (key) => {
+    if (!canUseSessionStorage()) return null;
+    try {
+      return sessionStorage.getItem(`${SESSION_KEY_PREFIX}${key}`);
+    } catch {
+      return null;
+    }
+  };
+  const MAX_SESSION_QUERY_ENTRIES = 20;
+  const evictOldSessionQueries = () => {
+    try {
+      const keys = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k && k.startsWith(SESSION_KEY_PREFIX)) {
+          keys.push(k);
+        }
+      }
+      if (keys.length <= MAX_SESSION_QUERY_ENTRIES) return;
+      keys.sort();
+      const toRemove = keys.slice(0, keys.length - MAX_SESSION_QUERY_ENTRIES);
+      for (const k of toRemove) {
+        sessionStorage.removeItem(k);
+      }
+    } catch {
+    }
+  };
+  const writeSessionQuery = (query) => {
+    if (!canUseSessionStorage()) return null;
+    try {
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      sessionStorage.setItem(`${SESSION_KEY_PREFIX}${key}`, query);
+      evictOldSessionQueries();
+      return key;
+    } catch {
+      return null;
+    }
+  };
+  const sanitizeScope = (raw) => raw && VALID_SCOPES.has(raw) ? raw : "authored";
+  const sanitizeSort = (raw) => raw && VALID_SORTS.has(raw) ? raw : "date";
+  const sanitizeQuery = (raw) => typeof raw === "string" ? raw : "";
+  const parseArchiveUrlState = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const scopeRaw = params.get(SCOPE_PARAM);
+      const scopeFromUrl = typeof scopeRaw === "string" && scopeRaw.length > 0;
+      const scope = sanitizeScope(scopeRaw);
+      const sort = sanitizeSort(params.get(SORT_PARAM));
+      let query = sanitizeQuery(params.get(QUERY_PARAM));
+      const pointerKey = params.get(QUERY_POINTER_PARAM);
+      if (pointerKey) {
+        const pointerQuery = readSessionQuery(pointerKey);
+        if (pointerQuery !== null) {
+          query = pointerQuery;
+        }
+      }
+      return { query, scope, sort, scopeFromUrl };
+    } catch {
+      return {
+        query: "",
+        scope: "authored",
+        sort: "date",
+        scopeFromUrl: false
+      };
+    }
+  };
+  const writeArchiveUrlState = (state2) => {
+    const params = new URLSearchParams(window.location.search);
+    const query = state2.query || "";
+    if (query.length === 0) {
+      params.delete(QUERY_PARAM);
+      params.delete(QUERY_POINTER_PARAM);
+    } else if (encodeURIComponent(query).length <= MAX_ENCODED_QUERY_LENGTH) {
+      params.set(QUERY_PARAM, query);
+      params.delete(QUERY_POINTER_PARAM);
+    } else {
+      const pointer = writeSessionQuery(query);
+      if (pointer) {
+        params.delete(QUERY_PARAM);
+        params.set(QUERY_POINTER_PARAM, pointer);
+      } else {
+        params.set(QUERY_PARAM, query.slice(0, 400));
+        params.delete(QUERY_POINTER_PARAM);
+      }
+    }
+    if (state2.scope === "authored") {
+      params.delete(SCOPE_PARAM);
+    } else {
+      params.set(SCOPE_PARAM, state2.scope);
+    }
+    if (state2.sort === "date") {
+      params.delete(SORT_PARAM);
+    } else {
+      params.set(SORT_PARAM, state2.sort);
+    }
+    const next = `${window.location.pathname}?${params.toString()}`;
+    window.history.replaceState({}, "", next);
+  };
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
   const MAX_AUTO_RETRIES = 50;
   const INITIAL_BACKOFF_MS = 2e3;
   const PAGE_SIZE = 1e4;
+  const SEARCH_DEBOUNCE_MS = 180;
   const initArchive = async (username) => {
     Logger.info(`Initializing User Archive for: ${username}`);
     try {
@@ -9506,6 +10720,30 @@ sortCanonicalItems() {
             border: 1px solid var(--pr-border-color);
             background: var(--pr-bg-secondary);
             color: var(--pr-text-primary);
+        }
+        .pr-archive-search-status {
+            margin-top: 8px;
+            font-size: 0.9em;
+            color: var(--pr-text-secondary);
+        }
+        .pr-archive-search-status.warning {
+            color: #f6c453;
+        }
+        .pr-archive-search-status.error {
+            color: #ff6b6b;
+        }
+        .pr-search-retry-btn {
+            margin-left: 8px;
+            padding: 2px 8px;
+            font-size: 0.85em;
+            cursor: pointer;
+            background: var(--pr-bg-secondary);
+            border: 1px solid var(--pr-border-color);
+            border-radius: 4px;
+            color: var(--pr-text-primary);
+        }
+        .pr-search-retry-btn:hover {
+            background: var(--pr-bg-hover, #333);
         }
         .pr-archive-index-item {
             display: flex;
@@ -9680,14 +10918,19 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
     <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder="Search archive (Regex supported)..." class="pr-input" style="flex: 2; min-width: 200px;">
+            <input type="text" id="archive-search" placeholder="Search archive (structured query: author:, date:, score:, /regex/)" class="pr-input" style="flex: 2; min-width: 260px;">
+            <select id="archive-scope">
+                <option value="authored">Scope: Authored</option>
+                <option value="all">Scope: Authored + Context</option>
+            </select>
             <select id="archive-sort">
+                <option value="relevance">Relevance</option>
                 <option value="date">Date (Newest)</option>
                 <option value="date-asc">Date (Oldest)</option>
                 <option value="score">Karma (High-Low)</option>
@@ -9702,6 +10945,7 @@ sortCanonicalItems() {
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
+        <div id="archive-search-status" class="pr-archive-search-status">Structured query enabled.</div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -9719,13 +10963,55 @@ sortCanonicalItems() {
       const feedEl = document.getElementById("archive-feed");
       const loadMoreBtn = document.getElementById("archive-load-more");
       const searchInput = document.getElementById("archive-search");
+      const scopeSelect = document.getElementById("archive-scope");
       const sortSelect = document.getElementById("archive-sort");
       const viewSelect = document.getElementById("archive-view");
       const resyncBtn = document.getElementById("archive-resync");
       const errorContainer = document.getElementById("archive-error-container");
+      const searchStatusEl = document.getElementById("archive-search-status");
+      let statusBaseMessage = "Checking local database...";
+      let statusSearchResultCount = null;
+      const renderTopStatusLine = () => {
+        if (!statusEl) return;
+        if (statusSearchResultCount === null) {
+          statusEl.textContent = statusBaseMessage;
+          return;
+        }
+        const resultLabel = `${statusSearchResultCount.toLocaleString()} search result${statusSearchResultCount === 1 ? "" : "s"}`;
+        statusEl.textContent = statusBaseMessage ? `${statusBaseMessage} | ${resultLabel}` : resultLabel;
+      };
+      const setStatusBaseMessage = (msg, isError = false, isSyncing = false) => {
+        statusBaseMessage = msg;
+        if (!statusEl) return;
+        statusEl.classList.toggle("status-error", isError);
+        statusEl.classList.toggle("status-syncing", isSyncing);
+        renderTopStatusLine();
+      };
+      const setStatusSearchResultCount = (count) => {
+        statusSearchResultCount = count;
+        renderTopStatusLine();
+      };
+      renderTopStatusLine();
       let activeItems = state2.items;
+      const searchRuntime = new ArchiveSearchRuntime();
+      const urlState = parseArchiveUrlState();
+      let persistedContextItems = [];
+      let useDedicatedScopeParam = urlState.scopeFromUrl;
+      let searchDispatchTimer = null;
+      let activeQueryRequestId = 0;
+      let activeItemById = new Map();
+      let authoredIndexItemsRef = null;
+      let authoredIndexCanonicalRevision = -1;
+      let authoredItemsVersion = 0;
+      let contextSearchItemsCache = null;
       const LARGE_DATASET_THRESHOLD = window.__PR_ARCHIVE_LARGE_THRESHOLD || 1e4;
       let pendingRenderCount = null;
+      searchInput.value = urlState.query;
+      sortSelect.value = urlState.sort;
+      if (!sortSelect.value) sortSelect.value = "date";
+      scopeSelect.value = urlState.scope;
+      if (!scopeSelect.value) scopeSelect.value = "authored";
+      state2.sortBy = sortSelect.value;
       const runPostRenderHooks = () => {
         setupLinkPreviews(uiHost.getReaderState().comments);
         const posts = feedEl.querySelectorAll(".pr-post");
@@ -9734,27 +11020,135 @@ sortCanonicalItems() {
           if (pid) refreshPostActionButtons(pid);
         });
       };
-      const refreshView = async () => {
-        let filtered = state2.items;
-        const query = searchInput.value;
-        if (query) {
-          try {
-            const regex = new RegExp(query, "i");
-            filtered = state2.items.filter((item) => {
-              const bodyText = item.contents?.markdown || (item.htmlBody || "").replace(/<[^>]+>/g, " ");
-              const text2 = (item.title || "") + " " + bodyText;
-              return regex.test(text2);
-            });
-          } catch (e) {
-            const lower = query.toLowerCase();
-            filtered = state2.items.filter((item) => {
-              const bodyText = item.contents?.markdown || (item.htmlBody || "").replace(/<[^>]+>/g, " ");
-              const text2 = ((item.title || "") + " " + bodyText).toLowerCase();
-              return text2.includes(lower);
-            });
+      const syncAuthoredSearchIndex = () => {
+        const canonicalRevision = uiHost.getCanonicalStateRevision();
+        if (authoredIndexItemsRef === state2.items && authoredIndexCanonicalRevision === canonicalRevision) return;
+        searchRuntime.setAuthoredItems(state2.items, canonicalRevision);
+        authoredIndexItemsRef = state2.items;
+        authoredIndexCanonicalRevision = canonicalRevision;
+        authoredItemsVersion += 1;
+        contextSearchItemsCache = null;
+      };
+      const collectContextSearchItems = () => {
+        const readerRevision = uiHost.getSearchStateRevision();
+        if (contextSearchItemsCache && contextSearchItemsCache.persistedRef === persistedContextItems && contextSearchItemsCache.authoredVersion === authoredItemsVersion && contextSearchItemsCache.readerRevision === readerRevision) {
+          return contextSearchItemsCache.items;
+        }
+        const merged = new Map();
+        for (const item of persistedContextItems) {
+          if (state2.itemById.has(item._id)) continue;
+          merged.set(item._id, item);
+        }
+        const readerState = uiHost.getReaderState();
+        for (const post of readerState.posts) {
+          if (state2.itemById.has(post._id)) continue;
+          merged.set(post._id, post);
+        }
+        for (const comment of readerState.comments) {
+          if (state2.itemById.has(comment._id)) continue;
+          merged.set(comment._id, comment);
+        }
+        const items = Array.from(merged.values());
+        contextSearchItemsCache = {
+          persistedRef: persistedContextItems,
+          authoredVersion: authoredItemsVersion,
+          readerRevision,
+          items
+        };
+        return items;
+      };
+      const updateSearchStatus = (diagnostics, resolvedScope, contextItemCount, sortMode) => {
+        if (!searchStatusEl) return;
+        const messages = [];
+        if (resolvedScope === "all") {
+          messages.push(`Searching authored + cached context (${contextItemCount} items)`);
+          if (contextItemCount === 0) {
+            messages.push("Context cache may be incomplete");
+          }
+          if (sortMode === "replyTo") {
+            messages.push("replyTo ordering is computed over mixed authored/context semantics");
           }
         }
-        activeItems = sortItems(filtered, sortSelect.value);
+        if (diagnostics.partialResults) {
+          messages.push(`Partial results (${diagnostics.tookMs}ms budget hit)`);
+        }
+        if (diagnostics.warnings.length > 0) {
+          messages.push(diagnostics.warnings[0].message);
+        }
+        searchStatusEl.textContent = "";
+        searchStatusEl.appendChild(document.createTextNode(messages.join(" | ") || "Structured query enabled."));
+        if (diagnostics.partialResults) {
+          const retryBtn = document.createElement("button");
+          retryBtn.className = "pr-search-retry-btn";
+          retryBtn.textContent = "Run without time limit";
+          retryBtn.addEventListener("click", () => {
+            refreshView(0);
+          });
+          searchStatusEl.appendChild(retryBtn);
+        }
+        searchStatusEl.classList.remove("warning", "error");
+        if (diagnostics.parseState === "invalid") {
+          searchStatusEl.classList.add("error");
+        } else if (diagnostics.parseState === "warning" || diagnostics.degradedMode || diagnostics.partialResults) {
+          searchStatusEl.classList.add("warning");
+        }
+      };
+      const ensureSearchResultContextLoaded = (items) => {
+        const contextComments = [];
+        const contextPosts = [];
+        const readerState = uiHost.getReaderState();
+        for (const item of items) {
+          if (state2.itemById.has(item._id)) continue;
+          if ("title" in item) {
+            if (!readerState.postById.has(item._id)) {
+              contextPosts.push(item);
+            }
+            continue;
+          }
+          if (!readerState.commentById.has(item._id)) {
+            contextComments.push(item);
+          }
+        }
+        if (contextComments.length > 0) {
+          uiHost.mergeComments(contextComments, true);
+        }
+        if (contextPosts.length > 0) {
+          for (const post of contextPosts) {
+            uiHost.upsertPost(post, false);
+          }
+        }
+      };
+      const refreshView = async (budgetMs) => {
+        const requestId = ++activeQueryRequestId;
+        const sortMode = sortSelect.value;
+        syncAuthoredSearchIndex();
+        const contextItems = collectContextSearchItems();
+        searchRuntime.setContextItems(contextItems);
+        const scopeParam = useDedicatedScopeParam ? scopeSelect.value : void 0;
+        const result = searchRuntime.runSearch({
+          query: searchInput.value,
+          scopeParam,
+          sortMode,
+          limit: state2.items.length + contextItems.length + 5,
+          ...budgetMs !== void 0 ? { budgetMs } : {}
+        });
+        if (requestId !== activeQueryRequestId) {
+          return;
+        }
+        activeItems = result.items;
+        activeItemById = new Map(activeItems.map((item) => [item._id, item]));
+        ensureSearchResultContextLoaded(activeItems);
+        if (!useDedicatedScopeParam && result.resolvedScope !== "authored") {
+          useDedicatedScopeParam = true;
+        }
+        scopeSelect.value = result.resolvedScope;
+        writeArchiveUrlState({
+          query: result.canonicalQuery,
+          scope: result.resolvedScope,
+          sort: sortMode
+        });
+        setStatusSearchResultCount(result.total);
+        updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
         const totalItems = activeItems.length;
         if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
           showRenderCountDialog(totalItems, async (count) => {
@@ -9784,6 +11178,8 @@ sortCanonicalItems() {
       };
       const updateItemMap = (items) => {
         items.forEach((i) => state2.itemById.set(i._id, i));
+        syncAuthoredSearchIndex();
+        contextSearchItemsCache = null;
         uiHost.rerenderAll();
       };
       const showRenderCountDialog = (totalCount, onConfirm) => {
@@ -9818,28 +11214,52 @@ sortCanonicalItems() {
           onConfirm(totalCount);
         });
       };
+      const scheduleSearchRefresh = () => {
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+        }
+        searchDispatchTimer = window.setTimeout(() => {
+          void refreshView();
+        }, SEARCH_DEBOUNCE_MS);
+      };
       searchInput?.addEventListener("input", () => {
-        refreshView();
+        scheduleSearchRefresh();
+      });
+      searchInput?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          if (searchDispatchTimer) {
+            window.clearTimeout(searchDispatchTimer);
+            searchDispatchTimer = null;
+          }
+          void refreshView();
+        }
+      });
+      scopeSelect?.addEventListener("change", () => {
+        useDedicatedScopeParam = true;
+        void refreshView();
       });
       sortSelect?.addEventListener("change", () => {
         state2.sortBy = sortSelect.value;
-        refreshView();
+        void refreshView();
       });
       viewSelect?.addEventListener("change", () => {
         state2.viewMode = viewSelect.value;
         const replyToOption = sortSelect.querySelector('option[value="replyTo"]');
+        const relevanceOption = sortSelect.querySelector('option[value="relevance"]');
         if (replyToOption) {
           if (isThreadMode(state2.viewMode)) {
             replyToOption.disabled = true;
-            if (state2.sortBy === "replyTo") {
+            if (relevanceOption) relevanceOption.disabled = true;
+            if (state2.sortBy === "replyTo" || state2.sortBy === "relevance") {
               state2.sortBy = "date";
               sortSelect.value = "date";
             }
           } else {
             replyToOption.disabled = false;
+            if (relevanceOption) relevanceOption.disabled = false;
           }
         }
-        refreshView();
+        void refreshView();
       });
       loadMoreBtn?.querySelector("button")?.addEventListener("click", async () => {
         incrementRenderLimit(PAGE_SIZE);
@@ -9851,7 +11271,7 @@ sortCanonicalItems() {
         const expandTarget = target.closest('[data-action="expand-index-item"]');
         if (expandTarget) {
           const id = expandTarget.getAttribute("data-id");
-          const item = id ? state2.itemById.get(id) : null;
+          const item = id ? activeItemById.get(id) || state2.itemById.get(id) : null;
           if (!item) return;
           const wrapper = document.createElement("div");
           wrapper.className = "pr-index-expanded";
@@ -9868,7 +11288,7 @@ sortCanonicalItems() {
         const collapseTarget = target.closest('[data-action="collapse-index-item"]');
         if (collapseTarget) {
           const id = collapseTarget.getAttribute("data-id");
-          const item = id ? state2.itemById.get(id) : null;
+          const item = id ? activeItemById.get(id) || state2.itemById.get(id) : null;
           if (!item) return;
           const expanded = collapseTarget.closest(".pr-index-expanded");
           if (expanded) {
@@ -9923,7 +11343,7 @@ sortCanonicalItems() {
       };
       const showRetryProgress = (attempt, maxAttempts, nextRetryIn) => {
         if (!errorContainer || !statusEl) return;
-        statusEl.textContent = `Sync failed. Retry ${attempt}/${maxAttempts}...`;
+        setStatusBaseMessage(`Sync failed. Retry ${attempt}/${maxAttempts}...`, true, false);
         errorContainer.innerHTML = `
         <div class="pr-archive-error">
           <div class="pr-archive-retry-indicator">
@@ -9948,10 +11368,7 @@ sortCanonicalItems() {
         pendingRetryCount = 0;
         const cached2 = await loadArchiveData(username);
         const setStatus = (msg, isError = false, isSyncing = false) => {
-          if (!statusEl) return;
-          statusEl.textContent = msg;
-          statusEl.classList.toggle("status-error", isError);
-          statusEl.classList.toggle("status-syncing", isSyncing);
+          setStatusBaseMessage(msg, isError, isSyncing);
         };
         const attemptSync = async (useAutoRetry, attemptNumber = 1) => {
           syncErrorState.isRetrying = true;
@@ -10050,12 +11467,24 @@ sortCanonicalItems() {
       const cached = await loadArchiveData(username);
       state2.items = cached.items;
       updateItemMap(state2.items);
+      try {
+        const cachedContext = await loadAllContextualItems(username);
+        persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+        contextSearchItemsCache = null;
+        if (persistedContextItems.length > 0 && (scopeSelect.value === "all" || searchInput.value.trim().length > 0)) {
+          await refreshView();
+        }
+      } catch (e) {
+        Logger.warn("Failed to load contextual cache for archive search scope:all", e);
+        persistedContextItems = [];
+        contextSearchItemsCache = null;
+      }
       activeItems = state2.items;
       if (cached.items.length > 0) {
-        statusEl.textContent = `Loaded ${cached.items.length} items from cache.`;
+        setStatusBaseMessage(`Loaded ${cached.items.length} items from cache.`, false, false);
       } else {
         dashboardEl.style.display = "block";
-        statusEl.textContent = `No local data. Fetching full history for ${username}...`;
+        setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
       }
       await performSync();
       dashboardEl.style.display = "none";
@@ -10071,32 +11500,6 @@ sortCanonicalItems() {
         root.replaceChildren(errorEl);
       }
     }
-  };
-  const sortItems = (items, sortMode) => {
-    const sorted = [...items];
-    switch (sortMode) {
-      case "date-asc":
-        return sorted.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
-      case "date":
-      default:
-        return sorted.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
-      case "score":
-        return sorted.sort((a, b) => (b.baseScore || 0) - (a.baseScore || 0));
-      case "score-asc":
-        return sorted.sort((a, b) => (a.baseScore || 0) - (b.baseScore || 0));
-      case "replyTo":
-        return sorted.sort((a, b) => {
-          const nameA = getInterlocutorName(a).toLowerCase();
-          const nameB = getInterlocutorName(b).toLowerCase();
-          return nameA.localeCompare(nameB);
-        });
-    }
-  };
-  const getInterlocutorName = (item) => {
-    if (item.title) return " (Original Post)";
-    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;
-    if (item.post?.user?.displayName) return item.post.user.displayName;
-    return "Unknown";
   };
   const syncArchive = async (username, state2, lastSyncDate, onStatus, abortSignal) => {
     if (abortSignal?.aborted) {
@@ -10200,7 +11603,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

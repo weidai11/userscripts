@@ -81,7 +81,6 @@ test.describe('Power Reader Parent Highlighting', () => {
                 }
             ]
         });
-
         // 1. Locate the post header and comment
         const postHeader = page.locator('.pr-post[data-post-id="p1"] .pr-post-header');
         const comment = page.locator('.pr-comment[data-id="top-level-1"]');
@@ -89,6 +88,10 @@ test.describe('Power Reader Parent Highlighting', () => {
 
         await expect(postHeader).toBeVisible();
         await expect(comment).toBeVisible();
+
+        // FIX: Scroll to ensure element is visible, then wait for the scroll-hover cooldown (300ms) to clear
+        await findParentBtn.scrollIntoViewIfNeeded();
+        await waitAtLeast(500);
 
         // 3. Disable animations/transitions to ensure instant style application
         await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; }' });

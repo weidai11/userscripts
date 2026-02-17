@@ -16,6 +16,8 @@ export class ArchiveUIHost implements UIHost {
     private readerState: ReaderState;
     private feedContainer: HTMLElement | null = null;
     private renderCallback: (() => void | Promise<void>) | null = null;
+    private searchStateRevision = 0;
+    private canonicalStateRevision = 0;
 
     constructor(archiveState: ArchiveState, feedContainer: HTMLElement | null, renderCallback?: () => void | Promise<void>) {
         this.archiveState = archiveState;
@@ -53,6 +55,22 @@ export class ArchiveUIHost implements UIHost {
         return this.readerState;
     }
 
+    public getSearchStateRevision(): number {
+      return this.searchStateRevision;
+    }
+
+    public getCanonicalStateRevision(): number {
+      return this.canonicalStateRevision;
+    }
+
+    private bumpSearchStateRevision(): void {
+      this.searchStateRevision += 1;
+    }
+
+    private bumpCanonicalStateRevision(): void {
+      this.canonicalStateRevision += 1;
+    }
+
     /**
      * Update the container reference if it changes (e.g. after re-render of parent)
      */
@@ -83,6 +101,8 @@ export class ArchiveUIHost implements UIHost {
         // Fast path for new items
         this.archiveState.items.push(item);
     }
+
+    this.bumpCanonicalStateRevision();
   }
 
   /**
@@ -214,6 +234,7 @@ export class ArchiveUIHost implements UIHost {
     });
 
     rebuildIndexes(this.readerState);
+    this.bumpSearchStateRevision();
 
     if (this.renderCallback) {
       this.renderCallback();
@@ -318,6 +339,9 @@ export class ArchiveUIHost implements UIHost {
     if (changed > 0) {
       rebuildIndexes(this.readerState);
     }
+    if (changed > 0 || canonicalTouched) {
+      this.bumpSearchStateRevision();
+    }
     if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
       this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
     }
@@ -346,5 +370,6 @@ export class ArchiveUIHost implements UIHost {
         this.persistContextualData([], [post]);
       }
     }
+    this.bumpSearchStateRevision();
   }
 }

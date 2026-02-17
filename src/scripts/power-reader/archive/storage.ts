@@ -320,6 +320,41 @@ export const loadContextualCommentsByIds = async (
 };
 
 /**
+ * Load all fresh contextual items for a username.
+ * Used for archive search scope:all to include cached thread context.
+ */
+export const loadAllContextualItems = async (
+  username: string
+): Promise<{ comments: Comment[]; posts: Post[] }> => {
+  const db = await openDB();
+  const tx = db.transaction(STORE_CONTEXTUAL, 'readonly');
+  const store = tx.objectStore(STORE_CONTEXTUAL);
+  const index = store.index('username');
+  const entries = await requestToPromise(index.getAll(IDBKeyRange.only(username)) as IDBRequest<ContextualCacheEntry[]>);
+  const now = Date.now();
+
+  const comments: Comment[] = [];
+  const posts: Post[] = [];
+
+  for (const entry of entries) {
+    if (now - entry.updatedAt > CONTEXT_MAX_AGE_MS) {
+      continue;
+    }
+
+    if (entry.itemType === 'comment') {
+      comments.push(entry.payload as Comment);
+    } else if (entry.itemType === 'post') {
+      posts.push(entry.payload as Post);
+    }
+  }
+
+  return {
+    comments: dedupeById(comments),
+    posts: dedupeById(posts)
+  };
+};
+
+/**
  * Prune contextual cache for a user via age + LRU cap.
  */
 export const pruneContextualCache = async (username: string): Promise<void> => {

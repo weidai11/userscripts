@@ -5,7 +5,7 @@
 import type { Post, Comment } from '../../../shared/graphql/queries';
 
 export type ArchiveViewMode = 'card' | 'index' | 'thread-full' | 'thread-placeholder';
-export type ArchiveSortBy = 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo';
+export type ArchiveSortBy = 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo';
 
 /**
  * Helper to check if a view mode is any thread variant
