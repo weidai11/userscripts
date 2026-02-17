@@ -4,11 +4,13 @@ import { initPowerReader } from './helpers/setup';
 test.describe('Post Read Tracking', () => {
 
     test('post should be marked read after scrolling past its body, even if comments are still below', async ({ page }) => {
+        // Keep post/comment timestamps identical so initial implicit-read cutoff is deterministic.
+        const postedAt = new Date(Date.now() + 10000).toISOString();
         const posts = [
             {
                 _id: 'p1',
                 title: 'Large Post',
-                postedAt: new Date().toISOString(),
+                postedAt,
                 htmlBody: '<div style="height: 1000px">Post Content</div>',
                 user: { username: 'Author' }
             }
@@ -18,7 +20,7 @@ test.describe('Post Read Tracking', () => {
                 _id: 'c1',
                 postId: 'p1',
                 htmlBody: '<div style="height: 1000px">Long Comment</div>',
-                postedAt: new Date().toISOString(),
+                postedAt,
                 user: { username: 'Commenter' }
             }
         ];
@@ -38,13 +40,13 @@ test.describe('Post Read Tracking', () => {
         // ReadTracker correctly isolates the post body from comments when checking visibility.
         // The post should be marked as read once its body scrolls past, even though
         // comments below it are still visible.
-        
+
         // Wait for ReadTracker delay (100ms in testMode)
         await page.waitForTimeout(500);
-        
+
         const postClass = await postItem.getAttribute('class');
         console.log('Post classes after scrolling past body but not comments:', postClass);
-        
+
         // Post should now be marked as read
         await expect(postItem).toHaveClass(/read/, { timeout: 2000 });
     });

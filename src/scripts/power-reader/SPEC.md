@@ -35,6 +35,10 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 
 - **[PR-DATA-01]** **API**: LessWrong GraphQL endpoint (`/graphql`)
 - **[PR-DATA-02]** **Transport**: `GM_xmlhttpRequest` for cross-origin requests
+- **[PR-DATA-03]** **Strict-By-Default Errors**: The GraphQL client MUST throw on GraphQL `errors` by default, including responses that contain both `data` and `errors`. This protects mutation and interactive workflows from silent failure.
+- **[PR-DATA-03.1]** **Scoped Partial Success**: Partial-success mode is allowed only via explicit opt-in per call site. In partial mode, the client MUST return `data` only when all errors match an allowlist of tolerated patterns; otherwise it MUST throw.
+- **[PR-DATA-03.2]** **Archive-Only Tolerance**: Tolerated partial-success behavior is limited to bulk archive fetch paths. Interactive and mutation paths (votes, reactions, navigation actions) MUST remain strict.
+- **[PR-DATA-04]** **UI Fallbacks**: Rendering components MUST handle missing or null field values (like `pageUrl`) gracefully, providing sensible fallbacks (e.g., `'#'` for links) to prevent UI crashes or broken interactions when the server fails to resolve specific fields.
 
 ---
 
@@ -585,6 +589,11 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
 - **[PR-UARCH-25] Context Isolation**: Context comments (fetched for thread view ancestry) MUST NOT leak into card or index views. They remain in the `ReaderState` projection for rendering but are excluded from the canonical `ArchiveState.items` collection.
 - **[PR-UARCH-22] Context Persistence**: Context comments fetched during a thread view session MUST be preserved across rerenders (e.g., when switching sort modes or loading more items) within that session.
+- **[PR-UARCH-34] Persistent Context Cache**: Non-authored context items (ancestor comments and root posts used for thread reconstruction) MUST be persisted in IndexedDB under a dedicated contextual cache and scoped by target archive username.
+- **[PR-UARCH-35] Context Resolution Waterfall**: Thread context loading MUST resolve parents in this order: (1) authored/canonical in-memory state, (2) contextual IndexedDB cache, (3) network fetch for remaining IDs only.
+- **[PR-UARCH-36] Canonical Post Integrity**: Context-derived lite post payloads MUST NOT overwrite canonical authored post objects (which may contain full body fields). Canonical post updates require non-downgrading merge semantics.
+- **[PR-UARCH-37] Partial-Batch Pagination Safety**: Archive cursor pagination MUST base continuation/cursor progression on raw server batch envelopes, not on client-filtered valid-item counts, to avoid premature termination when some rows are invalid.
+- **[PR-UARCH-38] Missing Parent Object Tolerance**: A comment may have `parentCommentId` without an inline `parentComment` object. Thread context loading MUST still fetch that parent by ID and continue reconstruction.
 - **[PR-UARCH-12] Progressive Rendering**: Archive initially renders a fixed page of items and supports incremental "Load More" expansion without refetching already loaded data.
 - **[PR-UARCH-24] Pagination Stability**: The active sort mode (including thread-specific group sorting) MUST persist and correctly apply to newly rendered items when clicking "Load More".
 - **[PR-UARCH-26] Post-Pagination Initialization**: UI hooks like link previews and post action buttons MUST be re-initialized for newly added items after a "Load More" action.

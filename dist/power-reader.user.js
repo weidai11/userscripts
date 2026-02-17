@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.664
+// @version    1.2.672
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2584,7 +2584,8 @@ dirty.indexOf("<") === -1) {
     currentAIRequestId: null,
     activeAIPopup: null,
     sessionAICache: {},
-    isArchiveMode: false
+    isArchiveMode: false,
+    archiveUsername: null
   });
   const rebuildIndexes = (state2) => {
     state2.commentById.clear();
@@ -2661,7 +2662,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.664"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.672"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2691,6 +2692,16 @@ dirty.indexOf("<") === -1) {
     return document.getElementById("power-reader-root");
   };
   const LOG_PREFIX = "[GraphQL Client]";
+  function isToleratedGraphQLError(err, patterns) {
+    const message = typeof err?.message === "string" ? err.message : "";
+    const pathText = Array.isArray(err?.path) ? err.path.join(".") : "";
+    return patterns.some((pattern) => {
+      if (typeof pattern === "string") {
+        return message.includes(pattern) || pathText.includes(pattern);
+      }
+      return pattern.test(message) || pattern.test(pathText);
+    });
+  }
   function getGraphQLEndpoint() {
     const hostname = window.location.hostname;
     if (hostname === "forum.effectivealtruism.org") {
@@ -2715,7 +2726,7 @@ dirty.indexOf("<") === -1) {
       });
     });
   }
-  async function queryGraphQL(query, variables = {}) {
+  async function queryGraphQL(query, variables = {}, options = {}) {
     const url = getGraphQLEndpoint();
     const data = JSON.stringify({ query, variables });
     const maxAttempts = 3;
@@ -2739,7 +2750,20 @@ dirty.indexOf("<") === -1) {
           throw error;
         }
         if (res.errors) {
-          throw new Error(res.errors[0].message);
+          const errors = Array.isArray(res.errors) ? res.errors : [res.errors];
+          const label = options.operationName ? ` (${options.operationName})` : "";
+          if (options.allowPartialData && res.data) {
+            const patterns = options.toleratedErrorPatterns || [];
+            const untolerated = errors.filter((err) => !isToleratedGraphQLError(err, patterns));
+            if (untolerated.length === 0) {
+              console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, errors);
+              return res.data;
+            }
+            console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
+            throw new Error(untolerated[0]?.message || "GraphQL error");
+          }
+          console.error(LOG_PREFIX, `GraphQL errors${label}:`, errors);
+          throw new Error(errors[0]?.message || "GraphQL error");
         }
         return res.data;
       } catch (err) {
@@ -2847,6 +2871,9 @@ dirty.indexOf("<") === -1) {
     parentComment {
       _id
       postedAt
+      baseScore
+      afExtendedScore
+      pageUrl
       parentCommentId
       parentComment {
         _id
@@ -4641,7 +4668,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   };
   const renderMetadata = (item, options = {}) => {
     const { state: state2, isFullPost = true, style = "", extraClass = "", children = "" } = options;
-    const isPost = "title" in item;
+    const isPost2 = "title" in item;
     const authorHandle = item.user?.username || item.author || "Unknown Author";
     const authorName = item.user?.displayName || authorHandle;
     const authorId = item.user?._id || "";
@@ -4651,9 +4678,9 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       item.currentUserVote ?? null,
       item.currentUserExtendedVote ?? null,
       item.afExtendedScore?.agreement ?? 0,
-      isPost ? item.voteCount || 0 : 0,
+      isPost2 ? item.voteCount || 0 : 0,
       0,
-isPost ? window.location.hostname.includes("effectivealtruism.org") || window.location.hostname === "localhost" : true,
+isPost2 ? window.location.hostname.includes("effectivealtruism.org") || window.location.hostname === "localhost" : true,
 isFullPost
 );
     const reactionsHtml = renderReactions(
@@ -4672,7 +4699,7 @@ isFullPost
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     const authorSlug = item.user?.slug;
     const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
-    let containerClass = isPost ? "pr-comment-meta pr-post-meta" : "pr-comment-meta";
+    let containerClass = isPost2 ? "pr-comment-meta pr-post-meta" : "pr-comment-meta";
     if (extraClass) containerClass += ` ${extraClass}`;
     return `
     <div class="${containerClass}" style="${style}">
@@ -4692,7 +4719,7 @@ isFullPost
               title="Mark author as preferred (highlight their future comments)">↑</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl}" target="_blank">${timeStr}</a>
+        <a href="${item.pageUrl || "#"}" target="_blank">${timeStr}</a>
       </span>
       ${children}
     </div>
@@ -4737,15 +4764,15 @@ isFullPost
     const now = Date.now();
     return (now - posted) / (1e3 * 60 * 60);
   }
-  function getExpectedPoints(ageHours, isPost = false) {
+  function getExpectedPoints(ageHours, isPost2 = false) {
     const base = 5 + 2 * Math.sqrt(ageHours);
-    return isPost ? base * 6.7 : base;
+    return isPost2 ? base * 6.7 : base;
   }
   function getAuthorVotingPower(karma) {
     return karma >= 1e3 ? 2 : 1;
   }
-  function calculateNormalizedScore(points, ageHours, authorName, authorKarma = 0, isPost = false) {
-    const pub = getExpectedPoints(ageHours, isPost);
+  function calculateNormalizedScore(points, ageHours, authorName, authorKarma = 0, isPost2 = false) {
+    const pub = getExpectedPoints(ageHours, isPost2);
     const plb = getAuthorVotingPower(authorKarma);
     const authorPrefs = getAuthorPreferences();
     let normalized = (points - plb) / (pub - plb);
@@ -4757,8 +4784,8 @@ isFullPost
   function shouldAutoHide(normalizedScore) {
     return normalizedScore < -0.51;
   }
-  function getFontSizePercent(points, isPost = false) {
-    if (isPost) {
+  function getFontSizePercent(points, isPost2 = false) {
+    if (isPost2) {
       const cappedPoints = Math.min(points, 200);
       return Math.round((cappedPoints / 200 + 1) * 100);
     } else {
@@ -5886,7 +5913,7 @@ refresh() {
     readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);
     readTracker.init();
   };
-  const smartScrollTo = (el, isPost) => {
+  const smartScrollTo = (el, isPost2) => {
     const postContainer = el.closest(".pr-post");
     if (!postContainer) {
       el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -5896,7 +5923,7 @@ refresh() {
     const stickyHeader2 = document.getElementById("pr-sticky-header");
     const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
     const headerHeight = postHeader ? postHeader.offsetHeight : stickyHeight || 60;
-    if (isPost) {
+    if (isPost2) {
       const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.pageYOffset : postContainer.getBoundingClientRect().top + window.pageYOffset;
       window.scrollTo({
         top: headerTop,
@@ -6215,7 +6242,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6358,7 +6385,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -7830,15 +7857,15 @@ currentCommentId = null;
       return;
     }
     window.PR_FORCE_AI_REGEN = false;
-    const isPost = itemEl.classList.contains("pr-post");
-    Logger.info(`AI Studio: Target identified - ${isPost ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
+    const isPost2 = itemEl.classList.contains("pr-post");
+    Logger.info(`AI Studio: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
     try {
       const statusEl = document.querySelector(".pr-status");
       if (statusEl) statusEl.innerHTML = '<span style="color: #007bff;">[AI Studio] Building conversation thread...</span>';
       const requestId = Math.random().toString(36).substring(2, 10);
       const lineage = [];
       let currentId = id;
-      let currentIsPost = isPost;
+      let currentIsPost = isPost2;
       while (currentId && lineage.length < 8) {
         const item = await fetchItemMarkdown(currentId, currentIsPost, state2);
         if (!item) break;
@@ -7859,7 +7886,7 @@ currentCommentId = null;
       }
       let descendants = [];
       if (includeDescendants) {
-        if (isPost) {
+        if (isPost2) {
           descendants = state2.comments.filter((c) => c.postId === id);
         } else {
           const found = new Set();
@@ -8505,9 +8532,72 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
   });
   const DB_NAME = "PowerReaderArchive";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const STORE_ITEMS = "items";
   const STORE_METADATA = "metadata";
+  const STORE_CONTEXTUAL = "contextual_cache";
+  const CONTEXT_MAX_ENTRIES_PER_USER = 8e3;
+  const CONTEXT_MAX_AGE_MS = 1e3 * 60 * 60 * 24 * 60;
+  const requestToPromise = (request) => new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  const transactionToPromise = (tx) => new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+  const isPost = (item) => "title" in item;
+  const contextCacheKey = (username, itemType, itemId) => `${username}:${itemType}:${itemId}`;
+  const dedupeById = (items) => {
+    const map = new Map();
+    items.forEach((item) => map.set(item._id, item));
+    return Array.from(map.values());
+  };
+  const mergeContextPayload = (existing, incoming) => {
+    const merged = { ...existing, ...incoming };
+    if (existing.contents || incoming.contents) {
+      merged.contents = { ...existing.contents, ...incoming.contents };
+    }
+    if (existing.user || incoming.user) {
+      merged.user = { ...existing.user, ...incoming.user };
+    }
+    if (existing.post || incoming.post) {
+      merged.post = { ...existing.post, ...incoming.post };
+    }
+    const existingBody = existing.htmlBody;
+    const incomingBody = incoming.htmlBody;
+    if (typeof existingBody === "string" && existingBody.trim().length > 0 && (!incomingBody || typeof incomingBody === "string" && incomingBody.trim().length === 0)) {
+      merged.htmlBody = existingBody;
+    }
+    const existingMarkdown = existing.contents?.markdown;
+    const incomingMarkdown = incoming.contents?.markdown;
+    if (existingMarkdown && !incomingMarkdown) {
+      merged.contents = { ...merged.contents || {}, markdown: existingMarkdown };
+    }
+    const existingParent = existing.parentComment;
+    const incomingParent = incoming.parentComment;
+    if (existingParent && !incomingParent) {
+      merged.parentComment = existingParent;
+    }
+    return merged;
+  };
+  const getCompletenessScore = (item) => {
+    let score = 1;
+    const body = item.htmlBody;
+    const markdown = item.contents?.markdown;
+    if (typeof body === "string" && body.trim().length > 0) score += 4;
+    if (typeof markdown === "string" && markdown.trim().length > 0) score += 3;
+    if (item.user) score += 1;
+    if (isPost(item)) {
+      if (item.title) score += 1;
+    } else {
+      if (item.parentComment) score += 1;
+      if (item.post) score += 1;
+      if (Array.isArray(item.latestChildren) && item.latestChildren.length > 0) score += 1;
+    }
+    return score;
+  };
   const openDB = () => {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -8521,6 +8611,12 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         }
         if (!db.objectStoreNames.contains(STORE_METADATA)) {
           db.createObjectStore(STORE_METADATA, { keyPath: "username" });
+        }
+        if (!db.objectStoreNames.contains(STORE_CONTEXTUAL)) {
+          const contextualStore = db.createObjectStore(STORE_CONTEXTUAL, { keyPath: "cacheKey" });
+          contextualStore.createIndex("username", "username", { unique: false });
+          contextualStore.createIndex("itemType", "itemType", { unique: false });
+          contextualStore.createIndex("lastAccessedAt", "lastAccessedAt", { unique: false });
         }
       };
       request.onsuccess = () => resolve(request.result);
@@ -8537,10 +8633,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       itemStore.put(itemToSave);
     });
     metadataStore.put({ username, lastSyncDate });
-    return new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
+    await transactionToPromise(tx);
   };
   const loadArchiveData = async (username) => {
     const db = await openDB();
@@ -8566,6 +8659,111 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       lastSyncDate: metadata?.lastSyncDate || null
     };
   };
+  const upsertContextualEntries = async (username, itemType, items) => {
+    if (items.length === 0) return;
+    const db = await openDB();
+    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+    const store = tx.objectStore(STORE_CONTEXTUAL);
+    const now = Date.now();
+    for (const item of dedupeById(items)) {
+      const key = contextCacheKey(username, itemType, item._id);
+      const existing = await requestToPromise(store.get(key));
+      const payload = existing ? mergeContextPayload(existing.payload, item) : item;
+      const completeness = Math.max(
+        existing?.completeness || 0,
+        getCompletenessScore(item),
+        getCompletenessScore(payload)
+      );
+      const entry = {
+        cacheKey: key,
+        username,
+        itemType,
+        itemId: item._id,
+        payload,
+        completeness,
+        updatedAt: now,
+        lastAccessedAt: now
+      };
+      store.put(entry);
+    }
+    await transactionToPromise(tx);
+  };
+  const saveContextualItems = async (username, comments = [], posts = []) => {
+    if (comments.length === 0 && posts.length === 0) return;
+    await upsertContextualEntries(username, "comment", comments);
+    await upsertContextualEntries(username, "post", posts);
+    await pruneContextualCache(username);
+  };
+  const loadContextualCommentsByIds = async (username, commentIds) => {
+    const ids = Array.from(new Set(commentIds.filter(Boolean)));
+    if (ids.length === 0) return { comments: [], missingIds: [] };
+    const db = await openDB();
+    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+    const store = tx.objectStore(STORE_CONTEXTUAL);
+    const now = Date.now();
+    const comments = [];
+    const missingIds = [];
+    for (const id of ids) {
+      const key = contextCacheKey(username, "comment", id);
+      const entry = await requestToPromise(store.get(key));
+      const isExpired = !!entry && now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
+      if (!entry || entry.itemType !== "comment" || isExpired) {
+        if (entry && isExpired) {
+          store.delete(entry.cacheKey);
+        }
+        missingIds.push(id);
+        continue;
+      }
+      entry.lastAccessedAt = now;
+      store.put(entry);
+      const comment = { ...entry.payload };
+      if (!comment.post && comment.postId) {
+        const postEntry = await requestToPromise(
+          store.get(contextCacheKey(username, "post", comment.postId))
+        );
+        const postExpired = !!postEntry && now - postEntry.updatedAt > CONTEXT_MAX_AGE_MS;
+        if (postEntry && postExpired) {
+          store.delete(postEntry.cacheKey);
+        } else if (postEntry && postEntry.itemType === "post") {
+          postEntry.lastAccessedAt = now;
+          store.put(postEntry);
+          comment.post = postEntry.payload;
+        }
+      }
+      comments.push(comment);
+    }
+    await transactionToPromise(tx);
+    return { comments: dedupeById(comments), missingIds };
+  };
+  const pruneContextualCache = async (username) => {
+    const db = await openDB();
+    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+    const store = tx.objectStore(STORE_CONTEXTUAL);
+    const index = store.index("username");
+    const entries2 = await requestToPromise(index.getAll(IDBKeyRange.only(username)));
+    const now = Date.now();
+    let removed = 0;
+    const freshEntries = entries2.filter((entry) => {
+      const isExpired = now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
+      if (isExpired) {
+        store.delete(entry.cacheKey);
+        removed++;
+      }
+      return !isExpired;
+    });
+    if (freshEntries.length > CONTEXT_MAX_ENTRIES_PER_USER) {
+      const overflow = freshEntries.length - CONTEXT_MAX_ENTRIES_PER_USER;
+      const toEvict = [...freshEntries].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt).slice(0, overflow);
+      toEvict.forEach((entry) => {
+        store.delete(entry.cacheKey);
+        removed++;
+      });
+    }
+    await transactionToPromise(tx);
+    if (removed > 0) {
+      Logger.info(`Pruned ${removed} contextual cache records for ${username}`);
+    }
+  };
   const fetchUserId = async (username) => {
     try {
       const response = await queryGraphQL(GET_USER_BY_SLUG, { slug: username });
@@ -8579,6 +8777,23 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
   const MIN_PAGE_SIZE = 50;
   const MAX_PAGE_SIZE = 1e3;
   const TARGET_FETCH_TIME_MS = 2500;
+  const ARCHIVE_PARTIAL_QUERY_OPTIONS = {
+    allowPartialData: true,
+    toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
+    operationName: "archive-sync"
+  };
+  const isValidArchiveItem = (item) => {
+    return !!item && typeof item._id === "string" && item._id.length > 0 && typeof item.postedAt === "string" && item.postedAt.length > 0;
+  };
+  const getCursorTimestampFromBatch = (rawItems) => {
+    for (let i = rawItems.length - 1; i >= 0; i--) {
+      const item = rawItems[i];
+      if (item && typeof item.postedAt === "string" && item.postedAt.length > 0) {
+        return item.postedAt;
+      }
+    }
+    return null;
+  };
   async function fetchCollectionAdaptively(userId, query, key, onProgress, minDate) {
     let allItems = [];
     let hasMore = true;
@@ -8591,10 +8806,14 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
           userId,
           limit: currentLimit,
           before: beforeCursor
-        });
-        const results = response[key]?.results || [];
+        }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
+        const rawResults = response[key]?.results || [];
+        const results = rawResults.filter(isValidArchiveItem);
         const duration = Date.now() - startTime;
-        if (results.length === 0) {
+        if (results.length !== rawResults.length) {
+          Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
+        }
+        if (rawResults.length === 0) {
           hasMore = false;
           break;
         }
@@ -8620,11 +8839,16 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         allItems = Array.from(uniqueItems.values());
         if (onProgress) onProgress(allItems.length);
         if (hasMore) {
-          if (results.length < prevLimit) {
+          if (rawResults.length < prevLimit) {
             hasMore = false;
           } else {
-            const lastItem = results[results.length - 1];
-            beforeCursor = lastItem.postedAt;
+            const nextCursor = getCursorTimestampFromBatch(rawResults);
+            if (!nextCursor) {
+              Logger.warn(`Archive ${key}: unable to derive next cursor from batch; stopping pagination to avoid loop.`);
+              hasMore = false;
+            } else {
+              beforeCursor = nextCursor;
+            }
           }
         }
       } catch (e) {
@@ -8640,27 +8864,67 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
   const fetchUserComments = (userId, onProgress, minDate) => {
     return fetchCollectionAdaptively(userId, GET_USER_COMMENTS, "comments", onProgress, minDate);
   };
-  const fetchCommentsByIds = async (commentIds) => {
+  const extractPostsFromComments = (comments) => {
+    const postMap = new Map();
+    comments.forEach((comment) => {
+      const post = comment.post;
+      if (post?._id) {
+        postMap.set(post._id, post);
+      }
+    });
+    return Array.from(postMap.values());
+  };
+  const fetchCommentsByIds = async (commentIds, username) => {
     if (commentIds.length === 0) return [];
-    const chunks = [];
-    for (let i = 0; i < commentIds.length; i += 50) {
-      chunks.push(commentIds.slice(i, i + 50));
+    const uniqueIds = Array.from(new Set(commentIds));
+    let cachedComments = [];
+    let missingIds = uniqueIds;
+    if (username) {
+      try {
+        const cached = await loadContextualCommentsByIds(username, uniqueIds);
+        cachedComments = cached.comments;
+        missingIds = cached.missingIds;
+        if (cachedComments.length > 0) {
+          Logger.info(`Context cache hit: ${cachedComments.length} comments (${missingIds.length} misses)`);
+        }
+      } catch (e) {
+        Logger.warn("Context cache lookup failed; falling back to network only.", e);
+      }
     }
-    let allResults = [];
+    const chunks = [];
+    for (let i = 0; i < missingIds.length; i += 50) {
+      chunks.push(missingIds.slice(i, i + 50));
+    }
+    let networkResults = [];
     for (const chunk of chunks) {
       try {
         const response = await queryGraphQL(
           GET_COMMENTS_BY_IDS,
-          { commentIds: chunk }
+          { commentIds: chunk },
+          ARCHIVE_PARTIAL_QUERY_OPTIONS
         );
         if (response.comments?.results) {
-          allResults = [...allResults, ...response.comments.results];
+          const valid = response.comments.results.filter(isValidArchiveItem);
+          if (valid.length !== response.comments.results.length) {
+            Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
+          }
+          networkResults = [...networkResults, ...valid];
         }
       } catch (e) {
         Logger.error("Failed to fetch context comments chunk:", e);
       }
     }
-    return allResults;
+    if (username && networkResults.length > 0) {
+      try {
+        await saveContextualItems(username, networkResults, extractPostsFromComments(networkResults));
+      } catch (e) {
+        Logger.warn("Failed to persist contextual cache entries.", e);
+      }
+    }
+    const mergedById = new Map();
+    cachedComments.forEach((c) => mergedById.set(c._id, c));
+    networkResults.forEach((c) => mergedById.set(c._id, c));
+    return Array.from(mergedById.values());
   };
   let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
   const updateRenderLimit = (limit) => {
@@ -8679,13 +8943,21 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       if ("title" in item) continue;
       const comment = item;
       const itemPostId = comment.postId;
+      const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
+      if (immediateParentId && !state2.commentById.has(immediateParentId)) {
+        missingIds.add(immediateParentId);
+        if (!commentPostIdMap.has(immediateParentId)) {
+          commentPostIdMap.set(immediateParentId, itemPostId);
+        }
+      }
       let current = comment.parentComment;
       let depth = 0;
       while (current && depth < 5) {
-        if (!state2.commentById.has(current._id)) {
-          missingIds.add(current._id);
-          if (!commentPostIdMap.has(current._id)) {
-            commentPostIdMap.set(current._id, itemPostId);
+        const currentId = typeof current._id === "string" ? current._id : null;
+        if (currentId && !state2.commentById.has(currentId)) {
+          missingIds.add(currentId);
+          if (!commentPostIdMap.has(currentId)) {
+            commentPostIdMap.set(currentId, itemPostId);
           }
         }
         if (current.parentComment) {
@@ -8698,8 +8970,9 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     if (missingIds.size > 0) {
       Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
-      const fetched = await fetchCommentsByIds(Array.from(missingIds));
+      const fetched = await fetchCommentsByIds(Array.from(missingIds), state2.archiveUsername || void 0);
       getUIHost().mergeComments(fetched, true, commentPostIdMap);
+      ensurePlaceholderContext(items, state2);
     }
   };
   const ensurePlaceholderContext = (items, state2) => {
@@ -8853,15 +9126,15 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     postId: sourceComment.postId,
     post: sourceComment.post ?? null,
     htmlBody: "",
-    baseScore: 0,
+    baseScore: typeof ref.baseScore === "number" ? ref.baseScore : 0,
     voteCount: 0,
-    pageUrl: "",
+    pageUrl: ref.pageUrl || "",
     author: ref.user?.username || "",
     rejected: false,
     topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
     parentComment: null,
     extendedScore: null,
-    afExtendedScore: null,
+    afExtendedScore: ref.afExtendedScore ?? null,
     currentUserVote: null,
     currentUserExtendedVote: null,
     contents: { markdown: null },
@@ -8870,8 +9143,8 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     contextType: "stub"
   });
   const renderCardItem = (item, state2) => {
-    const isPost = "title" in item;
-    if (isPost) {
+    const isPost2 = "title" in item;
+    if (isPost2) {
       const post = item;
       const headerHtml = renderPostHeader(post, { isFullPost: true, state: state2 });
       const bodyHtml = post.htmlBody ? renderPostBody(post, false) : "";
@@ -8890,9 +9163,9 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     return `<div class="pr-archive-item">${contextHtml}${renderComment(comment, state2)}</div>`;
   };
   const renderIndexItem = (item) => {
-    const isPost = "title" in item;
-    const title = isPost ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
-    const context = isPost ? "Post" : `Reply to ${getInterlocutorName$1(item)}`;
+    const isPost2 = "title" in item;
+    const title = isPost2 ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
+    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName$1(item)}`;
     const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
     return `
         <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
@@ -8929,6 +9202,7 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     syncReaderState() {
       const state2 = createInitialState();
       state2.isArchiveMode = true;
+      state2.archiveUsername = this.archiveState.username;
       const currentUser = window.LessWrong?.params?.currentUser;
       state2.currentUsername = currentUser?.username || null;
       state2.currentUserId = currentUser?._id || null;
@@ -9011,6 +9285,20 @@ sortCanonicalItems() {
       }
       return merged;
     }
+    persistContextualData(comments = [], posts = []) {
+      const username = this.archiveState.username;
+      if (!username) return;
+      const contextualComments = comments.filter((comment) => {
+        const type = comment.contextType;
+        if (type === "stub" || type === "missing") return false;
+        return !this.archiveState.itemById.has(comment._id);
+      });
+      const contextualPosts = posts.filter((post) => !this.archiveState.itemById.has(post._id));
+      if (contextualComments.length === 0 && contextualPosts.length === 0) return;
+      void saveContextualItems(username, contextualComments, contextualPosts).catch((e) => {
+        Logger.warn("Failed to persist contextual archive data.", e);
+      });
+    }
     rerenderAll() {
       if (!this.feedContainer) return;
       const existingContext = this.readerState.comments.filter((c) => !this.archiveState.itemById.has(c._id));
@@ -9083,12 +9371,24 @@ sortCanonicalItems() {
     mergeComments(newComments, markAsContext = true, postIdMap) {
       let changed = 0;
       let canonicalTouched = false;
+      const contextPosts = new Map();
+      const contextCommentsToPersist = [];
       for (const incoming of newComments) {
         if (postIdMap && postIdMap.has(incoming._id)) {
           incoming.postId = postIdMap.get(incoming._id);
         }
         if (markAsContext && !incoming.contextType) {
           incoming.contextType = "fetched";
+        }
+        if (incoming.post?._id) {
+          const rootPost = incoming.post;
+          const isCanonicalRootPost = this.archiveState.itemById.has(rootPost._id);
+          if (!markAsContext || !isCanonicalRootPost) {
+            this.upsertPost(rootPost, false);
+          }
+          if (!isCanonicalRootPost) {
+            contextPosts.set(rootPost._id, rootPost);
+          }
         }
         const existing = this.readerState.commentById.get(incoming._id);
         if (!existing) {
@@ -9103,6 +9403,9 @@ sortCanonicalItems() {
           const canonical = this.readerState.commentById.get(incoming._id) || incoming;
           this.syncItemToCanonical(canonical);
           canonicalTouched = true;
+        } else if (incoming.contextType !== "stub" && incoming.contextType !== "missing") {
+          const contextual = this.readerState.commentById.get(incoming._id) || incoming;
+          contextCommentsToPersist.push(contextual);
         }
       }
       if (canonicalTouched) {
@@ -9111,9 +9414,12 @@ sortCanonicalItems() {
       if (changed > 0) {
         rebuildIndexes(this.readerState);
       }
+      if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
+        this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
+      }
       return changed;
     }
-    upsertPost(post) {
+    upsertPost(post, persistContext = true) {
       const isCanonicalPost = this.archiveState.itemById.has(post._id);
       if (!this.readerState.postById.has(post._id)) {
         this.readerState.posts.push(post);
@@ -9127,6 +9433,9 @@ sortCanonicalItems() {
         this.sortCanonicalItems();
       } else {
         if (!post.contextType) post.contextType = "fetched";
+        if (persistContext) {
+          this.persistContextualData([], [post]);
+        }
       }
     }
   }
@@ -9334,7 +9643,7 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -9767,14 +10076,14 @@ sortCanonicalItems() {
     if (minDate) {
       onStatus(`Fetching items since ${minDate.toLocaleDateString()}...`);
     }
-    const posts = await fetchUserPosts(userId, (count) => {
-      onStatus(`Fetching posts: ${count} new...`);
+    const comments = await fetchUserComments(userId, (count) => {
+      onStatus(`Fetching comments: ${count} new...`);
     }, minDate);
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
-    const comments = await fetchUserComments(userId, (count) => {
-      onStatus(`Fetching comments: ${count} new...`);
+    const posts = await fetchUserPosts(userId, (count) => {
+      onStatus(`Fetching posts: ${count} new...`);
     }, minDate);
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
@@ -9850,7 +10159,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

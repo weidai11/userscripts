@@ -82,6 +82,9 @@ export const COMMENT_FIELDS_CORE = /* GraphQL */ `
     parentComment {
       _id
       postedAt
+      baseScore
+      afExtendedScore
+      pageUrl
       parentCommentId
       parentComment {
         _id
@@ -461,6 +464,9 @@ export type Post = {
 export type ParentCommentRef = {
   _id: string;
   postedAt?: string;
+  baseScore?: number;
+  afExtendedScore?: any;
+  pageUrl?: string | null;
   parentCommentId: string | null;
   parentComment?: ParentCommentRef | null;
   user?: {

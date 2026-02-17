@@ -49,16 +49,25 @@ const ensureContextForItems = async (
 
     const comment = item as Comment;
     const itemPostId = comment.postId;
+    const immediateParentId = comment.parentCommentId || (comment as any).parentComment?._id || null;
+    if (immediateParentId && !state.commentById.has(immediateParentId)) {
+      missingIds.add(immediateParentId);
+      if (!commentPostIdMap.has(immediateParentId)) {
+        commentPostIdMap.set(immediateParentId, itemPostId);
+      }
+    }
+
     let current: any = comment.parentComment;
     let depth = 0;
 
     // Traverse up to 5 levels to get context
     while (current && depth < 5) {
-      if (!state.commentById.has(current._id)) {
-        missingIds.add(current._id);
+      const currentId = typeof current._id === 'string' ? current._id : null;
+      if (currentId && !state.commentById.has(currentId)) {
+        missingIds.add(currentId);
         // Track which post this context belongs to
-        if (!commentPostIdMap.has(current._id)) {
-          commentPostIdMap.set(current._id, itemPostId);
+        if (!commentPostIdMap.has(currentId)) {
+          commentPostIdMap.set(currentId, itemPostId);
         }
       }
 
@@ -74,10 +83,14 @@ const ensureContextForItems = async (
 
   if (missingIds.size > 0) {
     Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
-    const fetched = await fetchCommentsByIds(Array.from(missingIds));
+    const fetched = await fetchCommentsByIds(Array.from(missingIds), state.archiveUsername || undefined);
 
     // [WS2-FIX] Use UIHost to merge comments and set postIds (Deduplicated logic)
     getUIHost().mergeComments(fetched, true, commentPostIdMap);
+
+    // [PR-UARCH-31] Fallback: if cache+network still cannot resolve some ancestors,
+    // keep placeholder stubs so the thread chain remains navigable.
+    ensurePlaceholderContext(items, state);
   }
 };
 
@@ -310,10 +323,15 @@ const parentRefToStub = (ref: ParentCommentRef, sourceComment: Comment): Comment
   user: ref.user ? { ...ref.user, slug: '', karma: 0, htmlBio: '' } : null,
   postId: sourceComment.postId,
   post: sourceComment.post ?? null,
-  htmlBody: '', baseScore: 0, voteCount: 0, pageUrl: '',
+  htmlBody: '',
+  baseScore: typeof ref.baseScore === 'number' ? ref.baseScore : 0,
+  voteCount: 0,
+  pageUrl: ref.pageUrl || '',
   author: ref.user?.username || '', rejected: false,
   topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
-  parentComment: null, extendedScore: null, afExtendedScore: null,
+  parentComment: null,
+  extendedScore: null,
+  afExtendedScore: ref.afExtendedScore ?? null,
   currentUserVote: null, currentUserExtendedVote: null,
   contents: { markdown: null },
   descendentCount: 0,

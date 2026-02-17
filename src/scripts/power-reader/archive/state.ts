@@ -26,7 +26,9 @@ export interface ArchiveState {
     userId: string | null;
 
     // Data Store
-    items: (Post | Comment)[]; // Unified feed
+    // Canonical authored feed only (card/index source of truth).
+    // Contextual third-party items are persisted separately in IndexedDB contextual cache.
+    items: (Post | Comment)[];
     itemById: Map<string, Post | Comment>;
 
     // Caching/Sync

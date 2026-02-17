@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.672] - 2026-02-17
+
+### Fixed
+- **GraphQL Error Policy ([PR-DATA-03])**: Restored strict-by-default GraphQL behavior so `errors` always throw unless a caller explicitly opts into scoped partial-data handling.
+- **Archive Partial Fetch Resilience ([PR-DATA-03.1], [PR-UARCH-37])**: Added archive-only partial-success mode with tolerated resolver errors (e.g. orphaned `commentGetPageUrl` failures), while keeping pagination/cursor progression based on raw batch envelopes to avoid prematurely ending sync.
+- **Archive Data Integrity ([PR-UARCH-36])**: Prevented context-lite post payloads from overwriting canonical authored post objects in archive state.
+- **Archive Parent Reconstruction ([PR-UARCH-38])**: Thread context loading now fetches immediate parents via `parentCommentId` even when inline `parentComment` objects are missing.
+- **UI Robustness ([PR-DATA-04])**: Added fallbacks for missing `pageUrl` in rendering components to prevent broken links or UI crashes when server-side resolvers fail.
+- **Test Stability**: Fixed flake in post read tracking test by using future timestamps for unread state initialization.
+
+### Added
+- **Contextual Archive Cache ([PR-UARCH-34], [PR-UARCH-35])**: Added persistent IndexedDB storage for non-authored thread context (ancestor comments/root posts) with cache-first lookup before network fetches.
+
 ## [1.2.664] - 2026-02-16
 
 ### Fixed

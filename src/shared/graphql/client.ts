@@ -2,6 +2,24 @@ declare const GM_xmlhttpRequest: any;
 
 const LOG_PREFIX = '[GraphQL Client]';
 
+export interface GraphQLQueryOptions {
+    allowPartialData?: boolean;
+    toleratedErrorPatterns?: Array<string | RegExp>;
+    operationName?: string;
+}
+
+function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): boolean {
+    const message = typeof err?.message === 'string' ? err.message : '';
+    const pathText = Array.isArray(err?.path) ? err.path.join('.') : '';
+
+    return patterns.some(pattern => {
+        if (typeof pattern === 'string') {
+            return message.includes(pattern) || pathText.includes(pattern);
+        }
+        return pattern.test(message) || pattern.test(pathText);
+    });
+}
+
 function getGraphQLEndpoint(): string {
     const hostname = window.location.hostname;
     if (hostname === 'forum.effectivealtruism.org') {
@@ -29,7 +47,11 @@ function makeRequest(url: string, data: string): Promise<{ status: number; respo
     });
 }
 
-export async function queryGraphQL<TData = any, TVariables = any>(query: string, variables: TVariables = {} as TVariables): Promise<TData> {
+export async function queryGraphQL<TData = any, TVariables = any>(
+    query: string,
+    variables: TVariables = {} as TVariables,
+    options: GraphQLQueryOptions = {}
+): Promise<TData> {
     const url = getGraphQLEndpoint();
     const data = JSON.stringify({ query, variables });
     const maxAttempts = 3;
@@ -56,7 +78,24 @@ export async function queryGraphQL<TData = any, TVariables = any>(query: string,
                 throw error;
             }
             if (res.errors) {
-                throw new Error(res.errors[0].message);
+                const errors = Array.isArray(res.errors) ? res.errors : [res.errors];
+                const label = options.operationName ? ` (${options.operationName})` : '';
+
+                if (options.allowPartialData && res.data) {
+                    const patterns = options.toleratedErrorPatterns || [];
+                    const untolerated = errors.filter((err: any) => !isToleratedGraphQLError(err, patterns));
+
+                    if (untolerated.length === 0) {
+                        console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, errors);
+                        return res.data;
+                    }
+
+                    console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
+                    throw new Error(untolerated[0]?.message || 'GraphQL error');
+                }
+
+                console.error(LOG_PREFIX, `GraphQL errors${label}:`, errors);
+                throw new Error(errors[0]?.message || 'GraphQL error');
             }
             return res.data;
         } catch (err) {

@@ -830,17 +830,17 @@ const syncArchive = async (
     onStatus(`Fetching items since ${minDate.toLocaleDateString()}...`);
   }
 
-  const posts = await fetchUserPosts(userId, (count) => {
-    onStatus(`Fetching posts: ${count} new...`);
+  const comments = await fetchUserComments(userId, (count) => {
+    onStatus(`Fetching comments: ${count} new...`);
   }, minDate);
 
-  // Check for abort after fetching posts
+  // Check for abort after fetching comments
   if (abortSignal?.aborted) {
     throw new Error('Sync aborted');
   }
 
-  const comments = await fetchUserComments(userId, (count) => {
-    onStatus(`Fetching comments: ${count} new...`);
+  const posts = await fetchUserPosts(userId, (count) => {
+    onStatus(`Fetching posts: ${count} new...`);
   }, minDate);
 
   // Check for abort after fetching comments

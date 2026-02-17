@@ -241,6 +241,9 @@ test.describe('User Archive Context Type & View Modes', () => {
       parentComment: {
         _id: 'comment-parent',
         postedAt: '2024-01-15T11:00:00Z',
+        baseScore: 42,
+        afExtendedScore: { agreement: 7 },
+        pageUrl: 'https://lesswrong.com/posts/post-1/comment-parent',
         parentCommentId: null,
         user: { _id: 'u-other', username: 'ParentAuthor', displayName: 'Parent Author' }
       },
@@ -280,6 +283,8 @@ test.describe('User Archive Context Type & View Modes', () => {
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
     await expect(parentStub).toBeVisible();
     await expect(parentStub.locator('.pr-author')).toContainText('Parent Author');
+    await expect(parentStub.locator('.pr-karma-score')).toHaveText('42');
+    await expect(parentStub.locator('.pr-agreement-score')).toHaveText('7');
 
     // Verify stub has reduced opacity styling (placeholder)
     const stubStyle = await parentStub.evaluate(el => window.getComputedStyle(el).opacity);

@@ -78,6 +78,32 @@ Reviewer checks:
 - [ ] Find all references for changed functions
 - [ ] Confirm each call site passes appropriate args
 
+### Scoped GraphQL Partial-Success Only
+
+- Partial-data tolerance is valid for bulk/archive sync, but dangerous for mutations and interactive actions.
+
+Reviewer checks:
+- [ ] Confirm GraphQL client remains strict by default (`errors` should throw)
+- [ ] Confirm partial-success behavior is opt-in and scoped to intended call sites only
+- [ ] Confirm tolerated error patterns are explicit and narrow
+
+### Canonical vs Context Payload Integrity
+
+- Lite context payloads (especially post references from comment queries) must not downgrade canonical/full items.
+
+Reviewer checks:
+- [ ] Verify context merges do not blindly overwrite canonical store entries
+- [ ] Verify canonical post/comment upserts preserve higher-fidelity fields
+- [ ] Verify context persistence does not promote non-canonical items into canonical feeds
+
+### Partial-Batch Pagination Safety
+
+- Filtered client-side items must not drive pagination termination.
+
+Reviewer checks:
+- [ ] Ensure cursor/hasMore decisions are based on raw server envelope counts
+- [ ] Ensure invalid rows are logged and skipped without truncating the remaining history
+
 ### Import Path Integrity
 
 Reviewer checks:

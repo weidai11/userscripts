@@ -39,6 +39,9 @@ export interface ReaderState {
 
   // Feature flags / Modes
   isArchiveMode: boolean;
+
+  // Archive context
+  archiveUsername: string | null;
 }
 
 /**
@@ -63,6 +66,7 @@ export const createInitialState = (): ReaderState => ({
   activeAIPopup: null,
   sessionAICache: {},
   isArchiveMode: false,
+  archiveUsername: null,
 });
 
 /**

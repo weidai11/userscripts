@@ -9,6 +9,7 @@ import { renderPostGroup } from '../render/post';
 import { setupLinkPreviews } from '../features/linkPreviews';
 import { refreshPostActionButtons } from '../utils/dom';
 import { Logger } from '../utils/logger';
+import { saveContextualItems } from './storage';
 
 export class ArchiveUIHost implements UIHost {
     private archiveState: ArchiveState;
@@ -27,6 +28,7 @@ export class ArchiveUIHost implements UIHost {
     // Create a new reader state (or reset existing)
     const state = createInitialState();
     state.isArchiveMode = true;
+    state.archiveUsername = this.archiveState.username;
     // [P1-FIX] Populate both username and userId for authenticated actions
     const currentUser = (window as any).LessWrong?.params?.currentUser;
     state.currentUsername = currentUser?.username || null;
@@ -150,6 +152,25 @@ export class ArchiveUIHost implements UIHost {
     return merged;
   }
 
+  private persistContextualData(comments: Comment[] = [], posts: Post[] = []): void {
+    const username = this.archiveState.username;
+    if (!username) return;
+
+    const contextualComments = comments.filter(comment => {
+      const type = (comment as any).contextType;
+      if (type === 'stub' || type === 'missing') return false;
+      return !this.archiveState.itemById.has(comment._id);
+    });
+
+    const contextualPosts = posts.filter(post => !this.archiveState.itemById.has(post._id));
+
+    if (contextualComments.length === 0 && contextualPosts.length === 0) return;
+
+    void saveContextualItems(username, contextualComments, contextualPosts).catch((e) => {
+      Logger.warn('Failed to persist contextual archive data.', e);
+    });
+  }
+
   rerenderAll(): void {
     if (!this.feedContainer) return;
 
@@ -246,6 +267,8 @@ export class ArchiveUIHost implements UIHost {
   mergeComments(newComments: Comment[], markAsContext: boolean = true, postIdMap?: Map<string, string>): number {
     let changed = 0;
     let canonicalTouched = false;
+    const contextPosts = new Map<string, Post>();
+    const contextCommentsToPersist: Comment[] = [];
 
     for (const incoming of newComments) {
       if (postIdMap && postIdMap.has(incoming._id)) {
@@ -253,6 +276,19 @@ export class ArchiveUIHost implements UIHost {
       }
       if (markAsContext && !(incoming as any).contextType) {
         (incoming as any).contextType = 'fetched';
+      }
+      // Ensure root post context is available for grouped thread rendering and post actions.
+      if ((incoming as any).post?._id) {
+        const rootPost = (incoming as any).post as Post;
+        const isCanonicalRootPost = this.archiveState.itemById.has(rootPost._id);
+
+        // Context fetches return PostFieldsLite; never overwrite canonical archive posts with lite payloads.
+        if (!markAsContext || !isCanonicalRootPost) {
+          this.upsertPost(rootPost, false);
+        }
+        if (!isCanonicalRootPost) {
+          contextPosts.set(rootPost._id, rootPost);
+        }
       }
 
       const existing = this.readerState.commentById.get(incoming._id);
@@ -270,6 +306,9 @@ export class ArchiveUIHost implements UIHost {
         const canonical = this.readerState.commentById.get(incoming._id) || incoming;
         this.syncItemToCanonical(canonical);
         canonicalTouched = true;
+      } else if ((incoming as any).contextType !== 'stub' && (incoming as any).contextType !== 'missing') {
+        const contextual = this.readerState.commentById.get(incoming._id) || incoming;
+        contextCommentsToPersist.push(contextual);
       }
     }
 
@@ -279,10 +318,13 @@ export class ArchiveUIHost implements UIHost {
     if (changed > 0) {
       rebuildIndexes(this.readerState);
     }
+    if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
+      this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
+    }
     return changed;
   }
 
-  upsertPost(post: Post): void {
+  upsertPost(post: Post, persistContext: boolean = true): void {
     const isCanonicalPost = this.archiveState.itemById.has(post._id);
 
     if (!this.readerState.postById.has(post._id)) {
@@ -300,6 +342,9 @@ export class ArchiveUIHost implements UIHost {
     } else {
       // Non-canonical posts are context-only and should survive rerenders without polluting archive items.
       if (!(post as any).contextType) (post as any).contextType = 'fetched';
+      if (persistContext) {
+        this.persistContextualData([], [post]);
+      }
     }
   }
 }

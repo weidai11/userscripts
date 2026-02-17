@@ -2,7 +2,7 @@
  * Data loading logic for User Archive
  */
 
-import { queryGraphQL } from '../../../shared/graphql/client';
+import { queryGraphQL, type GraphQLQueryOptions } from '../../../shared/graphql/client';
 import {
     GET_USER_BY_SLUG,
     GET_USER_POSTS,
@@ -12,6 +12,7 @@ import {
     type Comment
 } from '../../../shared/graphql/queries';
 import { Logger } from '../utils/logger';
+import { loadContextualCommentsByIds, saveContextualItems } from './storage';
 
 /**
  * Fetch userId by username (slug)
@@ -30,6 +31,33 @@ const INITIAL_PAGE_SIZE = 100;
 const MIN_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 1000;
 const TARGET_FETCH_TIME_MS = 2500; // Target ~2.5s per batch
+const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
+    allowPartialData: true,
+    toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
+    operationName: 'archive-sync'
+};
+
+const isValidArchiveItem = <T extends { _id: string; postedAt: string }>(
+    item: T | null | undefined
+): item is T => {
+    return !!item
+        && typeof item._id === 'string'
+        && item._id.length > 0
+        && typeof item.postedAt === 'string'
+        && item.postedAt.length > 0;
+};
+
+const getCursorTimestampFromBatch = <T extends { postedAt: string }>(
+    rawItems: Array<T | null | undefined>
+): string | null => {
+    for (let i = rawItems.length - 1; i >= 0; i--) {
+        const item = rawItems[i] as any;
+        if (item && typeof item.postedAt === 'string' && item.postedAt.length > 0) {
+            return item.postedAt;
+        }
+    }
+    return null;
+};
 
 /**
  * Shared adaptive fetcher for posts and comments
@@ -53,11 +81,16 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 userId,
                 limit: currentLimit,
                 before: beforeCursor
-            });
-            const results = (response[key]?.results || []) as T[];
+            }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
+            const rawResults = (response[key]?.results || []) as Array<T | null | undefined>;
+            const results = rawResults.filter(isValidArchiveItem);
             const duration = Date.now() - startTime;
 
-            if (results.length === 0) {
+            if (results.length !== rawResults.length) {
+                Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
+            }
+
+            if (rawResults.length === 0) {
                 hasMore = false;
                 break;
             }
@@ -94,14 +127,19 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
             if (onProgress) onProgress(allItems.length);
 
             if (hasMore) {
-                if (results.length < prevLimit) {
+                if (rawResults.length < prevLimit) {
                     hasMore = false;
                 } else {
                     // Update cursor to the timestamp of the last item in the batch
                     // The server's $lt filter ensures we don't get duplicates,
                     // and it's safer than risking an infinite loop on identical timestamps.
-                    const lastItem = results[results.length - 1];
-                    beforeCursor = lastItem.postedAt;
+                    const nextCursor = getCursorTimestampFromBatch(rawResults);
+                    if (!nextCursor) {
+                        Logger.warn(`Archive ${key}: unable to derive next cursor from batch; stopping pagination to avoid loop.`);
+                        hasMore = false;
+                    } else {
+                        beforeCursor = nextCursor;
+                    }
                 }
             }
         } catch (e) {
@@ -130,33 +168,80 @@ export const fetchUserComments = (userId: string, onProgress?: (count: number) =
 /**
  * Fetch comments by IDs (for thread context)
  */
-export const fetchCommentsByIds = async (commentIds: string[]): Promise<Comment[]> => {
+const extractPostsFromComments = (comments: Comment[]): Post[] => {
+    const postMap = new Map<string, Post>();
+    comments.forEach(comment => {
+        const post = (comment as any).post as Post | null | undefined;
+        if (post?._id) {
+            postMap.set(post._id, post);
+        }
+    });
+    return Array.from(postMap.values());
+};
+
+export const fetchCommentsByIds = async (commentIds: string[], username?: string): Promise<Comment[]> => {
     if (commentIds.length === 0) return [];
+
+    const uniqueIds = Array.from(new Set(commentIds));
+    let cachedComments: Comment[] = [];
+    let missingIds = uniqueIds;
+
+    // Cache-first: contextual cache (owned comments are already in ReaderState/commentById upstream)
+    if (username) {
+        try {
+            const cached = await loadContextualCommentsByIds(username, uniqueIds);
+            cachedComments = cached.comments;
+            missingIds = cached.missingIds;
+            if (cachedComments.length > 0) {
+                Logger.info(`Context cache hit: ${cachedComments.length} comments (${missingIds.length} misses)`);
+            }
+        } catch (e) {
+            Logger.warn('Context cache lookup failed; falling back to network only.', e);
+        }
+    }
 
     // Dynamically import queries to avoid circular dependencies if any
     // const queries = await import('../../../shared/graphql/queries'); // Not needed if GET_COMMENTS_BY_IDS is directly imported
 
     // Chunk requests to avoid query size limits (e.g. 50 at a time)
     const chunks = [];
-    for (let i = 0; i < commentIds.length; i += 50) {
-        chunks.push(commentIds.slice(i, i + 50));
+    for (let i = 0; i < missingIds.length; i += 50) {
+        chunks.push(missingIds.slice(i, i + 50));
     }
 
-    let allResults: Comment[] = [];
+    let networkResults: Comment[] = [];
 
     for (const chunk of chunks) {
         try {
             const response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
                 GET_COMMENTS_BY_IDS,
-                { commentIds: chunk }
+                { commentIds: chunk },
+                ARCHIVE_PARTIAL_QUERY_OPTIONS
             );
             if (response.comments?.results) {
-                allResults = [...allResults, ...response.comments.results];
+                const valid = response.comments.results.filter(isValidArchiveItem);
+                if (valid.length !== response.comments.results.length) {
+                    Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
+                }
+                networkResults = [...networkResults, ...valid];
             }
         } catch (e) {
             Logger.error('Failed to fetch context comments chunk:', e);
         }
     }
 
-    return allResults;
+    // Persist fetched context for future sessions.
+    if (username && networkResults.length > 0) {
+        try {
+            await saveContextualItems(username, networkResults, extractPostsFromComments(networkResults));
+        } catch (e) {
+            Logger.warn('Failed to persist contextual cache entries.', e);
+        }
+    }
+
+    // Merge cache + network results by ID (network wins for same ID if present).
+    const mergedById = new Map<string, Comment>();
+    cachedComments.forEach(c => mergedById.set(c._id, c));
+    networkResults.forEach(c => mergedById.set(c._id, c));
+    return Array.from(mergedById.values());
 };

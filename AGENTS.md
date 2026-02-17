@@ -26,6 +26,7 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 
 ## 📜 Conventions & Gotchas
 - **Shell**: PowerShell 5.1 (No `&&`, use `;`). Use backslashes `\` for local Windows paths.
+- **Shell Execution**: Run commands directly; do not prefix commands with shell executables like `cmd` or `powershell`.
 - **Code**: ESM only (no `__dirname`). Use `/// <reference types="vite-plugin-monkey/client" />` for `GM_*` types. Use `htmlBody` for content.
 - **Testing**: Wait for `#lw-power-reader-ready-signal`. Mock `GM_*` and GraphQL via `addInitScript`.
 - **Logic**: Use getters (e.g., `() => state.data`) for component props to avoid stale closures.
