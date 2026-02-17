@@ -102,20 +102,22 @@ type SearchDoc = {
   id: string;
   itemType: "post" | "comment";
   postedAtMs: number;
-  baseScore: number;
+  baseScore: number;     // maps to item.baseScore from LW GraphQL API (not score or allKarma)
 
   authorNameNorm: string;
   replyToNorm: string;     // empty for posts
 
   titleNorm: string;       // may be empty
-  bodyNorm: string;        // markdown-preferred, HTML-stripped + entity-decoded fallback; may be empty
+  bodyNorm: string;        // markdown-preferred (formatting stripped), HTML-stripped + entity-decoded fallback; may be empty
 };
 ```
 
 Rules:
 
 - `SearchDoc` is derived data and can be rebuilt from canonical archive items.
-- Normalizer pipeline for body fallback is: decode HTML entities -> strip tags -> collapse whitespace -> lowercase/normalize.
+- Normalizer pipeline (markdown-preferred path): strip markdown formatting syntax (emphasis markers, link brackets and URLs, blockquote prefixes, heading markers, code fences, inline code backticks, LaTeX delimiters `$`/`$$`) -> collapse whitespace -> lowercase/normalize. Formula and code content is preserved; only formatting delimiters are stripped.
+- Normalizer pipeline (HTML fallback path): decode HTML entities -> strip tags -> collapse whitespace -> lowercase/normalize.
+- The goal for both paths is plain-text content free of formatting artifacts.
 - Empty or missing title/body fields normalize to `""`; such items remain searchable via other fields (for example `author:`).
 - Do not persist duplicated per-doc concatenations or per-doc token arrays in `SearchDoc`; keep memory budget for index structures.
 - Keep two isolated corpora/indexes:
@@ -134,18 +136,31 @@ Rules:
 - Explicit wildcard (match-all content clause): `*`
 - Negation: `-term`, `-author:alice`
 - Field operators:
-  - `type:post|comment`
+  - `type:post`, `type:comment` (separate tokens; omitting `type:` matches both; multiple `type:` filters AND together, so `type:post type:comment` produces zero results)
   - `author:<text>`
   - `replyto:<text>`
-  - `scope:authored|all` (`all` = authored + contextual cache)
+  - `scope:authored`, `scope:all` (`all` = authored + contextual cache)
   - `score:>N`, `score:<N`, `score:N..M`
   - `date:>YYYY-MM-DD`, `date:<YYYY-MM-DD`
   - `date:YYYY-MM-DD..YYYY-MM-DD`, `date:YYYY-MM-DD..`, `date:..YYYY-MM-DD`
   - `date:YYYY-MM-DD` (single-day shorthand -> expanded to day range)
 
+Score semantics:
+
+- `score:>N` is strictly greater than N. `score:<N` is strictly less than N.
+- `score:N..M` is inclusive of both bounds.
+- Score values may be negative (for example `score:>-5`, `score:-10..0`).
+- Negation applies to the entire range or comparison expression: `-score:5..10` excludes items with scores 5 through 10 inclusive; `-date:2024-01-01..2024-01-31` excludes items from that date range.
+- Open right-range `date:YYYY-MM-DD..` terminates at first whitespace after `..`; following text is parsed as a separate clause.
+
 Sort control:
 
 - Sort is controlled by dedicated UI control + URL `sort` param (not query grammar in v1).
+
+Empty query:
+
+- An empty query (no content clauses, no field filters) returns all items in the active scope, ordered by the current sort mode. This is the default archive browse behavior.
+- A query containing only control directives (for example `scope:all`) is treated as browse-all in the resolved scope, ordered by current sort mode.
 
 Default boolean semantics:
 
@@ -163,7 +178,11 @@ Date semantics:
 
 - Date parsing uses UTC day boundaries.
 - `date:YYYY-MM-DD` expands to that whole UTC day.
-- `date:>YYYY-MM-DD` and `date:<YYYY-MM-DD` are strict comparisons.
+- `date:>YYYY-MM-DD` means strictly after the end of that UTC day.
+- `date:<YYYY-MM-DD` means strictly before the start of that UTC day.
+- `date:YYYY-MM-DD..YYYY-MM-DD` is inclusive of both UTC day boundaries.
+- `date:YYYY-MM-DD..` means `>= start_of_day(YYYY-MM-DD)`.
+- `date:..YYYY-MM-DD` means `<= end_of_day(YYYY-MM-DD)`.
 
 ### Query Contract
 
@@ -178,8 +197,15 @@ To avoid ambiguous behavior drift, parse in this order:
 
 1. Explicit regex literal token (`/.../flags`)
 2. Structured field operators (`author:`, `date:`, `score:`, `type:`, `scope:`)
-3. Quoted phrases
-4. Plain tokens
+3. Explicit wildcard token (`*`) as `MatchAll` content clause
+4. Quoted phrases
+5. Plain tokens
+
+Parsing notes:
+
+- Field operator parsing (step 2) consumes quoted values after `:` (for example `author:"wei dai"`) before the general quoted-phrase pass.
+- Multiple `*` tokens collapse to one `MatchAll` AST clause.
+- `*` is a no-op when any other positive content clause exists.
 
 Partial-failure policy:
 
@@ -188,6 +214,7 @@ Partial-failure policy:
 - Known operators with invalid values (for example malformed `date:` range) produce a parse warning and are excluded from execution.
 - Unsupported date shorthands in v1 (for example `date:2024` or `date:2024-01`) produce a parse warning and are excluded.
 - Invalid regex literals produce a parse warning and are excluded from execution.
+- A leading `-` immediately before an operator token denotes negation (for example `-score:>5`), while `-` immediately after `:` in numeric/date values denotes a signed value (for example `score:>-5`).
 
 ### Regex Safety Guardrails
 
@@ -213,13 +240,14 @@ Safety policy notes:
   - Scope resolution:
     - `scope:authored` -> authored corpus only
     - `scope:all` -> authored + context corpora
+- Candidate seeding rule: if no Stage A clause yields a narrowed candidate set (for example phrase-only, regex-only, or single-character-token queries), seed Stage B with the full resolved scope corpus.
 
 ### Stage B: Expensive Matching
 
 - Run regex/phrase checks only on narrowed candidates.
 - Apply negations last to avoid wasted work.
-- Phrase matching in v1 is exact contiguous substring match against normalized text fields (`titleNorm` and `bodyNorm`) with no fuzzy expansion.
-- Regex matching runs against `titleNorm` and `bodyNorm` separately; engine does not require a persisted concatenated field.
+- Phrase matching in v1 is exact contiguous substring match against normalized text fields (`titleNorm` and `bodyNorm`) with no fuzzy expansion; a match in either field satisfies the clause.
+- Regex matching runs against `titleNorm` and `bodyNorm` separately; a match in either field satisfies the clause. Engine does not require a persisted concatenated field.
 
 Negation semantics (normative):
 
@@ -228,13 +256,15 @@ Negation semantics (normative):
 - Queries composed only of negations are rejected with a user-facing validation message.
 - `*` is the explicit way to form match-all queries before applying negations (for example `* -author:alice`).
 - Field negation (for example `-author:alice`) has the same precedence as positive field filters and is applied in the final exclusion pass.
+- If a query has no positive content clause and no negations (for example `scope:all`), it resolves to browse-all for the selected scope.
 
 ### Ranking
 
 - V1 relevance (narrow and deterministic):
   - Token/phrase match score
   - Exact field-hit boosts (`author`, `replyto`)
-  - Recency tie-break
+  - Recency tie-break (`postedAtMs` descending)
+  - Final tie-break: lexical `id` ascending (ensures full determinism)
 - Deferred beyond v1:
   - Fuzzy matching
   - Advanced weighting and tuning layers
@@ -255,6 +285,7 @@ Deterministic non-relevance ordering:
 `replyTo` sort key:
 
 - `replyTo` sort orders by lexical `replyToNorm` (empty values sort last), then applies the tie-break chain above.
+- Items with empty `replyToNorm` (typically posts) are ordered by `postedAtMs` descending within the empty-value block, then lexical `id` ascending.
 
 ## Index Structures
 
@@ -271,6 +302,8 @@ In-memory indexes:
 - Context corpus indexes (same shape under `context.*` namespace).
 - `idToOrdinal` and `ordinalToId` are maintained per corpus.
 - Name indexes are candidate accelerators (name tokens/prefixes); final `author:`/`replyto:` semantics are enforced by substring verification.
+- Name index keys are normalized name tokens (same tokenizer policy as content terms), not whole-name strings.
+- Multi-token name filters intersect token postings first, then run full-name substring verification.
 - Build-time mutable postings (`number[]`) are internal only and compacted to `Uint32Array` before query serving.
 - Context corpus index build strategy: opportunistic idle-time warm-up after authored index is ready, with cancellation if user interaction or sync pressure increases.
 
@@ -296,8 +329,10 @@ Search should run in a dedicated Worker in greenfield design:
 Worker fallback requirements:
 
 - If Worker creation fails (CSP/runtime limits), use main-thread fallback engine with stricter limits.
-- If Worker crashes repeatedly, trip a session kill-switch and keep archive usable with simple fallback search.
+- If Worker crashes repeatedly, trip a session kill-switch and keep archive usable with bounded fallback search.
 - Main-thread fallback must disable complex regex execution and use bounded chunked scans to preserve UI responsiveness.
+- Fallback engine still uses the same parser/AST and supports all non-regex structured operators (`author`, `replyto`, `type`, `score`, `date`, `scope`, negation, `*`).
+- Regex literals in fallback are downgraded to literal contains checks under the same execution budgets.
 
 Main-thread fallback constants (required):
 
@@ -330,8 +365,25 @@ type SearchWorkerRequest =
 type SearchWorkerResponse =
   | { kind: "index.ready"; source: "full" | "patch"; indexVersion: number; docCount: number; buildMs: number; batchId?: string; patchId?: string }
   | { kind: "query.result"; requestId: string; indexVersion: number; ids: string[]; total: number; tookMs: number; explain?: string[] }
-  | { kind: "error"; requestId?: string; message: string };
+  | { kind: "error"; requestId?: string; batchId?: string; patchId?: string; message: string };
 ```
+
+Schema version compatibility:
+
+- If the worker receives a `schemaVersion` it does not support (for example, worker is a stale cached copy), it responds with `error` (including `batchId` if applicable) and the main thread falls back to the fallback engine until the worker script is reloaded.
+
+`expectedIndexVersion` semantics:
+
+- `expectedIndexVersion` on `query.run` is advisory. The main thread sets it from the last received `index.ready.indexVersion`. The worker always executes against its current index and returns the actual `indexVersion` in the response. The main thread discards responses where `response.indexVersion < expectedIndexVersion`.
+
+Chunked full-indexing rules:
+
+- `chunkIndex` is 0-based.
+- Chunks for a given `batchId` must arrive strictly in `chunkIndex` order.
+- `totalChunks` is immutable for a `batchId`; any mismatch across chunks is rejected with `error`.
+- Duplicate or out-of-order chunks for the active `batchId` are rejected with `error` (including `batchId`).
+- `index.full.commit` is rejected unless all expected chunks were received exactly once.
+- A new `index.full.start` with a different `batchId` cancels any in-progress full-index batch and starts a new one.
 
 Pagination contract (v1):
 
@@ -339,6 +391,7 @@ Pagination contract (v1):
 - Worker returns `ids.length <= limit`.
 - `total` is the full candidate count before truncation to `limit`.
 - Main thread handles incremental loading by re-issuing `query.run` with larger `limit`.
+- This is a known v1 simplification: each "Load More" re-executes the full query. Offset-based or cursor-based pagination can be introduced post-v1 if incremental-loading latency becomes measurable.
 
 Explain payload contract (v1):
 
@@ -370,9 +423,10 @@ Explain payload contract (v1):
   - top authors in result set
   - date buckets (year/month)
 
-Facet clicks append structured terms to query.
+Facet clicks append structured terms to query. When a facet-appended operator conflicts with an existing operator of the same kind in the query, it replaces the existing operator rather than appending (for example, clicking the `comment` type facet when `type:post` is active replaces it with `type:comment`).
 Facet computation runs in Worker asynchronously after primary results.
 Facet computation is budgeted (`<= 30ms` per query cycle); when budget is exceeded or match set is very large, UI shows `Facets delayed - refine query` and keeps results interactive.
+Queries with `*` (match-all) or an empty content clause may produce corpus-wide match sets that exceed the facet budget on large archives; the `Facets delayed` UX applies in this case.
 
 ### Scope Disclosure
 
@@ -402,12 +456,14 @@ Search state should be URL-native:
 
 Constraints:
 
-- Cap encoded query length and degrade gracefully when exceeding URL budget.
+- Cap encoded query length at `2000` characters; degrade gracefully when exceeding this budget.
 - URL decoding/parsing failures must not break archive render; fall back to empty query.
 - Persist oversized queries in session storage with URL pointer key when practical.
 - Invalid or missing scope always defaults to `scope:authored`.
+- URL `scope` param uses literal values `authored` (default; may be omitted) and `all`.
 - Canonical URL state stores `sort` and `scope` as dedicated params; `q` is reserved for search terms and field filters.
 - If `q` contains `scope:` and dedicated URL `scope` param also exists, dedicated URL `scope` takes precedence and conflicting in-query scope is ignored with a parse warning.
+- If `q` contains `scope:` and no dedicated URL `scope` param exists, the in-query `scope:` is honored for that query and immediately canonicalized to a dedicated URL `scope` param on the next URL serialization.
 - URL serialization emits canonical state (dedicated `sort`/`scope` params and de-duplicated `q`) to avoid drift across reload/share cycles.
 
 Benefits:
@@ -446,9 +502,12 @@ Search is eventually consistent with canonical archive items.
 - Query results may lag behind sync merges until patch indexing finishes.
 - Patch indexing must be atomic per batch: either all upserts/deletes applied, or none.
 - Worker applies each patch against an isolated mutable index snapshot and swap-commits only on success.
+- `indexVersion` is a monotonically increasing integer, incremented on each successful `index.full.commit` or `index.patch` application.
 - Include `indexVersion` in query responses for debugging stale-result reports.
 - On version mismatch between UI expectation and worker response, discard stale response.
 - `index.ready` is required after successful full/patch indexing; missing ack implies build/apply did not complete and should trigger retry or full rebuild.
+- Context corpus index invalidates whenever new contextual items are persisted.
+- After `saveContextualItems` completes, main thread emits `index.patch` upserts for context-origin items; if context index is not initialized yet, queue patches until warm-up begins.
 - UI should show lightweight "indexing updates" indicator when sync patches are pending.
 
 ## Tokenization and Locale Policy
@@ -481,6 +540,10 @@ Track local metrics (no external telemetry required initially):
 - Fallback usage rate by cause (regex safety downgrade, worker unavailable/crash, startup budget exceeded, storage/index failure)
 - Cache hit rate for repeated queries
 
+Result caching (v1):
+
+- The worker may cache the last N query results keyed by normalized `(query, sort, scope)`. Cache is invalidated on any `indexVersion` change. When cache is not implemented, the cache hit rate metric reports zero.
+
 Expose metrics in debug mode for tuning.
 
 Add hard-stop operational metrics:
@@ -498,6 +561,7 @@ Add hard-stop operational metrics:
 - Maintain a versioned JSON fixture corpus at `tests/archive-search/conformance/*.json` for structured-query behavior.
 - Minimum initial coverage: `50+` query/expected-output fixtures spanning all operators, negation, scope behavior, malformed input handling, and deterministic ordering checks.
 - Each fixture defines: input query, scope/sort controls, expected ordered ID list (or stable prefix), and expected parse warnings.
+- Warning assertions validate warning count and warning type tags (`invalid-regex`, `malformed-date`, `unknown-operator`, etc.), not exact message strings.
 - Corpus must be updated in the same change whenever grammar or execution semantics change.
 - Ownership: archive search changes are not done until conformance fixtures are updated or explicitly marked unaffected.
 
@@ -541,7 +605,7 @@ Scope fixture matrix (required):
 ### Phase 1: Precompute SearchDoc (No UX Change)
 
 - Add normalizer and `SearchDoc` cache in archive runtime.
-- Replace per-keystroke text reconstruction with normalized `titleNorm`/`bodyNorm` fields and index-backed candidate narrowing.
+- Replace per-keystroke text reconstruction with cached normalized `titleNorm`/`bodyNorm` fields for linear scan.
 - Keep existing input/control layout unchanged while validating structured semantics behind feature flag with conformance fixtures.
 
 ### Phase 2: Introduce Parser + Engine (Main Thread)
@@ -577,11 +641,11 @@ src/scripts/power-reader/archive/search/
   normalize.ts
   parser.ts
   ast.ts
-  planner.ts
+  planner.ts          # translates parsed AST into execution plan (index path selection, stage ordering)
   engine.ts
   fallback.ts
   ranker.ts
-  index.ts
+  searchIndex.ts
   worker.ts
   protocol.ts
 ```
@@ -644,7 +708,7 @@ Immediate rollback/kill-switch triggers:
 - Main-thread lockups attributable to search path
 - Persistent result corruption or nondeterminism
 - Repeated conformance failures in structured-query fixtures
-- Elevated runtime errors in archive render flow
+- Archive render error rate exceeds 2x the pre-rollout baseline rate for the same session population
 
 ## Execution Checklist
 
