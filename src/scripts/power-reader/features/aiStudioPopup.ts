@@ -16,10 +16,56 @@ import type { ReaderState } from '../state';
 import { AI_STUDIO_PROMPT_PREFIX } from '../utils/ai-studio-prompt';
 import { getAIStudioPrefix } from '../utils/storage';
 import { Logger } from '../utils/logger';
+import { sanitizeHtml } from '../utils/sanitize';
 
 declare const GM_setValue: ((key: string, value: any) => void) | undefined;
 declare const GM_openInTab: ((url: string, options?: { active?: boolean }) => void) | undefined;
 declare const GM_addValueChangeListener: ((key: string, callback: (key: string, oldValue: any, newValue: any, remote: boolean) => void) => number) | undefined;
+
+interface AIUserRef {
+  username?: string | null;
+}
+
+interface AIContentRef {
+  markdown?: string | null;
+}
+
+interface AIThreadItem {
+  _id: string;
+  title?: string | null;
+  author?: string | null;
+  user?: AIUserRef | null;
+  contents?: AIContentRef | null;
+  htmlBody?: string | null;
+  postId?: string | null;
+  parentCommentId?: string | null;
+  postedAt?: string | null;
+}
+
+const setStatusMessage = (message: string, color?: string): void => {
+  const statusEl = document.querySelector('.pr-status') as HTMLElement | null;
+  if (!statusEl) return;
+
+  statusEl.textContent = '';
+  if (!color) {
+    statusEl.textContent = message;
+    return;
+  }
+
+  const span = document.createElement('span');
+  span.style.color = color;
+  span.textContent = message;
+  statusEl.appendChild(span);
+};
+
+const escapeXmlText = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+const escapeXmlAttr = (value: string): string =>
+  escapeXmlText(value).replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
 /**
  * Handle sending content to AI Studio
@@ -60,13 +106,12 @@ export const handleSendToAIStudio = async (state: ReaderState, includeDescendant
   Logger.info(`AI Studio: Target identified - ${isPost ? 'Post' : 'Comment'} ${id} (Include descendants: ${includeDescendants})`);
 
   try {
-    const statusEl = document.querySelector('.pr-status');
-    if (statusEl) statusEl.innerHTML = '<span style="color: #007bff;">[AI Studio] Building conversation thread...</span>';
+    setStatusMessage('[AI Studio] Building conversation thread...', '#007bff');
 
     const requestId = Math.random().toString(36).substring(2, 10);
 
     // Build lineage (up to 6 comments + 1 post + focal)
-    const lineage: any[] = [];
+    const lineage: AIThreadItem[] = [];
     let currentId: string | null = id;
     let currentIsPost = isPost;
 
@@ -92,7 +137,7 @@ export const handleSendToAIStudio = async (state: ReaderState, includeDescendant
     }
 
     // Handle descendants if requested
-    let descendants: any[] = [];
+    let descendants: AIThreadItem[] = [];
     if (includeDescendants) {
       if (isPost) {
         // For posts, descendants are all loaded comments for this post
@@ -117,7 +162,7 @@ export const handleSendToAIStudio = async (state: ReaderState, includeDescendant
       }
 
       // Sort descendants by Tree-Karma or date? Let's use date for XML flow.
-      descendants.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
+      descendants.sort((a, b) => new Date(a.postedAt || '').getTime() - new Date(b.postedAt || '').getTime());
 
       // Filter out comments that are in lineage (the focal item itself)
       descendants = descendants.filter(d => d._id !== id);
@@ -140,7 +185,7 @@ export const handleSendToAIStudio = async (state: ReaderState, includeDescendant
       GM_openInTab('https://aistudio.google.com/prompts/new_chat', { active: true });
     }
 
-    if (statusEl) statusEl.innerHTML = '<span style="color: #28a745;">[AI Studio] Opening AI Studio tab...</span>';
+    setStatusMessage('[AI Studio] Opening AI Studio tab...', '#28a745');
   } catch (error) {
     Logger.error('AI Studio: Failed to prepare threaded payload', error);
     alert('Failed to send thread to AI Studio. Check console.');
@@ -154,7 +199,7 @@ const fetchItemMarkdown = async (
   itemId: string,
   itemIsPost: boolean,
   state: ReaderState
-): Promise<any> => {
+): Promise<AIThreadItem | null> => {
   // Check cache
   if (itemIsPost) {
     const p = state.posts.find(p => p._id === itemId);
@@ -168,28 +213,28 @@ const fetchItemMarkdown = async (
   Logger.info(`AI Studio: Fetching ${itemId} source from server...`);
   if (itemIsPost) {
     const res = await queryGraphQL<GetPostQuery, GetPostQueryVariables>(GET_POST, { id: itemId });
-    return res?.post?.result || null;
+    return (res?.post?.result as unknown as AIThreadItem) || null;
   } else {
     const res = await queryGraphQL<GetCommentQuery, GetCommentQueryVariables>(GET_COMMENT, { id: itemId });
-    return res?.comment?.result || null;
+    return (res?.comment?.result as unknown as AIThreadItem) || null;
   }
 };
 
 /**
  * Convert items to nested XML structure
  */
-const toXml = (items: any[], focalId: string, descendants: any[] = []): string => {
+const toXml = (items: AIThreadItem[], focalId: string, descendants: AIThreadItem[] = []): string => {
   if (items.length === 0) return '';
   const item = items[0];
   const remaining = items.slice(1);
 
   const isFocal = item._id === focalId;
-  const type = (item as Post).title ? 'post' : 'comment';
+  const type: 'post' | 'comment' = (item as Post).title ? 'post' : 'comment';
   const author = item.user?.username || item.author || 'unknown';
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
 
-  let xml = `<${type} id="${item._id}" author="${author}"${isFocal ? ' is_focal="true"' : ''}>\n`;
-  xml += `<body_markdown>\n${md}\n</body_markdown>\n`;
+  let xml = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ''}>\n`;
+  xml += `<body_markdown>\n${escapeXmlText(md)}\n</body_markdown>\n`;
 
   if (isFocal && descendants.length > 0) {
     xml += `<descendants>\n`;
@@ -207,15 +252,15 @@ const toXml = (items: any[], focalId: string, descendants: any[] = []): string =
 /**
  * Convert a flat list of descendants to nested XML structure
  */
-const descendantsToXml = (descendants: any[], parentId: string): string => {
+const descendantsToXml = (descendants: AIThreadItem[], parentId: string): string => {
   const children = descendants.filter(d => d.parentCommentId === parentId || (parentId === d.postId && !d.parentCommentId));
   if (children.length === 0) return '';
 
   return children.map(child => {
     const author = child.user?.username || child.author || 'unknown';
     const md = child.contents?.markdown || child.htmlBody || '(no content)';
-    let xml = `<comment id="${child._id}" author="${author}">\n`;
-    xml += `  <body_markdown>\n${md.split('\n').map((l: string) => '    ' + l).join('\n')}\n  </body_markdown>\n`;
+    let xml = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
+    xml += `  <body_markdown>\n${escapeXmlText(md).split('\n').map((l: string) => '    ' + l).join('\n')}\n  </body_markdown>\n`;
     const grandChildrenXml = descendantsToXml(descendants, child._id);
     if (grandChildrenXml) {
       xml += grandChildrenXml.split('\n').map(line => '  ' + line).join('\n') + '\n';
@@ -231,7 +276,7 @@ const descendantsToXml = (descendants: any[], parentId: string): string => {
 export const displayAIPopup = (text: string, state: ReaderState, includeDescendants: boolean = false): void => {
   if (state.activeAIPopup) {
     const content = state.activeAIPopup.querySelector('.pr-ai-popup-content');
-    if (content) content.innerHTML = text;
+    if (content) content.innerHTML = sanitizeHtml(text);
     state.activeAIPopup.classList.toggle('pr-ai-include-descendants', includeDescendants);
     return;
   }
@@ -246,8 +291,11 @@ export const displayAIPopup = (text: string, state: ReaderState, includeDescenda
         <button class="pr-ai-popup-close">Close</button>
       </div>
     </div>
-    <div class="pr-ai-popup-content">${text}</div>
+    <div class="pr-ai-popup-content"></div>
   `;
+
+  const popupContent = popup.querySelector('.pr-ai-popup-content');
+  if (popupContent) popupContent.innerHTML = sanitizeHtml(text);
 
   document.body.appendChild(popup);
   state.activeAIPopup = popup;
@@ -297,8 +345,7 @@ export const initAIStudioListener = (state: ReaderState): void => {
       displayAIPopup(text, state, !!includeDescendants);
 
       // Restore status bar
-      const statusEl = document.querySelector('.pr-status');
-      if (statusEl) statusEl.innerHTML = 'AI Studio response received.';
+      setStatusMessage('AI Studio response received.');
 
       const stickyEl = document.getElementById('pr-sticky-ai-status');
       if (stickyEl) {
@@ -317,9 +364,7 @@ export const initAIStudioListener = (state: ReaderState): void => {
     Logger.debug(`AI Studio Status: ${newVal}`);
 
     const statusEl = document.querySelector('.pr-status');
-    if (statusEl) {
-      statusEl.innerHTML = `<span style="color: #28a745;">[AI Studio] ${newVal}</span>`;
-    }
+    if (statusEl) setStatusMessage(`[AI Studio] ${String(newVal)}`, '#28a745');
 
     const stickyEl = document.getElementById('pr-sticky-ai-status');
     if (stickyEl) {

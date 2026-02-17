@@ -13,6 +13,11 @@ test.describe('Power Reader Hover Previews', () => {
         // Use setupMockEnvironment via initPowerReader
     });
 
+    async function waitAtLeast(ms: number): Promise<void> {
+        const start = Date.now();
+        await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+    }
+
     async function setupDefault(page: any) {
         await initPowerReader(page, {
             testMode: true,
@@ -103,13 +108,13 @@ test.describe('Power Reader Hover Previews', () => {
 
         // Hover to start the timer but not finish it (DELAY is 300ms)
         await parentLink.hover();
-        await page.waitForTimeout(100);
+        await waitAtLeast(100);
 
         // Click should dismiss/cancel
         await parentLink.click();
 
         // Short wait to see if it pops up later
-        await page.waitForTimeout(500);
+        await waitAtLeast(500);
         const preview = page.locator('.pr-preview-overlay');
         await expect(preview).not.toBeVisible();
     });
@@ -120,14 +125,13 @@ test.describe('Power Reader Hover Previews', () => {
         const box = await parentLink.boundingBox();
         if (box) {
             await page.mouse.move(0, 0);
-            await page.waitForTimeout(100);
             await page.evaluate(() => window.scrollTo(0, 100));
             await page.dispatchEvent('body', 'scroll');
             // Element moves under still mouse
             await parentLink.dispatchEvent('mouseenter');
         }
         const preview = page.locator('.pr-preview-overlay');
-        await page.waitForTimeout(600);
+        await waitAtLeast(600);
         await expect(preview).not.toBeVisible();
 
         // Now move the mouse (intentional)

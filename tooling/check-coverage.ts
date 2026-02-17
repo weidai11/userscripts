@@ -18,19 +18,66 @@ function main() {
     const specContent = fs.readFileSync(SPEC_PATH, 'utf8');
     const report = JSON.parse(fs.readFileSync(REPORT_PATH, 'utf8'));
 
-    // 1. Extract all [PR-XXX-00] IDs from SPEC
-    const idRegex = /\[PR-[A-Z]+-[0-9]+\]/g;
-    const allIds = Array.from(new Set(specContent.match(idRegex) || []));
+    // 1. Extract all requirement IDs from SPEC (supports dotted IDs like [PR-FOO-01.1])
+    const idRegex = /\[PR-[A-Z]+-[0-9]+(?:\.[0-9]+)?\]/g;
+    const legacyIds = new Set<string>();
+    const allSpecIds = new Set<string>();
+    const specLines = specContent.split(/\r?\n/);
+    for (const line of specLines) {
+        const matches = line.match(idRegex);
+        if (!matches) continue;
+        matches.forEach(id => allSpecIds.add(id));
+        if (/\blegacy\b/i.test(line)) {
+            matches.forEach(id => legacyIds.add(id));
+        }
+    }
+    const allIds = Array.from(allSpecIds).filter(id => !legacyIds.has(id));
 
     console.log(`
 📊 Power Reader Coverage Audit`);
     console.log(`===============================`);
     console.log(`Total Requirements found in SPEC: ${allIds.length}`);
+    if (legacyIds.size > 0) {
+        console.log(`Excluded legacy requirements: ${legacyIds.size}`);
+    }
 
     // 2. Extract results from report
     // We need to traverse the suite tree in the JSON report
     const testResults = new Map<string, 'passed' | 'failed' | 'skipped'>();
     const idsInTests = new Set<string>();
+
+    type RequirementStatus = 'passed' | 'failed' | 'skipped';
+    function mergeStatus(existing: RequirementStatus | undefined, incoming: RequirementStatus): RequirementStatus {
+        if (existing === 'failed' || incoming === 'failed') return 'failed';
+        if (existing === 'passed' || incoming === 'passed') return 'passed';
+        return 'skipped';
+    }
+
+    function getSpecStatus(spec: any): RequirementStatus {
+        const rawStatuses: string[] = [];
+        if (Array.isArray(spec.tests)) {
+            spec.tests.forEach((testEntry: any) => {
+                if (Array.isArray(testEntry.results)) {
+                    testEntry.results.forEach((result: any) => {
+                        if (typeof result?.status === 'string') {
+                            rawStatuses.push(result.status);
+                        }
+                    });
+                }
+            });
+        }
+
+        if (rawStatuses.length === 0) {
+            return spec.ok ? 'passed' : 'failed';
+        }
+        if (rawStatuses.some(s => ['failed', 'timedOut', 'interrupted'].includes(s))) {
+            return 'failed';
+        }
+        if (rawStatuses.some(s => s === 'passed')) {
+            return 'passed';
+        }
+        return 'skipped';
+    }
 
     function processSuite(suite: any, parentTitle: string = '') {
         const fullSuiteTitle = parentTitle ? `${parentTitle} ${suite.title}` : suite.title;
@@ -38,17 +85,14 @@ function main() {
         if (suite.specs) {
             suite.specs.forEach((spec: any) => {
                 const title = `${fullSuiteTitle} ${spec.title}`;
-                const status = spec.ok ? 'passed' : 'failed';
+                const status = getSpecStatus(spec);
                 // Find all IDs in this combined title
                 const matches = title.match(idRegex);
                 if (matches) {
                     matches.forEach((id: string) => {
                         idsInTests.add(id);
-                        // If multiple tests cover same ID, 'failed' takes precedence
                         const current = testResults.get(id);
-                        if (current !== 'failed') {
-                            testResults.set(id, status);
-                        }
+                        testResults.set(id, mergeStatus(current, status));
                     });
                 }
             });
@@ -63,15 +107,16 @@ function main() {
     // 2b. Scan test logs for any mentioned IDs (even if not in test title)
     const logDir = path.resolve(process.cwd(), 'test_logs');
     if (fs.existsSync(logDir)) {
-        const logFiles = fs.readdirSync(logDir).filter(f => f.endsWith('.log'));
-        // Only scan the most recent few logs to avoid excessive processing
-        logFiles.sort().reverse().slice(0, 5).forEach(file => {
-            const content = fs.readFileSync(path.join(logDir, file), 'utf8');
+        const logFiles = fs.readdirSync(logDir).filter(f => f.endsWith('.log')).sort().reverse();
+        // Scan only the latest run log to avoid stale IDs from prior runs.
+        const latestLog = logFiles[0];
+        if (latestLog) {
+            const content = fs.readFileSync(path.join(logDir, latestLog), 'utf8');
             const matches = content.match(idRegex);
             if (matches) {
                 matches.forEach(id => idsInTests.add(id));
             }
-        });
+        }
     }
 
     // 3. Generate Report
@@ -79,6 +124,7 @@ function main() {
     const missing = allIds.filter(id => !testResults.has(id));
     const passing = covered.filter(id => testResults.get(id) === 'passed');
     const failing = covered.filter(id => testResults.get(id) === 'failed');
+    const skipped = covered.filter(id => testResults.get(id) === 'skipped');
     const orphans = Array.from(idsInTests).filter(id => !allIds.includes(id));
 
     if (failing.length > 0) {
@@ -93,6 +139,12 @@ function main() {
         missing.forEach(id => console.log(`  - ${id}`));
     }
 
+    if (skipped.length > 0) {
+        console.log(`
+⏭️  SKIPPED REQUIREMENTS:`);
+        skipped.forEach(id => console.log(`  - ${id}`));
+    }
+
     if (orphans.length > 0) {
         console.log(`
 🚨 ORPHAN TAGS (Found in tests but NOT in SPEC):`);
@@ -105,12 +157,13 @@ function main() {
     console.log(`Total unique IDs found in tests: ${idsInTests.size}`);
     console.log(`  ✅ Passing: ${passing.length}`);
     console.log(`  ❌ Failing: ${failing.length}`);
+    console.log(`  ⏭️  Skipped: ${skipped.length}`);
     console.log(`  ⚠️  Missing: ${missing.length}`);
     console.log(`===============================
 `);
 
-    if (failing.length > 0 || missing.length > 0) {
-        // process.exit(1); // Optionally fail CI if coverage is missing
+    if (failing.length > 0 || missing.length > 0 || skipped.length > 0) {
+        process.exit(1);
     }
 }
 

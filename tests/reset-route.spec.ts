@@ -28,6 +28,13 @@ test.describe('Power Reader Reset Route', () => {
                 if (url.includes('chunks') || url.includes('bundle.js')) {
                     return route.fulfill({ status: 200, contentType: 'application/javascript', body: '/* mock */' });
                 }
+                if (url.includes('/graphql')) {
+                    return route.fulfill({
+                        status: 200,
+                        contentType: 'application/json',
+                        body: JSON.stringify({ data: {} })
+                    });
+                }
                 console.warn(`[BLOCKER] Aborting un-mocked request: ${url}`);
                 return route.abort();
             }
@@ -35,39 +42,41 @@ test.describe('Power Reader Reset Route', () => {
         });
 
         await page.addInitScript(() => {
-            // Mock storage
-            const storage: Record<string, any> = {
-                'power-reader-read-from': '2023-01-01',
-                'power-reader-read': '{"c1":1}'
+            const snapshotKey = '__PR_RESET_TEST_STORAGE';
+            const deletedKey = '__PR_RESET_TEST_WRITES';
+            const initialStorage: Record<string, any> = {
+                'power-reader-read-from': '2023-01-01T00:00:00.000Z',
+                'power-reader-read': '{"c1":1}',
+                'power-reader-author-prefs': '{"Alice":1}',
+                'power-reader-view-width': '777'
             };
+            const existingSnapshot = localStorage.getItem(snapshotKey);
+            const storage: Record<string, any> = existingSnapshot
+                ? JSON.parse(existingSnapshot)
+                : initialStorage;
+            const writes: Array<{ key: string, value: any }> = [];
 
-            (window as any).GM_getValue = (k: string) => storage[k];
-            // Mock deleteValue (if used) or setValue(null)
-            (window as any).GM_deleteValue = (k: string) => { delete storage[k]; (window as any)._deleted = true; };
+            const persist = () => {
+                localStorage.setItem(snapshotKey, JSON.stringify(storage));
+                localStorage.setItem(deletedKey, JSON.stringify(writes));
+            };
+            persist();
+
+            (window as any).GM_getValue = (k: string, d: any) => {
+                const val = storage[k];
+                return val !== undefined ? val : d;
+            };
+            (window as any).GM_deleteValue = (k: string) => {
+                delete storage[k];
+                writes.push({ key: k, value: '__DELETED__' });
+                persist();
+            };
             (window as any).GM_setValue = (k: string, v: any) => {
-                if (v === null) delete storage[k]; // Polyfill if clearAll uses setValue(null)
-                else storage[k] = v;
+                storage[k] = v;
+                writes.push({ key: k, value: v });
+                persist();
             };
-
-            // Log for debugging
             (window as any).GM_log = (msg: string) => console.log(msg);
-
-            // Mock window.location - NOTE: This is tricky in Playwright as it's readonly-ish.
-            // We'll rely on our userscript using `window.location.href = ...` and validting behavior via spy.
-
-            // We can't easily spy on location.href assignment in JSDOM/Browser env without proxies.
-            // But we can check if it TRIED to set it.
-            let _href = 'https://www.lesswrong.com/reader/reset';
-            Object.defineProperty(window, 'location', {
-                value: {
-                    get href() { return _href; },
-                    set href(v) {
-                        _href = v;
-                        (window as any)._redirectedTo = v;
-                    }
-                },
-                writable: true
-            });
         });
 
         await page.goto('https://www.lesswrong.com/reader/reset', { waitUntil: 'domcontentloaded' });
@@ -83,13 +92,15 @@ test.describe('Power Reader Reset Route', () => {
         await page.waitForURL('**/reader', { timeout: 5000 });
         expect(page.url()).toContain('/reader');
 
-        // Use evaluate to check if storage keys are gone (since we can't inspect the closure variable directly, but the hooks set flags)
-        // Wait, main.ts calls `clearAllStorage`. I should check if `GM_deleteValue` was called.
-        // `src/scripts/power-reader/utils/storage.ts` implementation of clearAllStorage loops over known keys and calls GM_deleteValue or setValue(null)? 
-        // Typically GM_deleteValue. Let's assume standard behavior.
+        const storageSnapshot = await page.evaluate(() => {
+            const raw = localStorage.getItem('__PR_RESET_TEST_STORAGE');
+            return raw ? JSON.parse(raw) : null;
+        });
 
-        // Actually, let's just check if the mock properties we set up were deleted? No, because they are inside addInitScript closure.
-        // We can expose the storage object on window.
-        // Refined idea: expose storage
+        expect(storageSnapshot).toBeTruthy();
+        expect(storageSnapshot['power-reader-read']).toBe('{}');
+        expect(storageSnapshot['power-reader-read-from']).toBe('');
+        expect(storageSnapshot['power-reader-author-prefs']).toBe('{}');
+        expect(storageSnapshot['power-reader-view-width']).toBe('0');
     });
 });

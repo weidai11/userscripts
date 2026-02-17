@@ -54,10 +54,6 @@ test('[PR-READ-01][PR-READ-02][PR-READ-04][PR-LOAD-05][PR-LOAD-10] Power Reader 
     await page.evaluate(() => window.scrollTo(0, 100));
     await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
 
-    // In test mode, scrollMarkDelay is 100ms (configured in setup.ts)
-    // Wait for scroll mark delay (partial scroll)
-    await page.waitForTimeout(500);
-
     // Verify comments still NOT marked as read (visible in viewport)
     await expect(page.locator('.pr-comment').first()).not.toHaveClass(/read/);
     await expect(page.locator('#pr-unread-count')).toHaveText('3');
@@ -65,9 +61,7 @@ test('[PR-READ-01][PR-READ-02][PR-READ-04][PR-LOAD-05][PR-LOAD-10] Power Reader 
     // 6. Scroll past (comments off-screen)
     await page.evaluate(() => window.scrollTo(0, 2500));
     await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
-
-    // Wait for scroll mark delay (full scroll)
-    await page.waitForTimeout(500);
+    await expect(page.locator('.pr-comment').first()).toHaveClass(/read/, { timeout: 5000 });
 
     // 7. Verify at-bottom logic
     await page.evaluate(() => {
@@ -94,10 +88,7 @@ test('[PR-READ-01][PR-READ-02][PR-READ-04][PR-LOAD-05][PR-LOAD-10] Power Reader 
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
 
-    // Wait for scroll mark delay (at bottom)
-    await page.waitForTimeout(500);
-
     // Verify unread-3 is marked as read even if it's visible (because we are at bottom)
-    await expect(page.locator('[data-id="unread-3"]')).toHaveClass(/read/);
+    await expect(page.locator('[data-id="unread-3"]')).toHaveClass(/read/, { timeout: 5000 });
     await expect(page.locator('#pr-unread-count')).toHaveText('0');
 });

@@ -740,7 +740,6 @@ return { data: {} };
      */
     test('supports resync, adaptive batching and shows sync status [PR-UARCH-14][PR-UARCH-15][PR-UARCH-16][PR-UARCH-17]', async ({ page }) => {
         const username = 'resync-test';
-        let syncCount = 0;
 
         await setupMockEnvironment(page, {
             onInit: `window.__syncCount = 0; console.log('Mock init');`,
@@ -937,9 +936,6 @@ return { data: {} };
         // Trigger a rerender by changing sort (this calls rerenderAll internally)
         await page.locator('#archive-sort').selectOption('score');
 
-        // Wait for rerender
-        await page.waitForTimeout(100);
-
         // After rerender, verify the comment is still visible
         const comment = page.locator('.pr-comment[data-id="c-child"]');
         await expect(comment).toBeVisible();
@@ -1126,8 +1122,7 @@ return { data: {} };
         // [P2-FIX] Click Load More and verify sort is maintained
         await loadMoreBtn.click();
 
-        // Wait for Load More to complete
-        await page.waitForTimeout(500);
+        await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
 
         // After Load More, High Karma Post should still be first
         const firstPostHtml = await page.locator('.pr-post').first().innerHTML();
@@ -1249,6 +1244,62 @@ return { data: {} };
         expect(allIndexText).not.toContain('Parent context comment by other user');
     });
 
+    test('[PR-UARCH-38] archive link previews dismiss when mouse leaves trigger', async ({ page }) => {
+        const userId = 'u-preview-test';
+        const userObj = { _id: userId, username: 'PreviewTest_User', displayName: 'Preview Test', slug: 'preview-test-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-preview',
+            title: 'Preview Target Post',
+            slug: 'preview-target-post',
+            pageUrl: 'https://www.lesswrong.com/posts/p-preview/preview-target-post',
+            postedAt: '2025-01-12T12:00:00Z',
+            baseScore: 42,
+            voteCount: 4,
+            commentCount: 0,
+            htmlBody: '<p>Archive post body</p>',
+            contents: { markdown: 'Archive post body' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=PreviewTest_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const authorLink = page.locator('.pr-post .pr-author').first();
+        await expect(authorLink).toBeVisible();
+        await authorLink.hover();
+
+        const preview = page.locator('.pr-preview-overlay.author-preview');
+        await expect(preview).toBeVisible({ timeout: 10000 });
+
+        await page.mouse.move(0, 0);
+        await expect(preview).not.toBeVisible({ timeout: 5000 });
+    });
+
     test('[PR-UARCH-26] Load More preserves link previews and post action buttons', async ({ page }) => {
         const userId = 'u-hooks-test';
         const userObj = { _id: userId, username: 'HooksTest_User', displayName: 'Hooks Test', slug: 'hooks-test-user', karma: 100 };
@@ -1309,7 +1360,6 @@ return { data: {} };
         // Hover over a link to verify link previews are working initially
         const firstLink = page.locator('.pr-post a[href="https://example.com"]');
         await firstLink.hover();
-        await page.waitForTimeout(200);
 
         // Verify Load More button is present
         const loadMoreBtn = page.locator('#archive-load-more button');
@@ -1318,17 +1368,13 @@ return { data: {} };
         // [P2-FIX] Click Load More and verify UI hooks are reinitialized
         await loadMoreBtn.click();
 
-        // Wait for Load More to complete
-        await page.waitForTimeout(500);
-
         // Verify both posts are now visible
-        await expect(page.locator('.pr-post')).toHaveCount(2);
+        await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
 
         // Verify link previews still work after Load More
         const secondLink = page.locator('.pr-post a[href="https://test.com"]');
         await expect(secondLink).toBeVisible();
         await secondLink.hover();
-        await page.waitForTimeout(200);
 
         // If we get here without errors, link previews and post action buttons are working
         // The main assertion is that no errors occur (which would happen if hooks weren't reinitialized)

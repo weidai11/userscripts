@@ -110,12 +110,13 @@ export function calculateTreeKarma(
 
   // Search queue for BFS traversal of the tree
   const queue = [...children];
+  let queueIndex = 0;
 
   // Track visited to prevent infinite loops (shouldn't happen in a tree but safe)
   const visited = new Set<string>([id]);
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex++]!;
     if (visited.has(current._id)) continue;
     visited.add(current._id);
 

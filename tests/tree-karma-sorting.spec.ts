@@ -204,8 +204,13 @@ test.describe('Tree-Karma Sorting [PR-SORT-01][PR-SORT-02][PR-SORT-03]', () => {
         const p2VoteBtn = page.locator('.pr-post[data-id="p2"] [data-action="karma-up"]');
         await p2VoteBtn.click();
 
-        // Wait a bit to ensure NO re-sort happened
-        await page.waitForTimeout(500);
+        // Ensure order remains stable for a short window after voting.
+        const stableSince = Date.now();
+        await expect.poll(async () => {
+            const orderedTitles = await page.locator('.pr-post .pr-post-title').allTextContents();
+            if (orderedTitles[0] !== 'Post 1' || orderedTitles[1] !== 'Post 2') return -1;
+            return Date.now() - stableSince;
+        }, { timeout: 1500 }).toBeGreaterThanOrEqual(500);
 
         // Verify order is UNCHANGED
         titles = await page.locator('.pr-post .pr-post-title').allTextContents();

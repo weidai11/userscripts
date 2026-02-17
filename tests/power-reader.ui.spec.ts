@@ -71,12 +71,11 @@ test.describe('Power Reader UI Interactions', () => {
             window.dispatchEvent(new Event('scroll'));
         });
 
-        await page.waitForTimeout(6500);
-
-        const readStateStr = await page.evaluate(() => (window as any).GM_getValue('power-reader-read', '{}'));
-        const readState = JSON.parse(readStateStr);
-        // c1 is in the default mock comments in setup.ts
-        expect(readState['c1']).toBeDefined();
+        await expect.poll(async () => {
+            const readStateStr = await page.evaluate(() => (window as any).GM_getValue('power-reader-read', '{}'));
+            const readState = JSON.parse(readStateStr);
+            return readState['c1'] ? 1 : 0;
+        }, { timeout: 8000 }).toBe(1);
     });
 
     test('[PR-NEST-01][PR-NEST-02] Clicking post title should toggle body visibility', async ({ page }) => {

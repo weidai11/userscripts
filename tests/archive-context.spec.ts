@@ -73,7 +73,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-full view to trigger context fetching
     await page.locator('#archive-view').selectOption('thread-full');
-    await page.waitForTimeout(500);
 
     // Verify parent context was fetched and rendered
     await expect(page.locator('.pr-comment[data-id="comment-parent"]')).toBeVisible();
@@ -147,11 +146,9 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-full view
     await page.locator('#archive-view').selectOption('thread-full');
-    await page.waitForTimeout(500);
 
     // Verify server fetch occurred
-    const fetchCount = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
-    expect(fetchCount).toBeGreaterThan(0);
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_FETCH_COUNT__)).toBeGreaterThan(0);
 
     // Verify parent rendered with full content
     await expect(page.locator('.pr-comment[data-id="comment-parent"] > .pr-comment-body').first()).toContainText('Fetched parent content');
@@ -212,7 +209,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-placeholder view
     await page.locator('#archive-view').selectOption('thread-placeholder');
-    await page.waitForTimeout(500);
 
     // Verify NO server fetch occurred
     const fetchCount = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
@@ -332,7 +328,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to index view
     await page.locator('#archive-view').selectOption('index');
-    await page.waitForTimeout(300);
 
     // Verify index row exists
     const indexRow = page.locator('.pr-archive-index-item[data-id="comment-test"]');
@@ -340,7 +335,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Click to expand
     await indexRow.click();
-    await page.waitForTimeout(300);
 
     // Verify expanded to card view
     await expect(page.locator('.pr-index-expanded[data-id="comment-test"]')).toBeVisible();
@@ -349,7 +343,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Click collapse button
     await page.locator('.pr-index-collapse-btn[data-id="comment-test"]').click();
-    await page.waitForTimeout(300);
 
     // Verify back to index row
     await expect(page.locator('.pr-archive-index-item[data-id="comment-test"]')).toBeVisible();
@@ -403,7 +396,6 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to card view
     await page.locator('#archive-view').selectOption('card');
-    await page.waitForTimeout(300);
 
     // Get parent stub
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
@@ -485,9 +477,9 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-full (triggers fetch)
     await page.locator('#archive-view').selectOption('thread-full');
-    await page.waitForTimeout(500);
 
     // Verify fetch occurred
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_FETCH_COUNT__)).toBeGreaterThan(0);
     const fetchCountAfterFirst = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
     expect(fetchCountAfterFirst).toBeGreaterThan(0);
 
@@ -496,7 +488,7 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to card view
     await page.locator('#archive-view').selectOption('card');
-    await page.waitForTimeout(300);
+    await expect(page.locator('#archive-view')).toHaveValue('card');
 
     // Verify context still exists (not re-fetched but persisted)
     const fetchCountAfterCard = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
@@ -504,7 +496,7 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch back to thread-full
     await page.locator('#archive-view').selectOption('thread-full');
-    await page.waitForTimeout(300);
+    await expect(page.locator('#archive-view')).toHaveValue('thread-full');
 
     // Verify still no additional fetches
     const fetchCountAfterReturn = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
@@ -537,7 +529,7 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Verify thread modes disable Reply To sort option
     await page.locator('#archive-view').selectOption('card');
-    await page.waitForTimeout(200);
+    await expect(page.locator('#archive-view')).toHaveValue('card');
     
     // Reply To should be enabled in card view
     const replyToOptionCard = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);
@@ -545,7 +537,7 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-full
     await page.locator('#archive-view').selectOption('thread-full');
-    await page.waitForTimeout(200);
+    await expect(page.locator('#archive-view')).toHaveValue('thread-full');
 
     // Reply To should be disabled in thread view
     const replyToOptionThread = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);
@@ -553,7 +545,7 @@ test.describe('User Archive Context Type & View Modes', () => {
 
     // Switch to thread-placeholder
     await page.locator('#archive-view').selectOption('thread-placeholder');
-    await page.waitForTimeout(200);
+    await expect(page.locator('#archive-view')).toHaveValue('thread-placeholder');
 
     // Reply To should still be disabled
     const replyToOptionPlaceholder = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);

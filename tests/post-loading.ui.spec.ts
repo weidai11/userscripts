@@ -179,17 +179,18 @@ test.describe('Power Reader Post Loading', () => {
 
         // Scroll away from the post header
         await page.evaluate(() => window.scrollTo(0, 500));
-        await page.waitForTimeout(100);
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThanOrEqual(500);
 
         const postHeader = page.locator('.pr-post-header').first();
         await postHeader.click();
 
         // Should scroll to the post header (near top)
-        await page.waitForTimeout(500);
-        const headerTop = await page.evaluate(() =>
-            document.querySelector('.pr-post-header')?.getBoundingClientRect().top
-        );
-        expect(headerTop).toBeLessThan(100);
+        await expect.poll(async () => {
+            const headerTop = await page.evaluate(() =>
+                document.querySelector('.pr-post-header')?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY
+            );
+            return headerTop;
+        }).toBeLessThan(100);
     });
 
     test('[PR-POSTBTN-01] [e] button loads post body when missing and expands it', async ({ page }) => {

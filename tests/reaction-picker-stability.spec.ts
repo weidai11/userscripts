@@ -26,11 +26,13 @@ test('Reaction picker stays open after clicking the + button', async ({ page }) 
     await expect(picker).toBeVisible();
     await expect(picker).toHaveClass(/visible/);
 
-    // Wait a bit to ensure it doesn't disappear
-    await page.waitForTimeout(500);
-
-    // It should still be visible
-    await expect(picker).toBeVisible();
+    // Ensure it stays visible for a short stability window.
+    const visibleSince = Date.now();
+    await expect.poll(async () => {
+        const isVisible = await picker.isVisible();
+        if (!isVisible) return -1;
+        return Date.now() - visibleSince;
+    }, { timeout: 1500 }).toBeGreaterThanOrEqual(500);
 
     // Click elsewhere (e.g. on the post header)
     await page.click('.pr-header h1');

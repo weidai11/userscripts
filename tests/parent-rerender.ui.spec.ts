@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 test.describe('Power Reader Post-Rerender Event Reattachment', () => {
 
     test('[PR-NAV-10] Hover previews work on re-rendered comments after deep loading a parent', async ({ page }) => {
@@ -54,7 +59,7 @@ test.describe('Power Reader Post-Rerender Event Reattachment', () => {
         await expect(parentComment).toBeAttached();
 
         // Wait for scroll cooldown (click or re-render might have triggered a scroll event)
-        await page.waitForTimeout(500);
+        await waitAtLeast(500);
 
         // The child was re-rendered — locate the new [^] button
         const newChildComment = page.locator(`.pr-comment[data-id="${childId}"]`);

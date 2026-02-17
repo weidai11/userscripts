@@ -49,6 +49,7 @@ export interface MockSetupOptions {
     appVerbose?: boolean;
     testMode?: boolean;
     skipStorageDefaults?: boolean;
+    strictGraphQL?: boolean;
 }
 
 interface SerializedMockData {
@@ -62,6 +63,7 @@ interface SerializedMockData {
     onGraphQL: string | null;
     testMode: boolean;
     verbose: boolean;
+    strictGraphQL: boolean;
 }
 
 const DEFAULT_SCRAPED_REACTIONS = [
@@ -195,6 +197,7 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
         onGraphQL: opts.onGraphQL ?? opts.onMutation ?? null,
         testMode: opts.testMode ?? false,
         verbose: opts.verbose ?? false,
+        strictGraphQL: opts.strictGraphQL ?? true,
     };
 
     await page.addInitScript((data: SerializedMockData) => {
@@ -238,30 +241,58 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                         try {
                             const handler = new Function('query', 'variables', 'body', data.onGraphQL);
                             const res = handler(query, variables, body);
-                            if (res) { setTimeout(() => options.onload({ responseText: JSON.stringify(res) }), 10); return; }
+                            if (res !== null && res !== undefined) {
+                                setTimeout(() => options.onload({ responseText: JSON.stringify(res) }), 10);
+                                return;
+                            }
                         } catch (e) {
                             console.error('Error in onGraphQL handler:', e);
+                            if (data.strictGraphQL) {
+                                const msg = `Strict GraphQL mock: onGraphQL handler threw for query ${query.substring(0, 80)}`;
+                                if (options.onerror) {
+                                    options.onerror({ message: msg });
+                                } else {
+                                    throw new Error(msg);
+                                }
+                                return;
+                            }
                         }
                     }
 
+                    let handled = false;
                     let resp: any = { data: {} };
-                    if (query.includes('GetCurrentUser')) resp = { data: { currentUser: data.currentUser } };
-                    else if (query.includes('GetSubscriptions')) resp = { data: { subscriptions: { results: data.subscriptions } } };
-                    else if (query.includes('GetAllRecentComments') || query.includes('allRecentComments')) resp = { data: { comments: { results: data.comments } } };
-                    else if (query.includes('GetNewPosts')) resp = { data: { posts: { results: data.posts } } };
+                    if (query.includes('GetCurrentUser')) {
+                        handled = true;
+                        resp = { data: { currentUser: data.currentUser } };
+                    }
+                    else if (query.includes('GetSubscriptions')) {
+                        handled = true;
+                        resp = { data: { subscriptions: { results: data.subscriptions } } };
+                    }
+                    else if (query.includes('GetAllRecentComments') || query.includes('allRecentComments')) {
+                        handled = true;
+                        resp = { data: { comments: { results: data.comments } } };
+                    }
+                    else if (query.includes('GetNewPosts')) {
+                        handled = true;
+                        resp = { data: { posts: { results: data.posts } } };
+                    }
                     else if (query.includes('GetThreadComments')) {
+                        handled = true;
                         const rootId = variables.topLevelCommentId;
                         const results = data.comments.filter(c =>
                             c.topLevelCommentId === rootId || c._id === rootId
                         );
                         resp = { data: { comments: { results } } };
                     } else if (query.includes('GetCommentReplies')) {
+                        handled = true;
                         const parentId = variables.parentCommentId || variables.commentId;
                         const results = data.comments.filter(c =>
                             (c as any).parentCommentId === parentId
                         );
                         resp = { data: { comments: { results } } };
                     } else if (query.includes('GetRepliesBatch')) {
+                        handled = true;
                         const results: any = {};
                         Object.keys(variables).forEach(key => {
                             if (key.startsWith('id')) {
@@ -272,6 +303,7 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                         });
                         resp = { data: results };
                     } else if (query.includes('GetThreadsBatch')) {
+                        handled = true;
                         const results: any = {};
                         Object.keys(variables).forEach(key => {
                             if (key.startsWith('id')) {
@@ -284,16 +316,20 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                         });
                         resp = { data: results };
                     } else if (query.includes('GetCommentsByIds')) {
+                        handled = true;
                         const ids = new Set(variables.commentIds || []);
                         const results = data.comments.filter(c => ids.has(c._id as string));
                         resp = { data: { comments: { results } } };
                     } else if (query.includes('GetPost')) {
+                        handled = true;
                         const post = data.posts.find(p => p._id === variables.id);
                         resp = { data: { post: { result: post } } };
                     } else if (query.includes('GetComment')) {
+                        handled = true;
                         const comment = data.comments.find(c => c._id === variables.id);
                         resp = { data: { comment: { result: comment } } };
                     } else if (query.includes('GetUser')) {
+                        handled = true;
                         // Find user in comments or posts
                         let user = null;
                         for (const c of data.comments) {
@@ -311,6 +347,18 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                             }
                         }
                         resp = { data: { user: { result: user } } };
+                    }
+
+                    if (!handled && data.strictGraphQL) {
+                        const compactQuery = query.replace(/\s+/g, ' ').trim().slice(0, 120);
+                        const msg = `Strict GraphQL mock: Unhandled query "${compactQuery}"`;
+                        console.error(msg);
+                        if (options.onerror) {
+                            options.onerror({ message: msg });
+                        } else {
+                            throw new Error(msg);
+                        }
+                        return;
                     }
 
                     setTimeout(() => options.onload({ responseText: JSON.stringify(resp) }), 10);

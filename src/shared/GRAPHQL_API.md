@@ -134,8 +134,9 @@ query GetCurated($limit: Int, $offset: Int) {
 
 #### Filtering Parameters
 Most post views (e.g., `new`, `top`, `magic`) support standard filtering terms handled by the `defaultView`.
-- **`after`**: ISO 8601 Date String (e.g., `2024-01-01`). Select posts created **on or after** this date (`$gte`).
-- **`before`**: ISO 8601 Date String. Select posts created **strictly before** this date (`$lt`).
+- **`after`**: ISO 8601 Date String (e.g., `2024-01-01`). Select items created **on or after** this date (`$gte`).
+- **`before`**: ISO 8601 Date String. Select items created **strictly before** this date (`$lt`).
+- **`timeField`**: `String`. The field to apply `after` and `before` filters to. Defaults to `postedAt`. Use `"modifiedAt"` for incremental syncs.
 - **`karmaThreshold`**: `Int`. Filter by minimum `baseScore`.
 - **`userId`**: `String`. Filter by author ID.
 - **`af`**: `Boolean`. Filter for Alignment Forum posts.
@@ -158,6 +159,25 @@ The API enforces a strict `offset` limit of **2000** (definedByKey `maxAllowedAp
 **Preferred Method: Date-Based Pagination**
 **Preferred Method: Date-Based Pagination**
 Standard views like `recentComments` / `allRecentComments` (for comments) and `new` / `top` (for posts) support `after` and `before` terms. This is the **standard way** to fetch items in chronological order without hitting the 2000-deep offset limit.
+
+### Incremental Synchronization (Syncing Edits)
+For clients performing incremental syncs, fetching only content that has changed since the last sync is critical.
+
+| Collection | Filter Field | Selector Argument | Status |
+| :--- | :--- | :--- | :--- |
+| **Posts** | `modifiedAt` | `timeField: "modifiedAt"` | **Supported**. All `defaultView` based views support this. |
+| **Comments** | `lastEditedAt` | N/A | **Partial / Not Supported**. `lastEditedAt` exists but cannot be filtered via `timeField` yet. |
+
+#### Syncing Posts by Edit Time
+```graphql
+query SyncModifiedPosts($after: Date) {
+  posts(selector: {
+    new: { after: $after, timeField: "modifiedAt" }
+  }) {
+    results { _id title modifiedAt }
+  }
+}
+```
  
  ```graphql
 query GetCommentsByDate($after: String, $limit: Int) {
@@ -211,6 +231,7 @@ Comments are primarily fetched via the `comments` query.
 - `userId`: Filter by author.
 - `karmaThreshold`: `Int`. Minimum score (e.g., `karmaThreshold: 30`).
 - `after`, `before`: ISO 8601 Date strings. Filter by `postedAt`. (Now supported by `recentComments` and `allRecentComments`).
+- **Note**: `timeField` is **not** currently supported for comments. Filtering is always against `postedAt`.
 
 **Sorting**
 While many views have intrinsic sorts (e.g. `new` sorts by date), you can sometimes override this with `sortedBy` in the selector terms.

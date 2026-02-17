@@ -41,9 +41,6 @@ test.describe('Post Read Tracking', () => {
         // The post should be marked as read once its body scrolls past, even though
         // comments below it are still visible.
 
-        // Wait for ReadTracker delay (100ms in testMode)
-        await page.waitForTimeout(500);
-
         const postClass = await postItem.getAttribute('class');
         console.log('Post classes after scrolling past body but not comments:', postClass);
 

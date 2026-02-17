@@ -44,6 +44,17 @@ const addSharedStyles = (): void => {
     #pr-header-links-container a:hover {
       opacity: 0.7 !important;
     }
+    #pr-header-links-container .pr-header-chip {
+      background: #111;
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-weight: 900;
+      letter-spacing: 0.5px;
+      line-height: 1;
+      white-space: nowrap;
+    }
     #pr-archive-link {
       margin-left: 8px;
     }
@@ -69,18 +80,8 @@ const createReaderLink = (): HTMLAnchorElement => {
 
   link.innerHTML = `
     <span class="MuiButton-label">
-      <span class="UsersMenu-userButtonContents" style="display: flex; align-items: center; gap: 6px;">
-        <span style="
-          background: #333; 
-          color: #fff; 
-          padding: 2px 5px; 
-          border-radius: 3px; 
-          font-size: 0.75em; 
-          font-weight: 900;
-          letter-spacing: 0.5px;
-          line-height: 1;
-        ">POWER</span>
-        <span style="font-weight: 500;">Reader</span>
+      <span class="UsersMenu-userButtonContents">
+        <span class="pr-header-chip">Power Reader</span>
       </span>
     </span>
   `;
@@ -102,8 +103,8 @@ const createArchiveLink = (username: string): HTMLAnchorElement => {
 
   link.innerHTML = `
     <span class="MuiButton-label">
-      <span class="UsersMenu-userButtonContents" style="font-weight: 500;">
-        User Archive
+      <span class="UsersMenu-userButtonContents">
+        <span class="pr-header-chip">User Archive</span>
       </span>
     </span>
   `;

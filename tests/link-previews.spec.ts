@@ -1,5 +1,15 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { getScriptContent, initPowerReader, setupMockEnvironment } from './helpers/setup';
+
+async function hoverTrigger(link: Locator): Promise<void> {
+    await expect(link).toBeVisible();
+    await link.hover();
+}
+
+async function waitForNegativePreviewWindow(minDelayMs: number = 700): Promise<void> {
+    const startedAt = Date.now();
+    await expect.poll(() => Date.now() - startedAt, { timeout: minDelayMs + 1000 }).toBeGreaterThanOrEqual(minDelayMs);
+}
 
 test.describe('Link Previews in Comment Bodies', () => {
     test('[PR-PREV-08] Previews post links in comment bodies', async ({ page }) => {
@@ -41,15 +51,7 @@ test.describe('Link Previews in Comment Bodies', () => {
         });
 
         const link = page.locator('#post-link');
-        await expect(link).toBeVisible();
-
-        // Stabilized Hover sequence
-        await page.waitForTimeout(500); // Wait for settle
-        const box = await link.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await link.dispatchEvent('mouseenter');
-        }
+        await hoverTrigger(link);
 
         // Wait for preview delay (300ms) + fetch
         const preview = page.locator('.pr-preview-overlay.post-preview');
@@ -94,15 +96,7 @@ test.describe('Link Previews in Comment Bodies', () => {
         });
 
         const link = page.locator('#user-link');
-        await expect(link).toBeVisible();
-
-        // Stabilized Hover sequence
-        await page.waitForTimeout(500);
-        const box = await link.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await link.dispatchEvent('mouseenter');
-        }
+        await hoverTrigger(link);
 
         const preview = page.locator('.pr-preview-overlay.author-preview');
         await expect(preview).toBeVisible({ timeout: 10000 });
@@ -112,7 +106,7 @@ test.describe('Link Previews in Comment Bodies', () => {
         await expect(preview).toContainText('1235 karma'); // Rounded
     });
 
-    test('[PR-PREV-08.1] Does not preview external post-like links', async ({ page }) => {
+    test('[PR-PREV-08] Does not preview external post-like links', async ({ page }) => {
         const comments = [
             {
                 _id: 'c1',
@@ -139,22 +133,16 @@ test.describe('Link Previews in Comment Bodies', () => {
         });
 
         const link = page.locator('#external-post-link');
-        await expect(link).toBeVisible();
+        await hoverTrigger(link);
 
-        const box = await link.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await link.dispatchEvent('mouseenter');
-        }
-
-        await page.waitForTimeout(700);
+        await waitForNegativePreviewWindow();
         await expect(page.locator('.pr-preview-overlay.post-preview')).toHaveCount(0);
 
         const calls = await page.evaluate(() => (window as any).__GET_POST_CALLS || 0);
         expect(calls).toBe(0);
     });
 
-    test('[PR-PREV-09.1] Does not preview protocol-relative external author links', async ({ page }) => {
+    test('[PR-PREV-09] Does not preview protocol-relative external author links', async ({ page }) => {
         const comments = [
             {
                 _id: 'c1',
@@ -181,15 +169,9 @@ test.describe('Link Previews in Comment Bodies', () => {
         });
 
         const link = page.locator('#external-user-link');
-        await expect(link).toBeVisible();
+        await hoverTrigger(link);
 
-        const box = await link.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await link.dispatchEvent('mouseenter');
-        }
-
-        await page.waitForTimeout(700);
+        await waitForNegativePreviewWindow();
         await expect(page.locator('.pr-preview-overlay.author-preview')).toHaveCount(0);
 
         const calls = await page.evaluate(() => (window as any).__GET_USER_BY_SLUG_CALLS || 0);
@@ -237,13 +219,7 @@ test.describe('Link Previews in Comment Bodies', () => {
 
         const link = page.locator('#wiki-link');
         await page.waitForSelector('#wiki-link', { state: 'visible', timeout: 5000 });
-        await expect(link).toBeVisible();
-
-        const box = await link.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-            await link.dispatchEvent('mouseenter');
-        }
+        await hoverTrigger(link);
 
         const preview = page.locator('.pr-preview-overlay.wiki-preview');
         await expect(preview).toBeVisible({ timeout: 10000 });

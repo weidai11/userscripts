@@ -21,6 +21,10 @@ import type {
 
 const HOVER_DELAY = 300; // ms
 
+type UserByIdResult = NonNullable<NonNullable<GetUserQuery['user']>['result']>;
+type UserBySlugResult = NonNullable<GetUserBySlugQuery['user']>;
+type UserPreviewData = UserByIdResult | UserBySlugResult;
+
 interface PreviewState {
   activePreview: HTMLElement | null;
   triggerRect: DOMRect | null;
@@ -145,7 +149,7 @@ function handleGlobalClick(e: MouseEvent): void {
         // Actually, always prevent if we handle it manually to avoid double opening
         e.preventDefault();
         e.stopPropagation();
-        window.open(href, '_blank');
+        openInNewTab(href);
       } else {
         // Normal click on a trigger link: navigate in same tab
         e.preventDefault();
@@ -676,6 +680,11 @@ function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
+function openInNewTab(url: string): void {
+  const opened = window.open(url, '_blank', 'noopener,noreferrer');
+  if (opened) opened.opener = null;
+}
+
 /**
  * Parse URL safely with current origin as base.
  */
@@ -825,7 +834,7 @@ export function createWikiPreviewFetcher(slug: string): () => Promise<string> {
       const titleEl = doc.querySelector('h1, .TagPage-title');
 
       const title = titleEl?.textContent || slug;
-      const content = contentEl?.innerHTML || '<i>(Unable to load wiki content)</i>';
+      const content = sanitizeHtml(contentEl?.innerHTML || '<i>(Unable to load wiki content)</i>');
 
       return `
         <div class="pr-preview-header">
@@ -877,8 +886,10 @@ export function createAuthorBySlugPreviewFetcher(slug: string): () => Promise<st
 /**
  * Helper to render user preview html
  */
-function renderUserPreview(user: any): string {
-  const archiveLink = `/reader?view=archive&username=${user.slug || user.username}`;
+function renderUserPreview(user: UserPreviewData): string {
+  const archiveTarget = user.slug || user.username || '';
+  const archiveLink = `/reader?view=archive&username=${encodeURIComponent(archiveTarget)}`;
+  const safeBio = sanitizeHtml(user.htmlBio || '<i>(No bio provided)</i>');
   return `
     <div class="pr-preview-header">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -896,7 +907,7 @@ function renderUserPreview(user: any): string {
       </div>
     </div>
     <div class="pr-preview-content">
-      ${user.htmlBio || '<i>(No bio provided)</i>'}
+      ${safeBio}
     </div>
   `;
 }

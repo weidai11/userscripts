@@ -307,7 +307,7 @@ const renderHelpSection = (showHelp: boolean): string => {
         <div class="pr-settings-group">
           <label for="pr-ai-prefix-input"><strong>AI Studio Prompt Prefix:</strong></label>
           <p style="font-size: 0.8em; color: #888; margin-top: 5px;">This text is sent to AI Studio before the thread content. Leave blank to use the default.</p>
-          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;">${getAIStudioPrefix() || AI_STUDIO_PROMPT_PREFIX}</textarea>
+          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
           <div style="margin-top: 5px;">
             <button id="pr-save-ai-prefix-btn" class="pr-debug-btn">Save Prefix</button>
             <button id="pr-reset-ai-prefix-btn" class="pr-debug-btn">Reset to Default</button>
@@ -514,6 +514,10 @@ const setupAISettings = (): void => {
   const saveBtn = document.getElementById('pr-save-ai-prefix-btn');
   const resetBtn = document.getElementById('pr-reset-ai-prefix-btn');
   const input = document.getElementById('pr-ai-prefix-input') as HTMLTextAreaElement;
+
+  if (input) {
+    input.value = getAIStudioPrefix() || AI_STUDIO_PROMPT_PREFIX;
+  }
 
   if (saveBtn && input) {
     saveBtn.addEventListener('click', (e) => {

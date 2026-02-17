@@ -45,7 +45,6 @@ test.describe('Power Reader UI Refinements', () => {
         // Close it
 
         await help.locator('summary').click();
-        await page.waitForTimeout(200);
         await expect(help).not.toHaveAttribute('open');
     });
 

@@ -291,9 +291,6 @@ if (query.includes('GetCommentsByIds')) {
   // Trigger a rerender by changing sort mode
   await page.locator('#archive-sort').selectOption('score');
 
-  // Wait for rerender
-  await page.waitForTimeout(100);
-
   // [WS1-FIX] Verify both comments are still visible after rerender
   // This tests that canonical state sync preserves fetched context
   const parentAfterRerender = page.locator('.pr-comment[data-id="c-parent"]');

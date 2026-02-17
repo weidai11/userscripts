@@ -47,7 +47,7 @@ jj git push
 ## 🛠 Tech Stack
 - **Vite** + **TypeScript** + **[vite-plugin-monkey](https://github.com/lisonge/vite-plugin-monkey)**.
 - **GraphQL**: Type-safe queries with `graphql-codegen` (runs automatically on `dev`/`build`).
-- **Playwright**: Robust E2E testing suite (100% mocked by default, **268/268 passed**).
+- **Playwright**: Robust E2E testing suite (100% mocked by default; see `npx playwright test --list` for current count).
 
 ## 📜 Documentation & Guides
 - **[AGENTS.md](./AGENTS.md)**: AI-friendly guide to architecture, commands, and conventions.
@@ -80,4 +80,4 @@ The foundation is now live! You can access the archive via `https://www.lesswron
 - **Export**: Download full history as **JSON**, **Markdown**, or **HTML** for personal backups or LLM fine-tuning.
 
 ## 🔗 References
-[CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./src/scripts/power-reader/old_power_reader_doc.md) | [Old Source](./src/scripts/power-reader/old_power_reader.js)
+[CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./archive/old_power_reader_doc.md) | [Old Source](./archive/old_power_reader.js)

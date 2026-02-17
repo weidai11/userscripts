@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 test.describe('Power Reader Parent Navigation', () => {
 
     test.beforeEach(async ({ page }) => {
@@ -33,7 +38,6 @@ test.describe('Power Reader Parent Navigation', () => {
         // Click [^]
         const btn = page.locator('.pr-find-parent').first();
         await btn.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(500);
         await btn.click();
 
         // Expect Post Header to have highlight class
@@ -73,7 +77,7 @@ test.describe('Power Reader Parent Navigation', () => {
         await expect(header).toHaveClass(/pr-parent-hover/);
 
         // Wait for hover delay to ensure no preview appears
-        await page.waitForTimeout(500);
+        await waitAtLeast(500);
 
         // Should NOT show preview popup
         const preview = page.locator('.pr-preview-overlay');
@@ -147,7 +151,7 @@ test.describe('Power Reader Parent Navigation', () => {
         });
 
         // Wait for scroll cooldown (300ms) in isIntentionalHover
-        await page.waitForTimeout(400);
+        await waitAtLeast(400);
 
         // Debug info from browser
         const debugInfo = await page.evaluate(() => {
@@ -173,8 +177,14 @@ test.describe('Power Reader Parent Navigation', () => {
         await expect(sticky).toHaveClass(/visible/, { timeout: 15000 });
 
         const btn = page.locator('.pr-find-parent').first();
-        // Use .hover() to move mouse and trigger intentionality logic
-        await btn.hover();
+        const btnBox = await btn.boundingBox();
+        if (btnBox) {
+            await page.mouse.move(0, 0);
+            await page.mouse.move(btnBox.x + btnBox.width / 2, btnBox.y + btnBox.height / 2);
+            await btn.dispatchEvent('mouseenter');
+        } else {
+            await btn.hover();
+        }
 
         const headerInSticky = sticky.locator('.pr-post-header').first();
         await expect(headerInSticky).toHaveClass(/pr-parent-hover/);
@@ -202,12 +212,12 @@ test.describe('Power Reader Parent Navigation', () => {
         const header = page.locator('.pr-post[data-id="p1"] .pr-post-header').first();
 
         await btn.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(500);
+        await waitAtLeast(500);
 
-        const headerBox = await header.boundingBox();
-        if (headerBox) {
-            expect(headerBox.y + headerBox.height).toBeLessThan(0);
-        }
+        await expect.poll(async () => {
+            const headerBox = await header.boundingBox();
+            return headerBox ? headerBox.y + headerBox.height : Number.POSITIVE_INFINITY;
+        }).toBeLessThan(0);
 
         // Hover
         await btn.hover();

@@ -14,6 +14,7 @@ import { initAIStudioListener } from '../features/aiStudioPopup';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupInlineReactions } from '../features/inlineReactions';
 import { setupLinkPreviews } from '../features/linkPreviews';
+import { initPreviewSystem } from '../utils/preview';
 import { refreshPostActionButtons } from '../utils/dom';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
@@ -44,6 +45,7 @@ export const initArchive = async (username: string): Promise<void> => {
     executeTakeover();
     await initializeReactions();
     rebuildDocument();
+    initPreviewSystem();
 
     const state = createInitialArchiveState(username);
     const root = document.getElementById('power-reader-root');
@@ -758,7 +760,11 @@ export const initArchive = async (username: string): Promise<void> => {
     Logger.error('Failed to initialize archive:', err);
     const root = document.getElementById('power-reader-root');
     if (root) {
-      root.innerHTML = `<div class="pr-error">Failed to load archive: ${(err as Error).message}</div>`;
+      const errorEl = document.createElement('div');
+      errorEl.className = 'pr-error';
+      const message = err instanceof Error ? err.message : String(err);
+      errorEl.textContent = `Failed to load archive: ${message}`;
+      root.replaceChildren(errorEl);
     }
   }
 };

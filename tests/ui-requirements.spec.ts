@@ -32,9 +32,6 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
 
         await initPowerReader(page, { posts, comments: [], testMode: true });
 
-        // Wait a frame for DOM height check
-        await page.waitForTimeout(200);
-
         const btnE = page.locator('.pr-post[data-id="p1"] [data-action="toggle-post-body"]');
         await expect(btnE).toHaveClass(/disabled/);
         await expect(btnE).toHaveAttribute('title', 'Post fits within viewport without truncation');
@@ -100,8 +97,7 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
 
         // Scroll deep into the post and wait for scroll stabilization
         await page.evaluate(() => window.scrollTo(0, 1500));
-        // Wait for any scroll momentum/animations to complete
-        await page.waitForTimeout(100);
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThanOrEqual(1500);
 
         // Ensure sticky header is visible with explicit wait
         const stickyHeader = page.locator('#pr-sticky-header');
@@ -321,9 +317,6 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         // Scroll deep into p1 so its header is gone but its body is still visible
         const headerTop = await header.evaluate(el => el.getBoundingClientRect().top + window.pageYOffset);
         await page.evaluate((top) => window.scrollTo(0, top + 500), headerTop);
-
-        // Wait for scroll event to process and sticky header to update
-        await page.waitForTimeout(200);
 
         const stickyHeader = page.locator('.pr-sticky-header');
         await expect(stickyHeader).toHaveClass(/visible/);

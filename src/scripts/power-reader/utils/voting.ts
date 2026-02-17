@@ -16,6 +16,11 @@ export type AgreementVote = 'agree' | 'disagree' | 'neutral';
 
 const LOGIN_URL = `${window.location.origin}/auth/auth0`;
 
+const openLoginPage = (): void => {
+  const opened = window.open(LOGIN_URL, '_blank', 'noopener,noreferrer');
+  if (opened) opened.opener = null;
+};
+
 /**
  * Cast a karma vote on a comment
  */
@@ -29,7 +34,7 @@ export async function castKarmaVote(
   Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
   if (!isLoggedIn) {
     Logger.info('Not logged in, opening auth page');
-    window.open(LOGIN_URL, '_blank');
+    openLoginPage();
     return null;
   }
 
@@ -68,7 +73,7 @@ export async function castAgreementVote(
   documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
   if (!isLoggedIn) {
-    window.open(LOGIN_URL, '_blank');
+    openLoginPage();
     return null;
   }
 
@@ -113,7 +118,7 @@ export async function castReactionVote(
   quote: string | null = null
 ): Promise<VoteResponse | null> {
   if (!isLoggedIn) {
-    window.open(LOGIN_URL, '_blank');
+    openLoginPage();
     return null;
   }
 

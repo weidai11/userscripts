@@ -92,8 +92,9 @@ test('[PR-URL-01] Power Reader should not activate on non-/reader paths', async 
     const scriptContent = getScriptContent();
     await page.evaluate(scriptContent);
 
-    // Wait and verify NO UI is rendered
-    await page.waitForTimeout(1000);
+    // Verify NO UI is rendered
+    await expect(page.locator('#power-reader-root')).toHaveCount(0, { timeout: 1000 });
+    await expect(page.locator('#lw-power-reader-ready-signal')).toHaveCount(0, { timeout: 1000 });
     const hasRoot = await page.evaluate(() => !!document.getElementById('power-reader-root'));
     const isReady = await page.evaluate(() => !!document.getElementById('lw-power-reader-ready-signal'));
 

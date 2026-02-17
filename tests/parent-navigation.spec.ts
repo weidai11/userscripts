@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 test.describe('Power Reader Parent Navigation', () => {
 
     test('Clicking [^] scrolls to parent and highlights it', async ({ page }) => {
@@ -101,7 +106,7 @@ test.describe('Power Reader Parent Navigation', () => {
         });
 
         // Wait for scroll cooldown (intentionality check)
-        await page.waitForTimeout(500);
+        await waitAtLeast(500);
 
         // 2. Hover Find Parent button
         const findParentBtn = childComment.locator('[data-action="find-parent"]');

@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 test.describe('Power Reader Highlight Visibility', () => {
 
     test('[PR-NAV-03] Hovering Parent Link [^] highlights parent when fully visible', async ({ page }) => {
@@ -147,8 +152,6 @@ test.describe('Power Reader Highlight Visibility', () => {
             }
         });
 
-        await page.waitForTimeout(500);
-
         // Verify sticky header is visible
         const stickyHeader = page.locator('.pr-sticky-header.visible .pr-post-header[data-post-id="post3"]');
         await expect(stickyHeader).toBeVisible();
@@ -157,7 +160,7 @@ test.describe('Power Reader Highlight Visibility', () => {
         await findParentBtn.scrollIntoViewIfNeeded();
 
         // Settle time after scroll and before mouse move
-        await page.waitForTimeout(1000);
+        await waitAtLeast(1000);
 
         // Move mouse to trigger intentional hover logic
         const box = await findParentBtn.boundingBox();

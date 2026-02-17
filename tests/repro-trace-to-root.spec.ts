@@ -130,13 +130,9 @@ test.describe('Reproduction: [t] failing to show parent content', () => {
         await expect(page.locator('.pr-comment[data-id="c1"]')).toBeVisible();
 
         // Position should be PRESERVED (Smart Focus)
-        // Give async scroll adjustments (if any) a moment to settle
-        await page.waitForTimeout(200);
-
-        // We re-locate to avoid measuring a detached element from the re-render
-        const afterTop = await page.locator('.pr-comment[data-id="c2"] [data-action="load-parents-and-scroll"]').evaluate(el => el.getBoundingClientRect().top);
-        
-        // 1px tolerance for rounding
-        expect(Math.abs(afterTop - beforeTop)).toBeLessThan(2);
+        await expect.poll(async () => {
+            const afterTop = await page.locator('.pr-comment[data-id="c2"] [data-action="load-parents-and-scroll"]').evaluate(el => el.getBoundingClientRect().top);
+            return Math.abs(afterTop - beforeTop);
+        }).toBeLessThan(2);
     });
 });

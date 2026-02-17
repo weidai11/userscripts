@@ -6,6 +6,11 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 async function setupPowerReader(page: any, commentCount: number = 20) {
     const scriptPath = path.resolve(__dirname, '../dist/power-reader.user.js');
     if (!fs.existsSync(scriptPath)) {
@@ -77,7 +82,7 @@ test('[PR-STICKY-05] sticky header title triggers hover preview', async ({ page 
             window.dispatchEvent(new Event('scroll'));
         }, box.y + box.height);
     }
-    await page.waitForTimeout(500);
+    await waitAtLeast(400);
 
     const stickyHeader = page.locator('#pr-sticky-header');
     await expect(stickyHeader).toHaveClass(/visible/);
@@ -86,13 +91,13 @@ test('[PR-STICKY-05] sticky header title triggers hover preview', async ({ page 
     const titleSpan = stickyHeader.locator('.pr-post-title');
     const titleBox = await titleSpan.boundingBox();
     if (titleBox) {
+        await page.mouse.move(0, 0);
         await page.mouse.move(titleBox.x + titleBox.width / 2, titleBox.y + titleBox.height / 2);
         await titleSpan.dispatchEvent('mouseenter');
     }
 
     // The preview overlay should appear
-    await page.waitForTimeout(500); // hoverDelay is 300ms
     const preview = page.locator('.pr-preview-overlay');
-    await expect(preview).toBeVisible();
+    await expect(preview).toBeVisible({ timeout: 5000 });
     await expect(preview).toContainText('Full post content for preview');
 });

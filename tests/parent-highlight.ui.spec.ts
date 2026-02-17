@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
+async function waitAtLeast(ms: number): Promise<void> {
+    const start = Date.now();
+    await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);
+}
+
 test.describe('Power Reader Parent Highlighting', () => {
 
     test('[PR-NAV-02.1] Parent highlight activates correctly for COMMENTS', async ({ page }) => {
@@ -98,7 +103,7 @@ test.describe('Power Reader Parent Highlighting', () => {
         await expect(postHeader).toHaveCSS('background-color', 'rgb(255, 224, 102)');
     });
 
-    test('[PR-NAV-02.2][PR-NAV-02.3] Parent highlight syncs correctly for sticky header AND post body', async ({ page }) => {
+    test('[PR-NAV-02.2][PR-NAV-02.3][PR-NAV-02.4] Parent highlight syncs correctly for sticky header AND post body', async ({ page }) => {
         // Setup with a long post so sticky header activates
         await initPowerReader(page, {
             testMode: true,
@@ -155,7 +160,7 @@ test.describe('Power Reader Parent Highlighting', () => {
                 window.dispatchEvent(new Event('scroll'));
             }
         });
-        await page.waitForTimeout(500); // Scroll cooldown for intentionality
+        await waitAtLeast(500); // Scroll cooldown for intentionality
 
         // Wait for sticky header to appear
         await expect(stickyHeader).toHaveClass(/visible/);

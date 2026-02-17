@@ -28,10 +28,7 @@ test.describe('Power Reader Hotkeys', () => {
         page.on('console', msg => logs.push(msg.text()));
 
         // Move mouse over the comment
-        const box = await comment.boundingBox();
-        if (!box) throw new Error('No bounding box');
-        await page.mouse.move(box.x + 50, box.y + 10);
-        await page.waitForTimeout(100);
+        await comment.hover();
 
         // Press '-' key
         await page.keyboard.press('-');
@@ -63,18 +60,12 @@ test.describe('Power Reader Hotkeys', () => {
         const comment = page.locator('.pr-comment[data-id="c1"]');
 
         // Collapse first
-        const box = await comment.boundingBox();
-        if (!box) throw new Error('No bounding box');
-        await page.mouse.move(box.x + 50, box.y + 10);
-        await page.waitForTimeout(100);
+        await comment.hover();
         await page.keyboard.press('-');
         await expect(comment).toHaveClass(/collapsed/);
 
         // Re-hover to be sure (it might have moved slightly)
-        const box2 = await comment.boundingBox();
-        if (!box2) throw new Error('No bounding box');
-        await page.mouse.move(box2.x + 50, box2.y + 10);
-        await page.waitForTimeout(100);
+        await comment.hover();
 
         // Press '=' key (easier than '+')
         await page.keyboard.press('=');
@@ -118,10 +109,7 @@ test.describe('Power Reader Hotkeys', () => {
         // Use a global variable to track hits
         await page.evaluate(() => { (window as any).routeHit = false; });
 
-        const box = await postHeader.boundingBox();
-        if (!box) throw new Error('No bounding box');
-        await page.mouse.move(box.x + 200, box.y + 10);
-        await page.waitForTimeout(100);
+        await postHeader.hover();
 
         await page.keyboard.press('e');
 
@@ -150,10 +138,7 @@ test.describe('Power Reader Hotkeys', () => {
         await input.focus();
 
         const comment = page.locator('.pr-comment[data-id="c1"]');
-        const box = await comment.boundingBox();
-        if (!box) throw new Error('No bounding box');
-        await page.mouse.move(box.x + 50, box.y + 10);
-        await page.waitForTimeout(100);
+        await comment.hover();
 
         // Press '-' key while focused in input
         await page.keyboard.press('-');
@@ -195,10 +180,7 @@ test.describe('Power Reader Hotkeys', () => {
         const rBtn = comment.locator('[data-action="load-descendants"]');
         await expect(rBtn).toBeVisible();
 
-        const box = await comment.boundingBox();
-        if (!box) throw new Error('No bounding box');
-        await page.mouse.move(box.x + 50, box.y + 10);
-        await page.waitForTimeout(100);
+        await comment.hover();
 
         await page.keyboard.press('r');
 
@@ -216,10 +198,7 @@ test.describe('Power Reader Hotkeys', () => {
         const gBtn = post.locator('[data-action="send-to-ai-studio"]');
         await expect(gBtn).toBeVisible();
 
-        const box = await post.locator('.pr-post-header').boundingBox();
-        if (!box) throw new Error('No box');
-        await page.mouse.move(box.x + 200, box.y + 10);
-        await page.waitForTimeout(100);
+        await post.locator('.pr-post-header').hover();
 
         // Capture openInTab call
         await page.evaluate(() => { (window as any).__GM_CALLS = {}; });
@@ -259,10 +238,7 @@ test.describe('Power Reader Hotkeys', () => {
         await expect(popup).toBeVisible();
 
         // 2. Hover popup and press g
-        const box = await popup.boundingBox();
-        if (!box) throw new Error('No popup box');
-        await page.mouse.move(box.x + 50, box.y + 10);
-        await page.waitForTimeout(100);
+        await popup.hover();
         await page.keyboard.press('g');
 
         // 3. Verify closed
@@ -280,10 +256,7 @@ test.describe('Power Reader Hotkeys', () => {
         await expect(popup).toBeVisible();
 
         // 5. Hover focal item and press g
-        const commentBox = await page.locator('.pr-comment[data-id="c1"]').boundingBox();
-        if (!commentBox) throw new Error('No comment box');
-        await page.mouse.move(commentBox.x + 50, commentBox.y + 10);
-        await page.waitForTimeout(100);
+        await page.locator('.pr-comment[data-id="c1"]').hover();
         await page.keyboard.press('g');
 
         // 6. Verify closed

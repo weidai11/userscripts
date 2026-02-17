@@ -59,7 +59,7 @@ test.describe('Power Reader Threading', () => {
         await expect(child).toBeAttached();
     });
 
-    test('[PR-NEST-04.1] Multi-level missing parent chain preserves descendants', async ({ page }) => {
+    test('[PR-NEST-04.1][PR-NEST-04.2] Multi-level missing parent chain preserves descendants', async ({ page }) => {
         const now = new Date().toISOString();
         const comments = [
             {

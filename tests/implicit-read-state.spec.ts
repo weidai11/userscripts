@@ -209,9 +209,6 @@ test.describe('Implicit Read State (Temporal Boundary) [PR-READ-07]', () => {
             (window as any).renderUI(state);
         }, T2);
 
-        // Wait for re-render to complete
-        await page.waitForTimeout(200);
-
         // Now c-parent (T1 < T2) should be implicitly read
         const cParentAfter = page.locator('.pr-comment[data-id="c-parent"]');
         await expect(cParentAfter).toHaveClass(/\bread\b/);

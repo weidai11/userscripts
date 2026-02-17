@@ -148,12 +148,10 @@ test.describe('Power Reader State and Continuation', () => {
         await expect(bottomMsg).toBeVisible({ timeout: 15000 });
         await expect(bottomMsg).toHaveText(/Waiting [5-6][0-9]s for next check/);
 
-        // Wait a bit more for decrement
-        await page.waitForTimeout(1500);
-
-        const text = await bottomMsg.textContent();
-        const count = parseInt(text?.match(/Waiting (\d+)s/)?.[1] || '0');
-        expect(count).toBeLessThanOrEqual(59);
+        await expect.poll(async () => {
+            const text = await bottomMsg.textContent();
+            return parseInt(text?.match(/Waiting (\d+)s/)?.[1] || '0');
+        }, { timeout: 5000 }).toBeLessThanOrEqual(59);
     });
 
     test('[PR-LOAD-09][PR-LOAD-11] Bottom message shows "New comments available" when server has more', async ({ page }) => {

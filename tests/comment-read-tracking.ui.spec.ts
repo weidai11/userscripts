@@ -58,9 +58,6 @@ test.describe('Comment Read Tracking', () => {
         // Scroll to just past the parent body
         await page.evaluate((y) => window.scrollTo(0, y + 10), bodyBox.y + bodyBox.height);
 
-        // Wait for potential read marking (throttled/delayed)
-        await page.waitForTimeout(500);
-
         // Check if parent is marked read
         // CURRENT EXPECTATION based on code analysis: This will FAIL because c2 is still visible/below.
         const parentClasses = await parent.getAttribute('class');

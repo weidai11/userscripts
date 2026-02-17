@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.672
+// @version    1.2.676
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2662,7 +2662,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.672"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.676"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3848,7 +3848,7 @@ hoverDelay: 300,
         if (e.ctrlKey || e.metaKey || isMiddleClick || target === "_blank") {
           e.preventDefault();
           e.stopPropagation();
-          window.open(href, "_blank");
+          openInNewTab(href);
         } else {
           e.preventDefault();
           e.stopPropagation();
@@ -4152,6 +4152,10 @@ hoverDelay: 300,
     div.textContent = str;
     return div.innerHTML;
   }
+  function openInNewTab(url) {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (opened) opened.opener = null;
+  }
   function parseUrl(raw) {
     try {
       return new URL(raw, window.location.origin);
@@ -4238,7 +4242,7 @@ hoverDelay: 300,
         const contentEl = doc.querySelector(".TagPage-description, .ContentStyles-base, .tagDescription");
         const titleEl = doc.querySelector("h1, .TagPage-title");
         const title = titleEl?.textContent || slug;
-        const content = contentEl?.innerHTML || "<i>(Unable to load wiki content)</i>";
+        const content = sanitizeHtml(contentEl?.innerHTML || "<i>(Unable to load wiki content)</i>");
         return `
         <div class="pr-preview-header">
           <strong>Wiki: ${escapeHtml$1(title)}</strong>
@@ -4274,7 +4278,9 @@ hoverDelay: 300,
     };
   }
   function renderUserPreview(user) {
-    const archiveLink = `/reader?view=archive&username=${user.slug || user.username}`;
+    const archiveTarget = user.slug || user.username || "";
+    const archiveLink = `/reader?view=archive&username=${encodeURIComponent(archiveTarget)}`;
+    const safeBio = sanitizeHtml(user.htmlBio || "<i>(No bio provided)</i>");
     return `
     <div class="pr-preview-header">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -4292,7 +4298,7 @@ hoverDelay: 300,
       </div>
     </div>
     <div class="pr-preview-content">
-      ${user.htmlBio || "<i>(No bio provided)</i>"}
+      ${safeBio}
     </div>
   `;
   }
@@ -4801,9 +4807,10 @@ isFullPost
     const initialScore = Number(baseScore) || 0;
     let maxKarma = isRead2 ? -Infinity : initialScore;
     const queue = [...children];
+    let queueIndex = 0;
     const visited = new Set([id]);
-    while (queue.length > 0) {
-      const current = queue.shift();
+    while (queueIndex < queue.length) {
+      const current = queue[queueIndex++];
       if (visited.has(current._id)) continue;
       visited.add(current._id);
       let currentIsRead = readState[current._id] === 1;
@@ -5694,6 +5701,8 @@ refresh() {
     }, { capture: true, passive: true });
   };
   class ReadTracker {
+    static UNREAD_ITEM_SELECTOR = ".pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)";
+    static BOTTOM_MARGIN_PX = 50;
     scrollMarkDelay;
     commentsDataGetter;
     postsDataGetter;
@@ -5739,13 +5748,16 @@ refresh() {
       }, 200);
     }
     processScroll() {
-      const items = document.querySelectorAll(".pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)");
+      const items = document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR);
       const readThreshold = 0;
-      const isAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 50;
+      const docHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+      const viewportHeight = window.innerHeight;
+      const isAtBottom = viewportHeight + window.scrollY >= docHeight - ReadTracker.BOTTOM_MARGIN_PX;
+      const unreadCountEl = document.getElementById("pr-unread-count");
       Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
-      items.forEach((el) => {
+      for (const el of items) {
         const id = el.getAttribute("data-id");
-        if (!id) return;
+        if (!id) continue;
         const rect = el.getBoundingClientRect();
         let checkRect = rect;
         if (el.classList.contains("pr-post")) {
@@ -5765,25 +5777,28 @@ refresh() {
             if (meta) checkRect = meta.getBoundingClientRect();
           }
         }
-        const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+        const isVisible = rect.top < viewportHeight && rect.bottom > 0;
         const shouldMark = checkRect.bottom < readThreshold || isAtBottom && isVisible;
         if (shouldMark) {
           if (!this.pendingReadTimeouts[id]) {
+            const trackedElement = el;
             this.pendingReadTimeouts[id] = window.setTimeout(() => {
               delete this.pendingReadTimeouts[id];
-              const currentEl = document.querySelector(`.pr-comment[data-id="${id}"], .pr-item[data-id="${id}"]`);
-              if (currentEl && !currentEl.classList.contains("read")) {
-                markAsRead({ [id]: 1 });
-                currentEl.classList.add("read");
-                const allRemainingUnread = document.querySelectorAll(".pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)");
-                const newCount = allRemainingUnread.length;
-                const unreadCountEl = document.getElementById("pr-unread-count");
-                if (unreadCountEl) {
-                  unreadCountEl.textContent = newCount.toString();
-                  const isNowAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
-                  if (newCount === 0 && isNowAtBottom) {
-                    this.checkInitialState();
-                  }
+              const currentEl = trackedElement.isConnected ? trackedElement : document.querySelector(`.pr-item[data-id="${id}"]`);
+              if (!currentEl || currentEl.classList.contains("read")) {
+                return;
+              }
+              markAsRead({ [id]: 1 });
+              currentEl.classList.add("read");
+              const liveUnreadCountEl = unreadCountEl?.isConnected ? unreadCountEl : document.getElementById("pr-unread-count");
+              if (liveUnreadCountEl) {
+                const parsedCount = Number.parseInt(liveUnreadCountEl.textContent || "", 10);
+                const newCount = Number.isFinite(parsedCount) ? Math.max(0, parsedCount - 1) : document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
+                liveUnreadCountEl.textContent = newCount.toString();
+                const liveDocHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+                const isNowAtBottom = window.innerHeight + window.scrollY >= liveDocHeight - 100;
+                if (newCount === 0 && isNowAtBottom) {
+                  this.checkInitialState();
                 }
               }
             }, this.scrollMarkDelay);
@@ -5794,7 +5809,7 @@ refresh() {
             delete this.pendingReadTimeouts[id];
           }
         }
-      });
+      }
       const currentComments = this.commentsDataGetter();
       if (isAtBottom && currentComments.length > 0) {
         Logger.debug("processScroll: at bottom, advancing");
@@ -6210,7 +6225,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         <div class="pr-settings-group">
           <label for="pr-ai-prefix-input"><strong>AI Studio Prompt Prefix:</strong></label>
           <p style="font-size: 0.8em; color: #888; margin-top: 5px;">This text is sent to AI Studio before the thread content. Leave blank to use the default.</p>
-          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;">${getAIStudioPrefix() || AI_STUDIO_PROMPT_PREFIX}</textarea>
+          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
           <div style="margin-top: 5px;">
             <button id="pr-save-ai-prefix-btn" class="pr-debug-btn">Save Prefix</button>
             <button id="pr-reset-ai-prefix-btn" class="pr-debug-btn">Reset to Default</button>
@@ -6242,7 +6257,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6361,6 +6376,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const saveBtn = document.getElementById("pr-save-ai-prefix-btn");
     const resetBtn = document.getElementById("pr-reset-ai-prefix-btn");
     const input = document.getElementById("pr-ai-prefix-input");
+    if (input) {
+      input.value = getAIStudioPrefix() || AI_STUDIO_PROMPT_PREFIX;
+    }
     if (saveBtn && input) {
       saveBtn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -6385,7 +6403,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -6409,11 +6427,15 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     });
   };
   const LOGIN_URL = `${window.location.origin}/auth/auth0`;
+  const openLoginPage = () => {
+    const opened = window.open(LOGIN_URL, "_blank", "noopener,noreferrer");
+    if (opened) opened.opener = null;
+  };
   async function castKarmaVote(documentId, voteType, isLoggedIn, currentAgreement = null, documentType = "comment") {
     Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
     if (!isLoggedIn) {
       Logger.info("Not logged in, opening auth page");
-      window.open(LOGIN_URL, "_blank");
+      openLoginPage();
       return null;
     }
     try {
@@ -6438,7 +6460,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   async function castAgreementVote(documentId, voteType, isLoggedIn, currentKarma = "neutral", documentType = "comment") {
     if (!isLoggedIn) {
-      window.open(LOGIN_URL, "_blank");
+      openLoginPage();
       return null;
     }
     const agreementValue = voteType === "agree" ? "smallUpvote" : voteType === "disagree" ? "smallDownvote" : "neutral";
@@ -6464,7 +6486,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   async function castReactionVote(commentId, reactionName, isLoggedIn, currentKarma = "neutral", currentExtendedVote = {}, quote = null) {
     if (!isLoggedIn) {
-      window.open(LOGIN_URL, "_blank");
+      openLoginPage();
       return null;
     }
     const existingReacts = currentExtendedVote?.reacts || [];
@@ -7397,7 +7419,7 @@ currentCommentId = null;
       }
       return;
     }
-    let parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+    const parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
     const isReadPlaceholder = parentEl?.classList.contains("pr-comment-placeholder");
     const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains("pr-missing-parent") || isReadPlaceholder;
     if (parentEl && !parentIsPlaceholder) {
@@ -7521,7 +7543,7 @@ currentCommentId = null;
     if (!postEl) return;
     const eBtn = postEl.querySelector('[data-action="toggle-post-body"]');
     const isFromSticky = !!target.closest(".pr-sticky-header");
-    let container = postEl.querySelector(".pr-post-body-container");
+    const container = postEl.querySelector(".pr-post-body-container");
     if (!container) {
       if (eBtn) eBtn.textContent = "[...]";
       try {
@@ -7833,6 +7855,21 @@ currentCommentId = null;
     }
     handleScrollToRoot(target, topLevelId);
   };
+  const setStatusMessage = (message, color) => {
+    const statusEl = document.querySelector(".pr-status");
+    if (!statusEl) return;
+    statusEl.textContent = "";
+    if (!color) {
+      statusEl.textContent = message;
+      return;
+    }
+    const span = document.createElement("span");
+    span.style.color = color;
+    span.textContent = message;
+    statusEl.appendChild(span);
+  };
+  const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
   const handleSendToAIStudio = async (state2, includeDescendants = false) => {
     const target = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
     if (!target) {
@@ -7860,8 +7897,7 @@ currentCommentId = null;
     const isPost2 = itemEl.classList.contains("pr-post");
     Logger.info(`AI Studio: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
     try {
-      const statusEl = document.querySelector(".pr-status");
-      if (statusEl) statusEl.innerHTML = '<span style="color: #007bff;">[AI Studio] Building conversation thread...</span>';
+      setStatusMessage("[AI Studio] Building conversation thread...", "#007bff");
       const requestId = Math.random().toString(36).substring(2, 10);
       const lineage = [];
       let currentId = id;
@@ -7903,7 +7939,7 @@ currentCommentId = null;
             });
           }
         }
-        descendants.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
+        descendants.sort((a, b) => new Date(a.postedAt || "").getTime() - new Date(b.postedAt || "").getTime());
         descendants = descendants.filter((d) => d._id !== id);
       }
       const threadXml = lineage.length > 0 ? toXml(lineage, id, descendants) : "";
@@ -7919,7 +7955,7 @@ currentCommentId = null;
       if (typeof GM_openInTab === "function") {
         GM_openInTab("https://aistudio.google.com/prompts/new_chat", { active: true });
       }
-      if (statusEl) statusEl.innerHTML = '<span style="color: #28a745;">[AI Studio] Opening AI Studio tab...</span>';
+      setStatusMessage("[AI Studio] Opening AI Studio tab...", "#28a745");
     } catch (error) {
       Logger.error("AI Studio: Failed to prepare threaded payload", error);
       alert("Failed to send thread to AI Studio. Check console.");
@@ -7950,10 +7986,10 @@ currentCommentId = null;
     const type = item.title ? "post" : "comment";
     const author = item.user?.username || item.author || "unknown";
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
-    let xml2 = `<${type} id="${item._id}" author="${author}"${isFocal ? ' is_focal="true"' : ""}>
+    let xml2 = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}>
 `;
     xml2 += `<body_markdown>
-${md}
+${escapeXmlText(md)}
 </body_markdown>
 `;
     if (isFocal && descendants.length > 0) {
@@ -7975,10 +8011,10 @@ ${md}
     return children.map((child) => {
       const author = child.user?.username || child.author || "unknown";
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
-      let xml2 = `<comment id="${child._id}" author="${author}">
+      let xml2 = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
       xml2 += `  <body_markdown>
-${md.split("\n").map((l) => "    " + l).join("\n")}
+${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   </body_markdown>
 `;
       const grandChildrenXml = descendantsToXml(descendants, child._id);
@@ -7992,7 +8028,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
   const displayAIPopup = (text2, state2, includeDescendants = false) => {
     if (state2.activeAIPopup) {
       const content = state2.activeAIPopup.querySelector(".pr-ai-popup-content");
-      if (content) content.innerHTML = text2;
+      if (content) content.innerHTML = sanitizeHtml(text2);
       state2.activeAIPopup.classList.toggle("pr-ai-include-descendants", includeDescendants);
       return;
     }
@@ -8006,8 +8042,10 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
         <button class="pr-ai-popup-close">Close</button>
       </div>
     </div>
-    <div class="pr-ai-popup-content">${text2}</div>
+    <div class="pr-ai-popup-content"></div>
   `;
+    const popupContent = popup.querySelector(".pr-ai-popup-content");
+    if (popupContent) popupContent.innerHTML = sanitizeHtml(text2);
     document.body.appendChild(popup);
     state2.activeAIPopup = popup;
     popup.querySelector(".pr-ai-popup-close")?.addEventListener("click", () => closeAIPopup(state2));
@@ -8039,8 +8077,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
           state2.sessionAICache[target.dataset.id] = text2;
         }
         displayAIPopup(text2, state2, !!includeDescendants);
-        const statusEl = document.querySelector(".pr-status");
-        if (statusEl) statusEl.innerHTML = "AI Studio response received.";
+        setStatusMessage("AI Studio response received.");
         const stickyEl = document.getElementById("pr-sticky-ai-status");
         if (stickyEl) {
           stickyEl.classList.remove("visible");
@@ -8055,9 +8092,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       if (!newVal || !remote) return;
       Logger.debug(`AI Studio Status: ${newVal}`);
       const statusEl = document.querySelector(".pr-status");
-      if (statusEl) {
-        statusEl.innerHTML = `<span style="color: #28a745;">[AI Studio] ${newVal}</span>`;
-      }
+      if (statusEl) setStatusMessage(`[AI Studio] ${String(newVal)}`, "#28a745");
       const stickyEl = document.getElementById("pr-sticky-ai-status");
       if (stickyEl) {
         stickyEl.textContent = `AI: ${newVal}`;
@@ -8383,6 +8418,17 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     #pr-header-links-container a:hover {
       opacity: 0.7 !important;
     }
+    #pr-header-links-container .pr-header-chip {
+      background: #111;
+      color: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 0.75em;
+      font-weight: 900;
+      letter-spacing: 0.5px;
+      line-height: 1;
+      white-space: nowrap;
+    }
     #pr-archive-link {
       margin-left: 8px;
     }
@@ -8402,18 +8448,8 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     link.style.alignItems = "center";
     link.innerHTML = `
     <span class="MuiButton-label">
-      <span class="UsersMenu-userButtonContents" style="display: flex; align-items: center; gap: 6px;">
-        <span style="
-          background: #333; 
-          color: #fff; 
-          padding: 2px 5px; 
-          border-radius: 3px; 
-          font-size: 0.75em; 
-          font-weight: 900;
-          letter-spacing: 0.5px;
-          line-height: 1;
-        ">POWER</span>
-        <span style="font-weight: 500;">Reader</span>
+      <span class="UsersMenu-userButtonContents">
+        <span class="pr-header-chip">Power Reader</span>
       </span>
     </span>
   `;
@@ -8429,8 +8465,8 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     link.style.alignItems = "center";
     link.innerHTML = `
     <span class="MuiButton-label">
-      <span class="UsersMenu-userButtonContents" style="font-weight: 500;">
-        User Archive
+      <span class="UsersMenu-userButtonContents">
+        <span class="pr-header-chip">User Archive</span>
       </span>
     </span>
   `;
@@ -9450,6 +9486,7 @@ sortCanonicalItems() {
       executeTakeover();
       await initializeReactions();
       rebuildDocument();
+      initPreviewSystem();
       const state2 = createInitialArchiveState(username);
       const root = document.getElementById("power-reader-root");
       if (!root) return;
@@ -9643,7 +9680,7 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -10027,7 +10064,11 @@ sortCanonicalItems() {
       Logger.error("Failed to initialize archive:", err);
       const root = document.getElementById("power-reader-root");
       if (root) {
-        root.innerHTML = `<div class="pr-error">Failed to load archive: ${err.message}</div>`;
+        const errorEl = document.createElement("div");
+        errorEl.className = "pr-error";
+        const message = err instanceof Error ? err.message : String(err);
+        errorEl.textContent = `Failed to load archive: ${message}`;
+        root.replaceChildren(errorEl);
       }
     }
   };
@@ -10159,7 +10200,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.672"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.676"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

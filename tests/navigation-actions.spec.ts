@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { PowerReaderPage } from './pages/PowerReaderPage';
 import { setupMockEnvironment, getScriptContent, initPowerReader } from './helpers/setup';
 
 test.describe('Post Action Buttons', () => {
@@ -23,7 +22,6 @@ test.describe('Post Action Buttons', () => {
             testMode: true,
             scrapedReactions: [],
         });
-        await page.waitForTimeout(100);
 
         const post = page.locator('.pr-post[data-post-id="p1"]').first();
         const container = post.locator('.pr-post-body-container');
@@ -36,13 +34,11 @@ test.describe('Post Action Buttons', () => {
 
         // Click [e] to expand
         await toggleBtn.click();
-        await page.waitForTimeout(500);
         await expect(container).not.toHaveClass(/truncated/);
         await expect(container).toBeVisible();
 
         // Click [e] to collapse
         await toggleBtn.click();
-        await page.waitForTimeout(500);
         await expect(container).toHaveClass(/truncated/);
     });
 
@@ -96,15 +92,19 @@ test.describe('Post Action Buttons', () => {
         const commentsBtn = page.locator('.pr-post[data-id="p1"] [data-action="scroll-to-comments"]');
         await expect(commentsBtn).toHaveText('[c]');
         await commentsBtn.click();
-        const c1Top = await page.evaluate(() => document.querySelector('.pr-comment[data-id="c1"]')?.getBoundingClientRect().top);
-        expect(c1Top).toBeLessThan(500);
+        await expect.poll(async () => {
+            const top = await page.evaluate(() => document.querySelector('.pr-comment[data-id="c1"]')?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY);
+            return top;
+        }).toBeLessThan(500);
 
         // Scroll to next post
         const nextBtn = page.locator('.pr-post[data-id="p1"] [data-action="scroll-to-next-post"]');
         await expect(nextBtn).toHaveText('[n]');
         await nextBtn.click();
-        const p2Top = await page.evaluate(() => document.querySelector('.pr-post[data-post-id="p2"]')?.getBoundingClientRect().top);
-        expect(p2Top).toBeLessThan(600);
+        await expect.poll(async () => {
+            const top = await page.evaluate(() => document.querySelector('.pr-post[data-post-id="p2"]')?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY);
+            return top;
+        }).toBeLessThan(600);
     });
 
     test('[PR-NEST-01] Recursive collapse should hide siblings in nested structure', async ({ page }) => {
@@ -181,7 +181,11 @@ test.describe('Comment Action Buttons', () => {
         // Ensure we wait for scroll to be applied
         await page.waitForFunction(() => window.scrollY >= 3000);
 
-        const initialTop = await page.locator('.pr-comment[data-id="c2"]').evaluate(el => el.getBoundingClientRect().top);
+        const c2Comment = page.locator('.pr-comment[data-id="c2"]');
+        await c2Comment.scrollIntoViewIfNeeded();
+        await expect(c2Comment).toBeVisible();
+
+        const initialTop = await c2Comment.evaluate(el => el.getBoundingClientRect().top);
         const initialScrollY = await page.evaluate(() => window.scrollY);
         if (process.env.PW_SINGLE_FILE_RUN === 'true') {
             console.log('BEFORE LOAD: initialTop:', initialTop, 'initialScrollY:', initialScrollY);
@@ -196,17 +200,14 @@ test.describe('Comment Action Buttons', () => {
         await expect(page.locator('.pr-comment[data-id="c1"]')).toBeVisible();
         await expect(page.locator('.pr-comment[data-id="c3"]')).toBeVisible();
 
-        const finalTop = await page.locator('.pr-comment[data-id="c2"]').evaluate(el => el.getBoundingClientRect().top);
+        const finalTop = await c2Comment.evaluate(el => el.getBoundingClientRect().top);
         const finalScrollY = await page.evaluate(() => window.scrollY);
         if (process.env.PW_SINGLE_FILE_RUN === 'true') {
             console.log('AFTER LOAD: finalTop:', finalTop, 'finalScrollY:', finalScrollY);
         }
 
-        // Viewport preservation should keep the element at the same absolute position in the document
-        // relative to the parent or some anchor.
-        // Actually, let's just check that it's STILL VISIBLE in the viewport.
-        expect(finalTop).toBeGreaterThan(0);
-        expect(finalTop).toBeLessThan(800);
+        await expect(page.locator('.pr-comment[data-id="c2"]')).toBeVisible();
+        expect(Math.abs(finalTop - initialTop)).toBeLessThan(200);
     });
 
     test('[PR-CMTBTN-02] Scroll to Root', async ({ page }) => {
@@ -230,6 +231,9 @@ test.describe('Comment Action Buttons', () => {
         await btn.click();
 
         const c1 = page.locator('.pr-comment[data-id="c1"]');
+        await expect.poll(async () => {
+            return c1.evaluate(el => el.getBoundingClientRect().top);
+        }).toBeLessThan(500);
         const c1Top = await c1.evaluate(el => el.getBoundingClientRect().top);
         if (process.env.PW_SINGLE_FILE_RUN === 'true') {
             console.log('c1Top after scroll-to-root:', c1Top);
@@ -238,7 +242,7 @@ test.describe('Comment Action Buttons', () => {
         await expect(c1).toHaveClass(/pr-highlight-parent/);
     });
 
-    test('[PR-CMTBTN-01.1] [r] should resolve missing ancestors before thread fetch', async ({ page }) => {
+    test('[PR-CMTBTN-01] [r] should resolve missing ancestors before thread fetch', async ({ page }) => {
         const posts = [{ _id: 'p1', title: 'P1', postedAt: new Date().toISOString() }];
         const initialComments = [
             {

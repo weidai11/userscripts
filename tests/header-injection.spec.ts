@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 test.describe('Header Injection [PR-INJECT-01]', () => {
-    test('should inject POWER Reader link into forum header', async ({ page }) => {
+    test('should inject Power Reader link into forum header', async ({ page }) => {
         await page.route('https://forum.effectivealtruism.org/', async route => {
             await route.fulfill({
                 contentType: 'text/html',
@@ -47,7 +47,7 @@ test.describe('Header Injection [PR-INJECT-01]', () => {
         // Wait for injection
         const link = page.locator('#pr-reader-link');
         await expect(link).toBeVisible({ timeout: 10000 });
-        await expect(link).toContainText(/POWER\s+Reader/);
+        await expect(link).toContainText(/Power\s+Reader/);
         await expect(link).toHaveAttribute('href', '/reader');
     });
 

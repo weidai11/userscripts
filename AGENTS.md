@@ -10,8 +10,11 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 ## 🏗 Structure & VCS
 - **VCS**: This repository uses Jujutsu. Common commands:
   - `jj st` (status), `jj log` (history), `jj --no-pager diff --git` (full changes), `jj desc -m "msg"` (set commit message)
+  - Before pushing, generate the commit message from the actual diff (`jj --no-pager diff --git`), then set it with `jj desc -m "..."`
+  - Include relevant requirement IDs in commit messages when applicable (e.g., `PR-UARCH-*`, `PR-PREV-*`).
   - `jj bookmark set main` (update branch pointer to current commit BEFORE push)
   - `jj git push` (sync changed bookmarks to remote)
+  - **Pre-push checklist**: run `jj --no-pager diff --git`, `npx playwright test` (or targeted suite), and `npm run test:audit`.
   - **PowerShell Note**: Quote `@` if used (e.g., `jj show '@'`), as it is a reserved symbol.
 - **Folders**:
   - `src/scripts/`: `power-reader/` (main), `playground/` (experimental).
@@ -23,14 +26,16 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
 - **Build**: `npm run build:power-reader` | `build:playground` (Auto-runs `npm audit`, patches version).
 - **Test**: `npm test` (all) | `npm run test:power-reader` (E2E) | `npx playwright test`.
 - **Tooling**: `npm run codegen` (types) | `update-schema` (latest LW API). `codegen` runs automatically on `dev`/`build`.
+- **Build caution**: `build:*` scripts auto-bump `package.json` version; avoid running them unless you intend to produce a new build artifact.
 
 ## 📜 Conventions & Gotchas
 - **Shell**: PowerShell 5.1 (No `&&`, use `;`). Use backslashes `\` for local Windows paths.
 - **Shell Execution**: Run commands directly; do not prefix commands with shell executables like `cmd` or `powershell`.
 - **Code**: ESM only (no `__dirname`). Use `/// <reference types="vite-plugin-monkey/client" />` for `GM_*` types. Use `htmlBody` for content.
 - **Testing**: Wait for `#lw-power-reader-ready-signal`. Mock `GM_*` and GraphQL via `addInitScript`.
+- **Spec-driven changes**: For behavior changes, update `src/scripts/power-reader/SPEC.md` requirement IDs and add/update matching tests.
 - **Logic**: Use getters (e.g., `() => state.data`) for component props to avoid stale closures.
 - **GraphQL**: Schema reference in `src/shared/graphql/lw_schema.graphql`.
 
 ## 🔗 References
-[README.md](./README.md) | [TESTING.md](./TESTING.md) | [NOTES.md](./NOTES.md) | [CHANGELOG.md](./CHANGELOG.md)
+[README.md](./README.md) | [TESTING.md](./TESTING.md) | [NOTES.md](./NOTES.md) | [CHANGELOG.md](./CHANGELOG.md) | [SPEC.md](./src/scripts/power-reader/SPEC.md)

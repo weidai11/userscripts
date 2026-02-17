@@ -14,6 +14,9 @@ import { Logger } from '../utils/logger';
  * Service to track read status via scrolling
  */
 export class ReadTracker {
+    private static readonly UNREAD_ITEM_SELECTOR = '.pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)';
+    private static readonly BOTTOM_MARGIN_PX = 50;
+
     private scrollMarkDelay: number;
     private commentsDataGetter: () => { postedAt: string, _id: string }[];
     private postsDataGetter: () => { postedAt?: string, _id: string }[];
@@ -73,15 +76,18 @@ export class ReadTracker {
     }
 
     private processScroll() {
-        const items = document.querySelectorAll('.pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)');
+        const items = document.querySelectorAll<HTMLElement>(ReadTracker.UNREAD_ITEM_SELECTOR);
         const readThreshold = 0;
-        const isAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 50;
+        const docHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+        const viewportHeight = window.innerHeight;
+        const isAtBottom = viewportHeight + window.scrollY >= docHeight - ReadTracker.BOTTOM_MARGIN_PX;
+        const unreadCountEl = document.getElementById('pr-unread-count');
 
         Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
 
-        items.forEach(el => {
+        for (const el of items) {
             const id = el.getAttribute('data-id');
-            if (!id) return;
+            if (!id) continue;
 
             const rect = el.getBoundingClientRect();
 
@@ -105,30 +111,39 @@ export class ReadTracker {
                 }
             }
 
-            const isVisible = rect.top < window.innerHeight && rect.bottom > 0;
+            const isVisible = rect.top < viewportHeight && rect.bottom > 0;
             const shouldMark = checkRect.bottom < readThreshold || (isAtBottom && isVisible);
 
             if (shouldMark) {
                 if (!this.pendingReadTimeouts[id]) {
+                    const trackedElement = el;
                     this.pendingReadTimeouts[id] = window.setTimeout(() => {
                         delete this.pendingReadTimeouts[id];
-                        const currentEl = document.querySelector(`.pr-comment[data-id="${id}"], .pr-item[data-id="${id}"]`);
-                        if (currentEl && !currentEl.classList.contains('read')) {
-                            markAsRead({ [id]: 1 });
-                            currentEl.classList.add('read');
+                        const currentEl = trackedElement.isConnected
+                            ? trackedElement
+                            : document.querySelector<HTMLElement>(`.pr-item[data-id="${id}"]`);
+                        if (!currentEl || currentEl.classList.contains('read')) {
+                            return;
+                        }
 
-                            // Fixed race condition: Recalculate count from DOM instead of decrementing
-                            const allRemainingUnread = document.querySelectorAll('.pr-comment:not(.read):not(.context), .pr-item:not(.read):not(.context)');
-                            const newCount = allRemainingUnread.length;
+                        markAsRead({ [id]: 1 });
+                        currentEl.classList.add('read');
 
-                            const unreadCountEl = document.getElementById('pr-unread-count');
-                            if (unreadCountEl) {
-                                unreadCountEl.textContent = newCount.toString();
-                                // If we just hit 0 unread while at bottom, trigger server check
-                                const isNowAtBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
-                                if (newCount === 0 && isNowAtBottom) {
-                                    this.checkInitialState();
-                                }
+                        const liveUnreadCountEl = unreadCountEl?.isConnected
+                            ? unreadCountEl
+                            : document.getElementById('pr-unread-count');
+                        if (liveUnreadCountEl) {
+                            const parsedCount = Number.parseInt(liveUnreadCountEl.textContent || '', 10);
+                            const newCount = Number.isFinite(parsedCount)
+                                ? Math.max(0, parsedCount - 1)
+                                : document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
+                            liveUnreadCountEl.textContent = newCount.toString();
+
+                            // If we just hit 0 unread while at bottom, trigger server check
+                            const liveDocHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+                            const isNowAtBottom = window.innerHeight + window.scrollY >= liveDocHeight - 100;
+                            if (newCount === 0 && isNowAtBottom) {
+                                this.checkInitialState();
                             }
                         }
                     }, this.scrollMarkDelay);
@@ -139,7 +154,7 @@ export class ReadTracker {
                     delete this.pendingReadTimeouts[id];
                 }
             }
-        });
+        }
 
         // Auto-advance session if at bottom
         const currentComments = this.commentsDataGetter();

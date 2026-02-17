@@ -171,9 +171,6 @@ test.describe('Sticky Header Feature', () => {
 
         await stickyHeader.locator('[data-action="collapse"]').click();
 
-        // Wait for click handler to run
-        await page.waitForTimeout(500);
-
         // The post comments should be collapsed
         const firstPost = page.locator('.pr-post').first();
         await expect(firstPost.locator('.pr-post-comments')).toHaveClass(/collapsed/, { timeout: 5000 });

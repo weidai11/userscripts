@@ -26,7 +26,7 @@ test.describe('Power Reader Expanded Coverage', () => {
         await expect(page.locator('.pr-header')).toBeVisible();
     });
 
-    test('[PR-SETUP-01][PR-SETUP-02][PR-SETUP-03][PR-SETUP-04] Setup UI date picker and default behavior', async ({ page }) => {
+    test('[PR-SETUP-01][PR-SETUP-02][PR-SETUP-03][PR-SETUP-04][PR-LOAD-01.1] Setup UI date picker and default behavior', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,
             storage: {
@@ -148,19 +148,26 @@ test.describe('Power Reader Expanded Coverage', () => {
             comments: [{ _id: 'c-current', postId: 'p1', postedAt: new Date().toISOString(), user: { username: 'U' }, post: { _id: 'p1', title: 'T' } }]
         });
 
-        // Wait a bit for cleanup logic to run (ReadTracker init has 1000ms delay)
-        await page.waitForTimeout(1500);
+        // Wait for cleanup logic to run (ReadTracker init has delayed start)
+        await expect.poll(async () => {
+            const finalStateStr = await page.evaluate(() => {
+                const calls = (window as any).__GM_CALLS;
+                if (calls && calls['power-reader-read'] !== undefined) return calls['power-reader-read'];
+                return (window as any).__GM_STORAGE?.['power-reader-read'];
+            });
+            return typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
+        }, { timeout: 5000 }).toMatchObject({ 'c-current': 1 });
 
         const finalStateStr = await page.evaluate(() => {
             const calls = (window as any).__GM_CALLS;
             if (calls && calls['power-reader-read'] !== undefined) return calls['power-reader-read'];
             return (window as any).__GM_STORAGE?.['power-reader-read'];
         });
-        const finalState = typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
+        const parsedFinalState = typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
 
         // [PR-READ-06] 'c-current' should be KEPT, 'c-old' should be REMOVED
-        expect(finalState).toBeDefined();
-        expect(finalState['c-current']).toBe(1);
-        expect(finalState['c-old']).toBeUndefined();
+        expect(parsedFinalState).toBeDefined();
+        expect(parsedFinalState['c-current']).toBe(1);
+        expect(parsedFinalState['c-old']).toBeUndefined();
     });
 });

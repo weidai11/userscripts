@@ -99,7 +99,7 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
     }
 
     // Case 2: Parent in DOM (normal)
-    let parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+    const parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
     const isReadPlaceholder = parentEl?.classList.contains('pr-comment-placeholder');
     const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains('pr-missing-parent') || isReadPlaceholder;
 
@@ -270,7 +270,7 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
 
     const eBtn = postEl.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
     const isFromSticky = !!target.closest('.pr-sticky-header');
-    let container = postEl.querySelector('.pr-post-body-container') as HTMLElement;
+    const container = postEl.querySelector('.pr-post-body-container') as HTMLElement;
 
     // If container doesn't exist, we need to load the post body first
     if (!container) {
