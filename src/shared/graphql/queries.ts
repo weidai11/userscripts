@@ -81,18 +81,23 @@ export const COMMENT_FIELDS_CORE = /* GraphQL */ `
     parentCommentId
     parentComment {
       _id
+      postedAt
       parentCommentId
       parentComment {
         _id
+        postedAt
         parentCommentId
         parentComment {
           _id
+          postedAt
           parentCommentId
           parentComment {
             _id
+            postedAt
             parentCommentId
             parentComment {
               _id
+              postedAt
               parentCommentId
             }
           }
@@ -455,6 +460,7 @@ export type Post = {
 
 export type ParentCommentRef = {
   _id: string;
+  postedAt?: string;
   parentCommentId: string | null;
   parentComment?: ParentCommentRef | null;
   user?: {
@@ -493,8 +499,11 @@ export type Comment = {
   afExtendedScore: any;
   currentUserVote: string | number | null;
   currentUserExtendedVote: CurrentUserExtendedVote | null;
+  /** @deprecated Use contextType instead */
   isPlaceholder?: boolean;
+  /** @deprecated Use contextType instead */
   isContext?: boolean;
+  contextType?: 'missing' | 'fetched' | 'stub';
   descendentCount: number;
   directChildrenCount: number;
   latestChildren?: Comment[] | null;

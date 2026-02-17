@@ -594,6 +594,13 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-23] Authentication Context**: The archive `ReaderState` MUST be correctly populated with the `currentUserId` and `currentUsername` of the logged-in user to enable authenticated actions like voting and reactions within the archive view.
 - **[PR-UARCH-20] Thread Group Date Sorting**: In `thread` view, post groups are sorted based on the timestamp of the newest item within that group (post or comment).
 - **[PR-UARCH-21] Thread Group Karma Sorting**: In `thread` view, post groups are sorted based on the highest karma score among all items within that group.
+- **[PR-UARCH-27] Context Type Enum**: Comments use a unified `contextType` field (`'missing' | 'fetched' | 'stub' | undefined`) instead of separate `isPlaceholder` and `isContext` boolean flags to represent different context states.
+- **[PR-UARCH-28] Thread View Modes**: Archive supports two thread view modes: `thread-full` (fetches full parent context from server) and `thread-placeholder` (creates stub context from parentComment references without network requests).
+- **[PR-UARCH-29] Card View Parent Context**: In card view, each comment displays its immediate parent as a stub placeholder (metadata-only, 80% font size) above the comment content.
+- **[PR-UARCH-30] Index View Expand**: In index view, clicking any item expands it in-place to card view rendering with a "Collapse" button to return to the index row.
+- **[PR-UARCH-31] Placeholder Context Rendering**: Comments with `contextType: 'stub'` render as header-only placeholders without vote buttons, using `.pr-context-placeholder` CSS class.
+- **[PR-UARCH-32] Context Persistence Across Modes**: Context comments (both `'fetched'` and `'stub'`) are preserved in ReaderState when switching between thread, card, and index views within the same session.
+- **[PR-UARCH-33] Thread Mode IsThread Helper**: A helper function `isThreadMode()` identifies both `thread-full` and `thread-placeholder` as thread variants without requiring multiple equality checks.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

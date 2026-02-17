@@ -349,7 +349,7 @@ export const runSmartLoading = async (
       return true;
     } else {
       const existing = commentMap.get(comment._id);
-      if ((existing as any).isPlaceholder) {
+      if ((existing as any).contextType === 'missing') {
         const idx = allComments.findIndex(c => c._id === comment._id);
         if (idx !== -1) {
           allComments[idx] = comment;

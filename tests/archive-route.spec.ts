@@ -87,7 +87,7 @@ test.describe('Power Reader Archive Route', () => {
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Verify Default Sort (Date Newest)
-        const firstItemTitle = page.locator('.pr-archive-item h3').first();
+        const firstItemTitle = page.locator('.pr-item h2').first();
         await expect(firstItemTitle).toHaveText('New Low Score Post');
 
         // Test View Mode Switching (To Index)
@@ -100,11 +100,11 @@ test.describe('Power Reader Archive Route', () => {
         await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
     });
 
-test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onGraphQL: `
+    test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
 const userId = 'u-wei-dai';
 const userObj = { _id: userId, username: 'Wei_Dai', displayName: 'Wei Dai', slug: 'wei-dai', karma: 100 };
 const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', slug: 'other-user', karma: 50 };
@@ -158,46 +158,46 @@ if (query.includes('GetCommentsByIds')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Verify Thread Structure - uses Power Reader's standard post/comment classes
-  const rootPost = page.locator('.pr-post');
-  await expect(rootPost).toBeVisible();
-  await expect(rootPost).toContainText('Context Post');
+        // Verify Thread Structure - uses Power Reader's standard post/comment classes
+        const rootPost = page.locator('.pr-post');
+        await expect(rootPost).toBeVisible();
+        await expect(rootPost).toContainText('Context Post');
 
-  // Thread view now renders comments using standard Power Reader comment structure
-  const userComment = page.locator('.pr-comment[data-id="c1"]');
-  await expect(userComment).toBeVisible();
-  await expect(userComment).toContainText('My Reply');
+        // Thread view now renders comments using standard Power Reader comment structure
+        const userComment = page.locator('.pr-comment[data-id="c1"]');
+        await expect(userComment).toBeVisible();
+        await expect(userComment).toContainText('My Reply');
 
-  // [WS2-FIX] Assert parent context comment is rendered
-  // The parent comment should be visible as context in the same post group
-  const parentComment = page.locator('.pr-comment[data-id="c-parent"]');
-  await expect(parentComment).toBeVisible();
-  await expect(parentComment).toContainText('Parent Comment Body');
+        // [WS2-FIX] Assert parent context comment is rendered
+        // The parent comment should be visible as context in the same post group
+        const parentComment = page.locator('.pr-comment[data-id="c-parent"]');
+        await expect(parentComment).toBeVisible();
+        await expect(parentComment).toContainText('Parent Comment Body');
 
-  // Verify parent and child are in the same post group
-  const postGroup = page.locator('.pr-post');
-  await expect(postGroup).toContainText('Parent Comment Body');
-  await expect(postGroup).toContainText('My Reply');
-});
+        // Verify parent and child are in the same post group
+        const postGroup = page.locator('.pr-post');
+        await expect(postGroup).toContainText('Parent Comment Body');
+        await expect(postGroup).toContainText('My Reply');
+    });
 
-test('[PR-UARCH-20] thread view supports group-level date sorting', async ({ page }) => {
-  const userId = 'u-thread-sort-user';
-  const userObj = { _id: userId, username: 'ThreadSort_User', displayName: 'Thread Sort User', slug: 'thread-sort-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    test('[PR-UARCH-20] thread view supports group-level date sorting', async ({ page }) => {
+        const userId = 'u-thread-sort-user';
+        const userObj = { _id: userId, username: 'ThreadSort_User', displayName: 'Thread Sort User', slug: 'thread-sort-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onGraphQL: `
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -238,43 +238,43 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=ThreadSort_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ThreadSort_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Verify both posts are rendered
-  await expect(page.locator('.pr-post')).toHaveCount(2);
+        // Verify both posts are rendered
+        await expect(page.locator('.pr-post')).toHaveCount(2);
 
-  // Default date sort (newest first) - Post 1 should come before Post 2
-  const postTitles = page.locator('.pr-post-header h2');
-  await expect(postTitles.nth(0)).toContainText('Newer Post');
-  await expect(postTitles.nth(1)).toContainText('Older Post');
+        // Default date sort (newest first) - Post 1 should come before Post 2
+        const postTitles = page.locator('.pr-post-header h2');
+        await expect(postTitles.nth(0)).toContainText('Newer Post');
+        await expect(postTitles.nth(1)).toContainText('Older Post');
 
-  // Change to date-asc (oldest first)
-  await page.locator('#archive-sort').selectOption('date-asc');
+        // Change to date-asc (oldest first)
+        await page.locator('#archive-sort').selectOption('date-asc');
 
-  // Wait for rerender and verify Post 2 now comes before Post 1
-  await expect(async () => {
-    const titles = await postTitles.allTextContents();
-    expect(titles[0]).toContain('Older Post');
-    expect(titles[1]).toContain('Newer Post');
-  }).toPass({ timeout: 5000 });
-});
+        // Wait for rerender and verify Post 2 now comes before Post 1
+        await expect(async () => {
+            const titles = await postTitles.allTextContents();
+            expect(titles[0]).toContain('Older Post');
+            expect(titles[1]).toContain('Newer Post');
+        }).toPass({ timeout: 5000 });
+    });
 
-test('[PR-UARCH-21] thread view supports group-level karma sorting', async ({ page }) => {
-  const userId = 'u-karma-sort-user';
-  const userObj = { _id: userId, username: 'KarmaSort_User', displayName: 'Karma Sort User', slug: 'karma-sort-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    test('[PR-UARCH-21] thread view supports group-level karma sorting', async ({ page }) => {
+        const userId = 'u-karma-sort-user';
+        const userObj = { _id: userId, username: 'KarmaSort_User', displayName: 'Karma Sort User', slug: 'karma-sort-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onGraphQL: `
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -315,36 +315,36 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=KarmaSort_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=KarmaSort_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Verify both posts are rendered
-  await expect(page.locator('.pr-post')).toHaveCount(2);
+        // Verify both posts are rendered
+        await expect(page.locator('.pr-post')).toHaveCount(2);
 
-  // Change to karma sort (high to low) - High Karma Post should come first
-  await page.locator('#archive-sort').selectOption('score');
+        // Change to karma sort (high to low) - High Karma Post should come first
+        await page.locator('#archive-sort').selectOption('score');
 
-  await expect(async () => {
-    const titles = await page.locator('.pr-post-header h2').allTextContents();
-    expect(titles[0]).toContain('High Karma Post');
-    expect(titles[1]).toContain('Low Karma Post');
-  }).toPass({ timeout: 5000 });
+        await expect(async () => {
+            const titles = await page.locator('.pr-post-header h2').allTextContents();
+            expect(titles[0]).toContain('High Karma Post');
+            expect(titles[1]).toContain('Low Karma Post');
+        }).toPass({ timeout: 5000 });
 
-  // Change to karma-asc (low to high) - Low Karma Post should come first
-  await page.locator('#archive-sort').selectOption('score-asc');
+        // Change to karma-asc (low to high) - Low Karma Post should come first
+        await page.locator('#archive-sort').selectOption('score-asc');
 
-  await expect(async () => {
-    const titles = await page.locator('.pr-post-header h2').allTextContents();
-    expect(titles[0]).toContain('Low Karma Post');
-    expect(titles[1]).toContain('High Karma Post');
-  }).toPass({ timeout: 5000 });
-});
+        await expect(async () => {
+            const titles = await page.locator('.pr-post-header h2').allTextContents();
+            expect(titles[0]).toContain('Low Karma Post');
+            expect(titles[1]).toContain('High Karma Post');
+        }).toPass({ timeout: 5000 });
+    });
 
     test('search supports valid regex filtering [PR-UARCH-08]', async ({ page }) => {
         const userId = 'u-search-user';
@@ -405,7 +405,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Both items should be visible initially
-        await expect(page.locator('.pr-archive-item')).toHaveCount(2);
+        await expect(page.locator('.pr-item')).toHaveCount(2);
 
         // Test valid regex: match posts containing "alpha" or "beta"
         const searchInput = page.locator('#archive-search');
@@ -413,7 +413,7 @@ return { data: {} };
 
         // Wait for filter to apply using polling
         await expect(async () => {
-            const count = await page.locator('.pr-archive-item').count();
+            const count = await page.locator('.pr-item').count();
             expect(count).toBe(2);
         }).toPass({ timeout: 5000 });
 
@@ -422,11 +422,11 @@ return { data: {} };
 
         // Wait for filter to apply
         await expect(async () => {
-            const count = await page.locator('.pr-archive-item').count();
+            const count = await page.locator('.pr-item').count();
             expect(count).toBe(1);
         }).toPass({ timeout: 5000 });
 
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Test Post Alpha');
+        await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
     });
 
     test('invalid regex falls back to case-insensitive text search [PR-UARCH-08]', async ({ page }) => {
@@ -488,7 +488,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Both items should be visible initially
-        await expect(page.locator('.pr-archive-item')).toHaveCount(2);
+        await expect(page.locator('.pr-item')).toHaveCount(2);
 
         // Enter invalid regex (unmatched bracket)
         const searchInput = page.locator('#archive-search');
@@ -496,11 +496,11 @@ return { data: {} };
 
         // Wait for fallback text search to apply using polling
         await expect(async () => {
-            const count = await page.locator('.pr-archive-item').count();
+            const count = await page.locator('.pr-item').count();
             expect(count).toBe(1);
         }).toPass({ timeout: 5000 });
 
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Special [Bracket] Post');
+        await expect(page.locator('.pr-item h2')).toHaveText('Special [Bracket] Post');
     });
 
     test('all sort modes work: date-asc, score-asc, replyTo [PR-UARCH-09]', async ({ page }) => {
@@ -597,14 +597,14 @@ return { data: {} };
         await sortSelect.selectOption('date-asc');
         // Wait for sort to apply using polling
         await expect(async () => {
-            const titles = await page.locator('.pr-archive-item h3').allTextContents();
+            const titles = await page.locator('.pr-item h2').allTextContents();
             expect(titles[0]).toBe('Low Score Old Post');
         }).toPass({ timeout: 5000 });
 
         // Test score-asc (lowest karma first)
         await sortSelect.selectOption('score-asc');
         // Wait for sort to apply
-        const allItems = page.locator('.pr-archive-item');
+        const allItems = page.locator('.pr-item');
         await expect(async () => {
             await expect(allItems.first()).toContainText('Low Score Old Post');
         }).toPass({ timeout: 5000 });
@@ -613,7 +613,7 @@ return { data: {} };
         await sortSelect.selectOption('replyTo');
         await expect(async () => {
             const ids = await page
-                .locator('.pr-archive-item')
+                .locator('.pr-item')
                 .evaluateAll(nodes => nodes.map(n => n.getAttribute('data-id') || ''));
             const appleIdx = ids.indexOf('c-sort-2');
             const zebraIdx = ids.indexOf('c-sort-1');
@@ -673,7 +673,7 @@ return { data: {} };
 
         // Test Card View (default)
         await viewSelect.selectOption('card');
-        await expect(page.locator('.pr-archive-item')).toBeVisible();
+        await expect(page.locator('.pr-item')).toBeVisible();
         await expect(page.locator('.pr-archive-index-item')).toHaveCount(0);
 
         // Test Index View
@@ -681,9 +681,9 @@ return { data: {} };
         await expect(page.locator('.pr-archive-index-item')).toBeVisible();
         await expect(page.locator('.pr-archive-index-item')).toHaveCount(1);
 
-// Test Thread View - now uses Power Reader's standard post/comment classes
-    await viewSelect.selectOption('thread');
-    await expect(page.locator('.pr-post')).toBeVisible();
+        // Test Thread View - now uses Power Reader's standard post/comment classes
+        await viewSelect.selectOption('thread-full');
+        await expect(page.locator('.pr-post')).toBeVisible();
     });
 
     test('load-more expands rendered items and hides when exhausted [PR-UARCH-12]', async ({ page }) => {
@@ -721,14 +721,14 @@ return { data: {} };
         const loadMoreBtn = loadMoreContainer.locator('button');
 
         // Initial render limit is 50.
-        await expect(page.locator('.pr-archive-item')).toHaveCount(50, { timeout: 15000 });
+        await expect(page.locator('.pr-item')).toHaveCount(50, { timeout: 15000 });
         await expect(loadMoreContainer).toBeVisible();
         await expect(loadMoreBtn).toContainText('Load More (10 remaining)');
 
         await loadMoreBtn.click();
 
         // After one click, all 60 items should be rendered and load-more hidden.
-        await expect(page.locator('.pr-archive-item')).toHaveCount(60, { timeout: 15000 });
+        await expect(page.locator('.pr-item')).toHaveCount(60, { timeout: 15000 });
         await expect(loadMoreContainer).toBeHidden();
     });
 
@@ -802,6 +802,7 @@ return { data: {} };
         const username = 'large-dataset-test';
 
         await setupMockEnvironment(page, {
+            onInit: `window.__PR_ARCHIVE_LARGE_THRESHOLD = 100;`,
             onGraphQL: `
                 const userId = 'u-large';
                 const userObj = { _id: userId, username: '${username}', displayName: 'Big User' };
@@ -810,7 +811,7 @@ return { data: {} };
                 if (query.includes('GetUserPosts')) {
                     if (variables.before) return { data: { posts: { results: [] } } };
                     const results = [];
-                    for (let i = 0; i < 11000; i++) {
+                    for (let i = 0; i < 200; i++) {
                         results.push({
                             _id: 'p' + i,
                             title: 'Post ' + i,
@@ -833,7 +834,7 @@ return { data: {} };
         const dialog = page.locator('.pr-archive-render-dialog');
         await expect(dialog).toBeVisible();
         await expect(dialog).toContainText('Large Dataset Detected');
-        await expect(dialog).toContainText('11,000');
+        await expect(dialog).toContainText('200');
 
         // Choose "Render All"
         const renderAllBtn = page.locator('#render-all-btn');
@@ -841,7 +842,7 @@ return { data: {} };
 
         // Feed should now contain items
         await expect(dialog).toBeHidden();
-        const items = page.locator('.pr-archive-item');
+        const items = page.locator('.pr-item');
         await expect(items.first()).toBeVisible();
 
         // Change sort - THIS IS WHERE THE BUG IS
@@ -851,21 +852,21 @@ return { data: {} };
         // BUG: The dialog should NOT reappear.
         await expect(dialog).toBeHidden({ timeout: 5000 });
 
-  // Items should still be visible
-  await expect(items.first()).toBeVisible();
-});
+        // Items should still be visible
+        await expect(items.first()).toBeVisible();
+    });
 
-test('[PR-UARCH-19] event handlers work after archive rerender (ReaderState identity)', async ({ page }) => {
-  // This test verifies that the ReaderState identity fix works correctly.
-  // Event listeners hold a reference to ReaderState, so after a rerender
-  // (which mutates the state in place), handlers should still work.
-  const username = 'rerender-test';
-  const userId = 'u-rerender';
-  
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onGraphQL: `
+    test('[PR-UARCH-19] event handlers work after archive rerender (ReaderState identity)', async ({ page }) => {
+        // This test verifies that the ReaderState identity fix works correctly.
+        // Event listeners hold a reference to ReaderState, so after a rerender
+        // (which mutates the state in place), handlers should still work.
+        const username = 'rerender-test';
+        const userId = 'u-rerender';
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
       const userObj = { _id: 'u-rerender', username: 'rerender-test', displayName: 'Rerender Test User', slug: 'rerender-test', karma: 100 };
       const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User' };
       
@@ -920,60 +921,60 @@ test('[PR-UARCH-19] event handlers work after archive rerender (ReaderState iden
       }
       return { data: {} };
     `
-  });
+        });
 
-  await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
-  
-  // Wait for thread view to render
-  await expect(page.locator('.pr-post')).toBeVisible();
-  await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
-  
-  // Trigger a rerender by changing sort (this calls rerenderAll internally)
-  await page.locator('#archive-sort').selectOption('score');
-  
-  // Wait for rerender
-  await page.waitForTimeout(100);
-  
-  // After rerender, verify the comment is still visible
-  const comment = page.locator('.pr-comment[data-id="c-child"]');
-  await expect(comment).toBeVisible();
-  
-  // Test [r] button (load descendants) - should trigger GraphQL query
-  const rButton = comment.locator('[data-action="load-descendants"]');
-  await expect(rButton).toBeVisible();
-  
-  // Test [t] button (load parents) - should be visible and clickable
-  // The key assertion is that this doesn't throw an error after rerender,
-  // which proves the ReaderState reference is still valid
-  const tButton = comment.locator('[data-action="load-parents-and-scroll"]');
-  await expect(tButton).toBeVisible();
-  await tButton.click();
-  
-  // If the click didn't throw, the state reference is valid
-  // This is the main assertion - event handlers work after rerender
-  
-  // Test find-parent [^] button - should also be clickable
-  const findParentBtn = comment.locator('[data-action="find-parent"]');
-  await expect(findParentBtn).toBeVisible();
-  await findParentBtn.click();
-  
-  // If we get here without errors, the ReaderState identity fix is working
-});
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-test('[PR-UARCH-23] archive thread view populates currentUserId for authenticated actions', async ({ page }) => {
-  const userId = 'u-auth-test';
-  const userObj = { _id: userId, username: 'AuthTest_User', displayName: 'Auth Test', slug: 'auth-test-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+        // Wait for thread view to render
+        await expect(page.locator('.pr-post')).toBeVisible();
+        await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onInit: `
+        // Trigger a rerender by changing sort (this calls rerenderAll internally)
+        await page.locator('#archive-sort').selectOption('score');
+
+        // Wait for rerender
+        await page.waitForTimeout(100);
+
+        // After rerender, verify the comment is still visible
+        const comment = page.locator('.pr-comment[data-id="c-child"]');
+        await expect(comment).toBeVisible();
+
+        // Test [r] button (load descendants) - should trigger GraphQL query
+        const rButton = comment.locator('[data-action="load-descendants"]');
+        await expect(rButton).toBeVisible();
+
+        // Test [t] button (load parents) - should be visible and clickable
+        // The key assertion is that this doesn't throw an error after rerender,
+        // which proves the ReaderState reference is still valid
+        const tButton = comment.locator('[data-action="load-parents-and-scroll"]');
+        await expect(tButton).toBeVisible();
+        await tButton.click();
+
+        // If the click didn't throw, the state reference is valid
+        // This is the main assertion - event handlers work after rerender
+
+        // Test find-parent [^] button - should also be clickable
+        const findParentBtn = comment.locator('[data-action="find-parent"]');
+        await expect(findParentBtn).toBeVisible();
+        await findParentBtn.click();
+
+        // If we get here without errors, the ReaderState identity fix is working
+    });
+
+    test('[PR-UARCH-23] archive thread view populates currentUserId for authenticated actions', async ({ page }) => {
+        const userId = 'u-auth-test';
+        const userObj = { _id: userId, username: 'AuthTest_User', displayName: 'Auth Test', slug: 'auth-test-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onInit: `
       window.LessWrong = {
         params: {
           currentUser: {
@@ -984,7 +985,7 @@ test('[PR-UARCH-23] archive thread view populates currentUserId for authenticate
         }
       };
     `,
-    onGraphQL: `
+            onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -1013,79 +1014,79 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=AuthTest_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=AuthTest_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Wait for thread view to render
-  await expect(page.locator('.pr-comment[data-id="c-vote-test"]')).toBeVisible();
+        // Wait for thread view to render
+        await expect(page.locator('.pr-comment[data-id="c-vote-test"]')).toBeVisible();
 
-  // [P1-FIX] Verify that currentUserId is populated in the ReaderState
-  // Check via window access - the archive UIHost should have set currentUserId
-  const readerStateCheck = await page.evaluate(() => {
-    // Access the archive state through the global archiveState or check DOM
-    // The vote buttons should be present and interactive if currentUserId is set
-    const comment = document.querySelector('.pr-comment[data-id="c-vote-test"]');
-    if (!comment) return { error: 'Comment not found' };
-    
-    // Check if vote buttons exist and are not disabled
-    const upvoteBtn = comment.querySelector('[data-action="karma-up"]');
-    const downvoteBtn = comment.querySelector('[data-action="karma-down"]');
-    
-    return {
-      hasVoteButtons: !!upvoteBtn && !!downvoteBtn,
-      upvoteDisabled: upvoteBtn?.classList.contains('disabled'),
-      downvoteDisabled: downvoteBtn?.classList.contains('disabled')
-    };
-  });
+        // [P1-FIX] Verify that currentUserId is populated in the ReaderState
+        // Check via window access - the archive UIHost should have set currentUserId
+        const readerStateCheck = await page.evaluate(() => {
+            // Access the archive state through the global archiveState or check DOM
+            // The vote buttons should be present and interactive if currentUserId is set
+            const comment = document.querySelector('.pr-comment[data-id="c-vote-test"]');
+            if (!comment) return { error: 'Comment not found' };
 
-  // Vote buttons should be present (currentUserId is set)
-  expect(readerStateCheck.hasVoteButtons).toBe(true);
-  // Buttons should NOT be disabled (user is authenticated)
-  expect(readerStateCheck.upvoteDisabled).toBeFalsy();
-  expect(readerStateCheck.downvoteDisabled).toBeFalsy();
-});
+            // Check if vote buttons exist and are not disabled
+            const upvoteBtn = comment.querySelector('[data-action="karma-up"]');
+            const downvoteBtn = comment.querySelector('[data-action="karma-down"]');
 
-test('[PR-UARCH-24] thread sort mode persists through Load More', async ({ page }) => {
-  const userId = 'u-sort-persist';
-  const userObj = { _id: userId, username: 'SortPersist_User', displayName: 'Sort Persist', slug: 'sort-persist-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+            return {
+                hasVoteButtons: !!upvoteBtn && !!downvoteBtn,
+                upvoteDisabled: upvoteBtn?.classList.contains('disabled'),
+                downvoteDisabled: downvoteBtn?.classList.contains('disabled')
+            };
+        });
 
-  // Create comments across 2 posts to test pagination
-  // Post 2 has higher score, should come first in karma sort
-  const comments = [
-    {
-      _id: 'c1',
-      postedAt: '2025-01-15T12:00:00Z',
-      baseScore: 5,
-      htmlBody: '<p>Low score comment</p>',
-      user: userObj,
-      post: { _id: 'p1', title: 'Low Karma Post', pageUrl: '...', user: otherUser },
-      parentComment: null,
-      postId: 'p1'
-    },
-    {
-      _id: 'c2',
-      postedAt: '2025-01-10T12:00:00Z',
-      baseScore: 100,
-      htmlBody: '<p>High score comment</p>',
-      user: userObj,
-      post: { _id: 'p2', title: 'High Karma Post', pageUrl: '...', user: otherUser },
-      parentComment: null,
-      postId: 'p2'
-    }
-  ];
+        // Vote buttons should be present (currentUserId is set)
+        expect(readerStateCheck.hasVoteButtons).toBe(true);
+        // Buttons should NOT be disabled (user is authenticated)
+        expect(readerStateCheck.upvoteDisabled).toBeFalsy();
+        expect(readerStateCheck.downvoteDisabled).toBeFalsy();
+    });
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 item initially
-    onGraphQL: `
+    test('[PR-UARCH-24] thread sort mode persists through Load More', async ({ page }) => {
+        const userId = 'u-sort-persist';
+        const userObj = { _id: userId, username: 'SortPersist_User', displayName: 'Sort Persist', slug: 'sort-persist-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+        // Create comments across 2 posts to test pagination
+        // Post 2 has higher score, should come first in karma sort
+        const comments = [
+            {
+                _id: 'c1',
+                postedAt: '2025-01-15T12:00:00Z',
+                baseScore: 5,
+                htmlBody: '<p>Low score comment</p>',
+                user: userObj,
+                post: { _id: 'p1', title: 'Low Karma Post', pageUrl: '...', user: otherUser },
+                parentComment: null,
+                postId: 'p1'
+            },
+            {
+                _id: 'c2',
+                postedAt: '2025-01-10T12:00:00Z',
+                baseScore: 100,
+                htmlBody: '<p>High score comment</p>',
+                user: userObj,
+                post: { _id: 'p2', title: 'High Karma Post', pageUrl: '...', user: otherUser },
+                parentComment: null,
+                postId: 'p2'
+            }
+        ];
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 item initially
+            onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -1097,55 +1098,55 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=SortPersist_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=SortPersist_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View
-  await page.locator('#archive-view').selectOption('thread');
+        // Switch to Thread View
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Select karma sort (high to low)
-  await page.locator('#archive-sort').selectOption('score');
+        // Select karma sort (high to low)
+        await page.locator('#archive-sort').selectOption('score');
 
-  // Wait for sort to apply and verify High Karma Post is visible
-  await expect(async () => {
-    const posts = await page.locator('.pr-post').count();
-    expect(posts).toBeGreaterThan(0);
-    // Check the visible post is High Karma (c2 with score 100)
-    const html = await page.locator('.pr-post').first().innerHTML();
-    expect(html).toContain('High Karma Post');
-  }).toPass({ timeout: 5000 });
+        // Wait for sort to apply and verify High Karma Post is visible
+        await expect(async () => {
+            const posts = await page.locator('.pr-post').count();
+            expect(posts).toBeGreaterThan(0);
+            // Check the visible post is High Karma (c2 with score 100)
+            const html = await page.locator('.pr-post').first().innerHTML();
+            expect(html).toContain('High Karma Post');
+        }).toPass({ timeout: 5000 });
 
-  // Verify Load More button is present (we have 2 items but limit is 1)
-  const loadMoreBtn = page.locator('#archive-load-more button');
-  await expect(loadMoreBtn).toBeVisible();
+        // Verify Load More button is present (we have 2 items but limit is 1)
+        const loadMoreBtn = page.locator('#archive-load-more button');
+        await expect(loadMoreBtn).toBeVisible();
 
-  // [P2-FIX] Click Load More and verify sort is maintained
-  await loadMoreBtn.click();
+        // [P2-FIX] Click Load More and verify sort is maintained
+        await loadMoreBtn.click();
 
-  // Wait for Load More to complete
-  await page.waitForTimeout(500);
+        // Wait for Load More to complete
+        await page.waitForTimeout(500);
 
-  // After Load More, High Karma Post should still be first
-  const firstPostHtml = await page.locator('.pr-post').first().innerHTML();
-  expect(firstPostHtml).toContain('High Karma Post');
-  
-  // Low Karma Post should also be visible now (2nd)
-  const secondPostHtml = await page.locator('.pr-post').nth(1).innerHTML();
-  expect(secondPostHtml).toContain('Low Karma Post');
-});
+        // After Load More, High Karma Post should still be first
+        const firstPostHtml = await page.locator('.pr-post').first().innerHTML();
+        expect(firstPostHtml).toContain('High Karma Post');
 
-test('[PR-UARCH-25] context comments do not leak into card/index view', async ({ page }) => {
-  const userId = 'u-context-test';
-  const userObj = { _id: userId, username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+        // Low Karma Post should also be visible now (2nd)
+        const secondPostHtml = await page.locator('.pr-post').nth(1).innerHTML();
+        expect(secondPostHtml).toContain('Low Karma Post');
+    });
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onGraphQL: `
+    test('[PR-UARCH-25] context comments do not leak into card/index view', async ({ page }) => {
+        const userId = 'u-context-test';
+        const userObj = { _id: userId, username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
 const userObj = { _id: '${userId}', username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
 const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
@@ -1201,87 +1202,87 @@ if (query.includes('GetCommentsByIds')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=ContextTest_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ContextTest_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Step 1: Switch to Thread View - this loads parent context
-  await page.locator('#archive-view').selectOption('thread');
-  
-  // Wait for thread view to render with context
-  await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
-  await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
+        // Step 1: Switch to Thread View - this loads parent context
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // Step 2: Switch to Card View - context should NOT appear here
-  await page.locator('#archive-view').selectOption('card');
-  
-  // Wait for card view to render
-  await expect(page.locator('.pr-archive-item')).toBeVisible();
-  
-  // [P2-FIX] Verify parent context comment does NOT appear in card view
-  // It should only be in thread view, not in the canonical archive items
-  const cardItems = await page.locator('.pr-archive-item').allTextContents();
-  const allCardText = cardItems.join(' ');
-  
-  // Should contain the child comment (target user's content)
-  expect(allCardText).toContain('Child comment by target user');
-  
-  // Should NOT contain the parent context comment (other user's content)
-  expect(allCardText).not.toContain('Parent context comment by other user');
-  
-  // Step 3: Switch to Index View - context should also NOT appear here
-  await page.locator('#archive-view').selectOption('index');
-  
-  // Wait for index view to render
-  await expect(page.locator('.pr-archive-index-item')).toBeVisible();
-  
-  // [P2-FIX] Verify parent context comment does NOT appear in index view
-  const indexItems = await page.locator('.pr-archive-index-item').allTextContents();
-  const allIndexText = indexItems.join(' ');
-  
-  // Should contain the child comment
-  expect(allIndexText).toContain('Child comment by target user');
-  
-  // Should NOT contain the parent context comment
-  expect(allIndexText).not.toContain('Parent context comment by other user');
-});
+        // Wait for thread view to render with context
+        await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
+        await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
 
-test('[PR-UARCH-26] Load More preserves link previews and post action buttons', async ({ page }) => {
-  const userId = 'u-hooks-test';
-  const userObj = { _id: userId, username: 'HooksTest_User', displayName: 'Hooks Test', slug: 'hooks-test-user', karma: 100 };
-  const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+        // Step 2: Switch to Card View - context should NOT appear here
+        await page.locator('#archive-view').selectOption('card');
 
-  // Create comments with links that should have link previews
-  const comments = [
-    {
-      _id: 'c1',
-      postedAt: '2025-01-10T12:00:00Z',
-      baseScore: 10,
-      htmlBody: '<p>Check out <a href="https://example.com">this link</a></p>',
-      user: userObj,
-      post: { _id: 'p1', title: 'Post 1', pageUrl: '...', user: otherUser },
-      parentComment: null,
-      postId: 'p1'
-    },
-    {
-      _id: 'c2',
-      postedAt: '2025-01-09T12:00:00Z',
-      baseScore: 5,
-      htmlBody: '<p>Another <a href="https://test.com">link here</a></p>',
-      user: userObj,
-      post: { _id: 'p2', title: 'Post 2', pageUrl: '...', user: otherUser },
-      parentComment: null,
-      postId: 'p2'
-    }
-  ];
+        // Wait for card view to render
+        await expect(page.locator('.pr-item')).toBeVisible();
 
-  await setupMockEnvironment(page, {
-    mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-    testMode: true,
-    onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 initially
-    onGraphQL: `
+        // [P2-FIX] Verify parent context comment does NOT appear in card view
+        // It should only be in thread view, not in the canonical archive items
+        const cardItems = await page.locator('.pr-item').allTextContents();
+        const allCardText = cardItems.join(' ');
+
+        // Should contain the child comment (target user's content)
+        expect(allCardText).toContain('Child comment by target user');
+
+        // Should NOT contain the parent context comment (other user's content)
+        expect(allCardText).not.toContain('Parent context comment by other user');
+
+        // Step 3: Switch to Index View - context should also NOT appear here
+        await page.locator('#archive-view').selectOption('index');
+
+        // Wait for index view to render
+        await expect(page.locator('.pr-archive-index-item')).toBeVisible();
+
+        // [P2-FIX] Verify parent context comment does NOT appear in index view
+        const indexItems = await page.locator('.pr-archive-index-item').allTextContents();
+        const allIndexText = indexItems.join(' ');
+
+        // Should contain the child comment
+        expect(allIndexText).toContain('Child comment by target user');
+
+        // Should NOT contain the parent context comment
+        expect(allIndexText).not.toContain('Parent context comment by other user');
+    });
+
+    test('[PR-UARCH-26] Load More preserves link previews and post action buttons', async ({ page }) => {
+        const userId = 'u-hooks-test';
+        const userObj = { _id: userId, username: 'HooksTest_User', displayName: 'Hooks Test', slug: 'hooks-test-user', karma: 100 };
+        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+        // Create comments with links that should have link previews
+        const comments = [
+            {
+                _id: 'c1',
+                postedAt: '2025-01-10T12:00:00Z',
+                baseScore: 10,
+                htmlBody: '<p>Check out <a href="https://example.com">this link</a></p>',
+                user: userObj,
+                post: { _id: 'p1', title: 'Post 1', pageUrl: '...', user: otherUser },
+                parentComment: null,
+                postId: 'p1'
+            },
+            {
+                _id: 'c2',
+                postedAt: '2025-01-09T12:00:00Z',
+                baseScore: 5,
+                htmlBody: '<p>Another <a href="https://test.com">link here</a></p>',
+                user: userObj,
+                post: { _id: 'p2', title: 'Post 2', pageUrl: '...', user: otherUser },
+                parentComment: null,
+                postId: 'p2'
+            }
+        ];
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 initially
+            onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -1293,43 +1294,43 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-  });
+        });
 
-  await page.goto('https://www.lesswrong.com/reader?view=archive&username=HooksTest_User', { waitUntil: 'commit' });
-  await page.evaluate(scriptContent);
-  await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=HooksTest_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-  // Switch to Thread View (has post action buttons and link previews)
-  await page.locator('#archive-view').selectOption('thread');
-  
-  // Wait for initial render
-  await expect(page.locator('.pr-post')).toHaveCount(1);
-  
-  // Hover over a link to verify link previews are working initially
-  const firstLink = page.locator('.pr-post a[href="https://example.com"]');
-  await firstLink.hover();
-  await page.waitForTimeout(200);
-  
-  // Verify Load More button is present
-  const loadMoreBtn = page.locator('#archive-load-more button');
-  await expect(loadMoreBtn).toBeVisible();
+        // Switch to Thread View (has post action buttons and link previews)
+        await page.locator('#archive-view').selectOption('thread-full');
 
-  // [P2-FIX] Click Load More and verify UI hooks are reinitialized
-  await loadMoreBtn.click();
-  
-  // Wait for Load More to complete
-  await page.waitForTimeout(500);
-  
-  // Verify both posts are now visible
-  await expect(page.locator('.pr-post')).toHaveCount(2);
-  
-  // Verify link previews still work after Load More
-  const secondLink = page.locator('.pr-post a[href="https://test.com"]');
-  await expect(secondLink).toBeVisible();
-  await secondLink.hover();
-  await page.waitForTimeout(200);
-  
-  // If we get here without errors, link previews and post action buttons are working
-  // The main assertion is that no errors occur (which would happen if hooks weren't reinitialized)
-});
+        // Wait for initial render
+        await expect(page.locator('.pr-post')).toHaveCount(1);
+
+        // Hover over a link to verify link previews are working initially
+        const firstLink = page.locator('.pr-post a[href="https://example.com"]');
+        await firstLink.hover();
+        await page.waitForTimeout(200);
+
+        // Verify Load More button is present
+        const loadMoreBtn = page.locator('#archive-load-more button');
+        await expect(loadMoreBtn).toBeVisible();
+
+        // [P2-FIX] Click Load More and verify UI hooks are reinitialized
+        await loadMoreBtn.click();
+
+        // Wait for Load More to complete
+        await page.waitForTimeout(500);
+
+        // Verify both posts are now visible
+        await expect(page.locator('.pr-post')).toHaveCount(2);
+
+        // Verify link previews still work after Load More
+        const secondLink = page.locator('.pr-post a[href="https://test.com"]');
+        await expect(secondLink).toBeVisible();
+        await secondLink.hover();
+        await page.waitForTimeout(200);
+
+        // If we get here without errors, link previews and post action buttons are working
+        // The main assertion is that no errors occur (which would happen if hooks weren't reinitialized)
+    });
 });

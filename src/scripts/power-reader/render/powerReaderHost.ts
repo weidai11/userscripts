@@ -87,7 +87,7 @@ export class PowerReaderUIHost implements UIHost {
         let added = 0;
         for (const c of newComments) {
             if (!this.state.commentById.has(c._id)) {
-                if (markAsContext) (c as any).isContext = true;
+                if (markAsContext) (c as any).contextType = 'fetched';
                 if (postIdMap && postIdMap.has(c._id)) {
                     c.postId = postIdMap.get(c._id)!;
                 }

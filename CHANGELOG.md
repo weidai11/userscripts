@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.664] - 2026-02-16
+
+### Fixed
+- **Test Performance & Reliability ([PR-UARCH-18])**: Optimized the "Large Dataset" test to prevent timeouts in headless environments. Increased testability by making the performance threshold configurable via `window.__PR_ARCHIVE_LARGE_THRESHOLD`.
+
+
+### Added
+- **Context Type Enum ([PR-UARCH-27])**: Replaced separate `isPlaceholder` and `isContext` boolean flags with a unified `contextType` enum:
+    - `'missing'` - Structural placeholder (parent not in any query)
+    - `'fetched'` - Full comment loaded from server for ancestry
+    - `'stub'` - Metadata-only placeholder from parentComment reference
+    - `undefined` - Normal user-authored comment
+- **Thread View Modes ([PR-UARCH-28])**: Split thread view into two modes:
+    - **Thread View (Full Context)**: Fetches full parent comments from server (existing behavior)
+    - **Thread View (Placeholder)**: Creates stub parent comments locally from parentComment data without network requests
+- **Card View Parent Context ([PR-UARCH-29])**: Each comment card now displays its immediate parent as a stub placeholder (metadata-only, 80% font size) above the comment content.
+- **Index View Click-to-Expand ([PR-UARCH-30])**: Clicking any item in index view expands it in-place to card rendering with a "Collapse" button to return to the index row.
+- **Placeholder Context Rendering ([PR-UARCH-31])**: Comments with `contextType: 'stub'` render as header-only placeholders without vote buttons, using the `.pr-context-placeholder` CSS class.
+- **Context Persistence ([PR-UARCH-32])**: Context comments (both `'fetched'` and `'stub'`) are now preserved in ReaderState when switching between thread, card, and index views within the same session.
+- **isThreadMode Helper ([PR-UARCH-33])**: Added helper function to identify both thread variants without requiring multiple equality checks.
+
+### Changed
+- **GraphQL Schema**: Added `postedAt` field to all nesting levels of `parentComment` in GraphQL queries to support stub context rendering.
+- **Test Suite**: Updated all test selectors to use new class names (`.pr-item`, `h2`) matching the shared rendering components.
+
 ## [1.2.630] - 2026-02-16
 
 ### Fixed

@@ -21,7 +21,8 @@ export interface UIHost {
     rerenderPostGroup(postId: string, anchorCommentId?: string): void;
 
     /**
-     * Merge new comments into the state and return the number of new comments added.
+     * Merge comments into state and return the number of comment entries mutated
+     * (newly inserted and/or upgraded in place).
      * Power Reader: updates state.comments + rebuildIndexes
      * Archive: updates ArchiveState.items + ReaderState projection + rebuildIndexes
      */

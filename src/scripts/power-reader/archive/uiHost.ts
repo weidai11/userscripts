@@ -92,16 +92,73 @@ export class ArchiveUIHost implements UIHost {
     });
   }
 
+  private upsertReaderComment(comment: Comment): void {
+    const idx = this.readerState.comments.findIndex(c => c._id === comment._id);
+    if (idx >= 0) {
+      this.readerState.comments[idx] = comment;
+    } else {
+      this.readerState.comments.push(comment);
+    }
+    this.readerState.commentById.set(comment._id, comment);
+  }
+
+  private shouldReplaceExistingComment(existing: Comment, incoming: Comment, markAsContext: boolean): boolean {
+    // Non-context merge paths should always upsert latest server data.
+    if (!markAsContext) return true;
+
+    const existingType = (existing as any).contextType;
+    const incomingType = (incoming as any).contextType;
+    const existingIsStub = existingType === 'stub' || existingType === 'missing';
+    const incomingIsStub = incomingType === 'stub' || incomingType === 'missing';
+    const existingHasBody = typeof existing.htmlBody === 'string' && existing.htmlBody.trim().length > 0;
+    const incomingHasBody = typeof incoming.htmlBody === 'string' && incoming.htmlBody.trim().length > 0;
+
+    // Core upgrade path: placeholder context must be replaceable by fetched/full context.
+    if (existingIsStub && !incomingIsStub) return true;
+    if (!existingHasBody && incomingHasBody) return true;
+    if (incomingType === 'fetched' && existingType !== 'fetched') return true;
+
+    return false;
+  }
+
+  private mergeComment(existing: Comment, incoming: Comment, markAsContext: boolean): Comment {
+    const merged = { ...existing, ...incoming } as Comment;
+
+    // Preserve transient UI flags if the incoming payload does not carry them.
+    if ((existing as any).forceVisible && !(merged as any).forceVisible) {
+      (merged as any).forceVisible = true;
+    }
+    if ((existing as any).justRevealed && !(merged as any).justRevealed) {
+      (merged as any).justRevealed = true;
+    }
+
+    if (markAsContext) {
+      const existingType = (existing as any).contextType;
+      const incomingType = (incoming as any).contextType;
+
+      // Never downgrade fetched context to stub placeholders.
+      if (incomingType === 'stub' && existingType && existingType !== 'stub') {
+        (merged as any).contextType = existingType;
+      } else if (!incomingType) {
+        (merged as any).contextType = existingType || 'fetched';
+      }
+    } else {
+      // Canonical comments are not context placeholders.
+      delete (merged as any).contextType;
+    }
+
+    return merged;
+  }
+
   rerenderAll(): void {
     if (!this.feedContainer) return;
 
     // [P1-FIX] Mutate ReaderState in place instead of replacing to preserve identity
     // Event listeners hold a reference to this.readerState, so we must not replace the object
 
-    // [WS1-FIX] Track context items explicitly using isContext flag
-    // Context items are canonical for the live archive session but may be filtered at render time
-    const existingContext = this.readerState.comments.filter(c => (c as any).isContext === true);
-    const existingPosts = this.readerState.posts.filter(p => (p as any).isContext === true);
+    // Preserve non-canonical context items (comments/posts fetched only for thread context).
+    const existingContext = this.readerState.comments.filter(c => !this.archiveState.itemById.has(c._id));
+    const existingPosts = this.readerState.posts.filter(p => !this.archiveState.itemById.has(p._id));
 
     // Clear and rebuild from archive items
     this.readerState.comments.length = 0;
@@ -187,35 +244,47 @@ export class ArchiveUIHost implements UIHost {
     }
 
   mergeComments(newComments: Comment[], markAsContext: boolean = true, postIdMap?: Map<string, string>): number {
-    let added = 0;
-    for (const c of newComments) {
-      if (!this.readerState.commentById.has(c._id)) {
-        if (markAsContext) (c as any).isContext = true;
-        if (postIdMap && postIdMap.has(c._id)) {
-          c.postId = postIdMap.get(c._id)!;
-        }
-        this.readerState.comments.push(c);
-        this.readerState.commentById.set(c._id, c);
-        added++;
+    let changed = 0;
+    let canonicalTouched = false;
+
+    for (const incoming of newComments) {
+      if (postIdMap && postIdMap.has(incoming._id)) {
+        incoming.postId = postIdMap.get(incoming._id)!;
+      }
+      if (markAsContext && !(incoming as any).contextType) {
+        (incoming as any).contextType = 'fetched';
       }
 
-      // [P2-FIX] Only sync to canonical ArchiveState if NOT a context comment
-      // Context comments (loaded for thread view ancestry) should not pollute the canonical archive set
-      // They remain in ReaderState for rendering but won't appear in card/index views
+      const existing = this.readerState.commentById.get(incoming._id);
+      if (!existing) {
+        this.upsertReaderComment(incoming);
+        changed++;
+      } else if (this.shouldReplaceExistingComment(existing, incoming, markAsContext)) {
+        const merged = this.mergeComment(existing, incoming, markAsContext);
+        this.upsertReaderComment(merged);
+        changed++;
+      }
+
+      // Context comments should never be promoted into canonical archive items.
       if (!markAsContext) {
-        this.syncItemToCanonical(c);
+        const canonical = this.readerState.commentById.get(incoming._id) || incoming;
+        this.syncItemToCanonical(canonical);
+        canonicalTouched = true;
       }
     }
 
-    if (added > 0) {
-      // [WS1-FIX] Keep canonical ordering stable (only matters for canonical items)
+    if (canonicalTouched) {
       this.sortCanonicalItems();
+    }
+    if (changed > 0) {
       rebuildIndexes(this.readerState);
     }
-    return added;
+    return changed;
   }
 
   upsertPost(post: Post): void {
+    const isCanonicalPost = this.archiveState.itemById.has(post._id);
+
     if (!this.readerState.postById.has(post._id)) {
       this.readerState.posts.push(post);
     } else {
@@ -224,8 +293,13 @@ export class ArchiveUIHost implements UIHost {
     }
     this.readerState.postById.set(post._id, post);
 
-    // [WS1-FIX] Sync to canonical ArchiveState
-    this.syncItemToCanonical(post);
-    this.sortCanonicalItems();
+    if (isCanonicalPost) {
+      // Keep canonical archive posts in sync when full post data is fetched.
+      this.syncItemToCanonical(post);
+      this.sortCanonicalItems();
+    } else {
+      // Non-canonical posts are context-only and should survive rerenders without polluting archive items.
+      if (!(post as any).contextType) (post as any).contextType = 'fetched';
+    }
   }
 }

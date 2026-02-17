@@ -1,13 +1,12 @@
 
 import { Logger } from '../utils/logger';
-import { renderMetadata } from '../render/components/metadata';
-import { renderBody } from '../render/components/body';
-import { escapeHtml } from '../utils/rendering';
+import { escapeHtml, renderPostHeader } from '../utils/rendering';
 import { fetchCommentsByIds } from './loader';
-import type { ArchiveViewMode } from './state';
-import type { Post, Comment } from '../../../shared/graphql/queries';
+import { type ArchiveViewMode, isThreadMode } from './state';
+import type { Post, Comment, ParentCommentRef } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
-import { renderPostGroup } from '../render/post';
+import { renderPostGroup, renderPostBody } from '../render/post';
+import { renderComment } from '../render/comment';
 import { getUIHost } from '../render/uiHost';
 
 let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
@@ -83,6 +82,38 @@ const ensureContextForItems = async (
 };
 
 /**
+ * Create stub context comments from the parentComment chain data
+ * already present in each comment's GraphQL response.
+ * No network requests needed.
+ */
+const ensurePlaceholderContext = (
+  items: (Post | Comment)[], state: ReaderState
+): void => {
+  const stubs: Comment[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    if ('title' in item) continue;
+    const comment = item as Comment;
+    let current = comment.parentComment as any;
+
+    while (current?._id) {
+      // Keep walking upward even when an ancestor is already seen/loaded;
+      // that avoids skipping deeper missing ancestors on shared chains.
+      if (!state.commentById.has(current._id) && !seen.has(current._id)) {
+        seen.add(current._id);
+        stubs.push(parentRefToStub(current, comment));
+      }
+      current = current.parentComment;
+    }
+  }
+
+  if (stubs.length > 0) {
+    getUIHost().mergeComments(stubs, true);
+  }
+};
+
+/**
  * Main Render Function
  * [P2-FIX] Thread view now loads parent context before rendering
  * [WS3-FIX] Accepts sortBy parameter for group-level thread sorting
@@ -111,13 +142,17 @@ export const renderArchiveFeed = async (
 
   if (viewMode === 'index') {
     container.innerHTML = visibleItems.map(item => renderIndexItem(item)).join('');
-  } else if (viewMode === 'thread') {
+  } else if (isThreadMode(viewMode)) {
     // [P2-FIX] Load parent context first, then render thread view
     // [WS3-FIX] Pass sortBy for group-level sorting
-    await ensureContextForItems(visibleItems, state);
+    if (viewMode === 'thread-full') {
+      await ensureContextForItems(visibleItems, state);
+    } else {
+      ensurePlaceholderContext(visibleItems, state);
+    }
     renderThreadView(container, visibleItems, state, sortBy);
   } else {
-    container.innerHTML = visibleItems.map(item => renderCardItem(item)).join('');
+    container.innerHTML = visibleItems.map(item => renderCardItem(item, state)).join('');
   }
 };
 
@@ -265,48 +300,69 @@ const renderThreadView = (
 
 
 /**
- * 1. Card View (Existing Logic)
+ * Convert a ParentCommentRef (from the GraphQL parentComment chain)
+ * into a minimal Comment suitable for renderContextPlaceholder.
  */
-const renderCardItem = (item: Post | Comment): string => {
-    const isPost = 'title' in item;
-    const classes = `pr-archive-item pr-item ${isPost ? 'pr-post' : 'pr-comment'}`;
-    const metadataHtml = renderMetadata(item);
+const parentRefToStub = (ref: ParentCommentRef, sourceComment: Comment): Comment => ({
+  _id: ref._id,
+  postedAt: ref.postedAt || '',
+  parentCommentId: ref.parentCommentId || '',
+  user: ref.user ? { ...ref.user, slug: '', karma: 0, htmlBio: '' } : null,
+  postId: sourceComment.postId,
+  post: sourceComment.post ?? null,
+  htmlBody: '', baseScore: 0, voteCount: 0, pageUrl: '',
+  author: ref.user?.username || '', rejected: false,
+  topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
+  parentComment: null, extendedScore: null, afExtendedScore: null,
+  currentUserVote: null, currentUserExtendedVote: null,
+  contents: { markdown: null },
+  descendentCount: 0,
+  directChildrenCount: 0,
+  contextType: 'stub',
+} as any as Comment);
 
-    let contentHtml = '';
-    if (isPost) {
-        const post = item as Post;
-        contentHtml = `<h3>${escapeHtml(post.title)}</h3>` + renderBody(post.htmlBody || '', post.extendedScore);
-    } else {
-        const comment = item as Comment;
-        contentHtml = renderBody(comment.htmlBody || '', comment.extendedScore);
-    }
+/**
+ * 1. Card View - Uses shared rendering components
+ */
+export const renderCardItem = (item: Post | Comment, state: ReaderState): string => {
+  const isPost = 'title' in item;
 
-    // Ensure we have a data-post-id for fallback navigation lookups
-    const dataset = `data-id="${item._id}" ${!isPost && (item as Comment).postId ? `data-post-id="${(item as Comment).postId}"` : ''}`;
-
+  if (isPost) {
+    // Render post header + body using shared components
+    const post = item as Post;
+    const headerHtml = renderPostHeader(post, { isFullPost: true, state });
+    const bodyHtml = post.htmlBody ? renderPostBody(post, false) : '';
     return `
-      <div class="${classes}" ${dataset}>
-        <div class="pr-archive-item-header">
-           ${metadataHtml}
-        </div>
-        <div class="pr-archive-item-body">
-           ${contentHtml}
-        </div>
+      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
+        ${headerHtml}
+        ${bodyHtml}
       </div>
     `;
+  }
+
+  // Comment: render with shared renderComment
+  const comment = item as Comment;
+  let contextHtml = '';
+
+  // Show immediate parent as stub placeholder
+  if (comment.parentCommentId && comment.parentComment) {
+    contextHtml = renderComment(parentRefToStub(comment.parentComment, comment), state);
+  }
+
+  return `<div class="pr-archive-item">${contextHtml}${renderComment(comment, state)}</div>`;
 };
 
 /**
- * 2. Index View (Existing Logic)
+ * 2. Index View
  */
-const renderIndexItem = (item: Post | Comment): string => {
-    const isPost = 'title' in item;
-    const title = isPost ? (item as Post).title : ((item as Comment).htmlBody || '').replace(/<[^>]+>/g, '').slice(0, 100) + '...';
-    const context = isPost ? 'Post' : `Reply to ${getInterlocutorName(item)}`;
-    const date = new Date(item.postedAt).toLocaleDateString();
+export const renderIndexItem = (item: Post | Comment): string => {
+  const isPost = 'title' in item;
+  const title = isPost ? (item as Post).title : ((item as Comment).htmlBody || '').replace(/<[^>]+>/g, '').slice(0, 100) + '...';
+  const context = isPost ? 'Post' : `Reply to ${getInterlocutorName(item)}`;
+  const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : '';
 
-    return `
-        <div class="pr-archive-index-item" data-id="${item._id}">
+  return `
+        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
             <div class="pr-index-score" style="color: ${item.baseScore > 0 ? 'var(--pr-highlight)' : 'inherit'}">
                 ${item.baseScore || 0}
             </div>
@@ -321,11 +377,9 @@ const renderIndexItem = (item: Post | Comment): string => {
 };
 
 const getInterlocutorName = (item: Post | Comment): string => {
-    if ('title' in item) return " (Original Post)";
-    const c = item as Comment;
-    if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
-    if (c.post?.user?.displayName) return c.post.user.displayName;
-    return "Unknown";
+  if ('title' in item) return " (Original Post)";
+  const c = item as Comment;
+  if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
+  if (c.post?.user?.displayName) return c.post.user.displayName;
+  return "Unknown";
 };
-
-// ... unused helpers removed (renderThreadItem, ensureContextForItems, sanitizeBodySimple)

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.658
+// @version    1.2.664
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2661,7 +2661,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.658"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.664"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2846,18 +2846,23 @@ dirty.indexOf("<") === -1) {
     parentCommentId
     parentComment {
       _id
+      postedAt
       parentCommentId
       parentComment {
         _id
+        postedAt
         parentCommentId
         parentComment {
           _id
+          postedAt
           parentCommentId
           parentComment {
             _id
+            postedAt
             parentCommentId
             parentComment {
               _id
+              postedAt
               parentCommentId
             }
           }
@@ -3545,7 +3550,7 @@ hoverDelay: 300,
         return true;
       } else {
         const existing = commentMap.get(comment._id);
-        if (existing.isPlaceholder) {
+        if (existing.contextType === "missing") {
           const idx = allComments.findIndex((c) => c._id === comment._id);
           if (idx !== -1) {
             allComments[idx] = comment;
@@ -4982,9 +4987,7 @@ isFullPost
     });
     return doc.body.innerHTML;
   };
-  const isPlaceholderComment = (comment) => {
-    return comment.isPlaceholder === true;
-  };
+  const getContextType = (comment) => comment.contextType;
   const renderMissingParentPlaceholder = (comment, repliesHtml = "") => {
     const postId = comment.postId || "";
     return `
@@ -5058,13 +5061,29 @@ isFullPost
     }
     return count;
   };
+  const renderContextPlaceholder = (comment, state2, repliesHtml = "") => {
+    const metadataHtml = renderMetadata(comment, {
+      state: state2,
+      style: "font-size: 80%;",
+      isFullPost: false
+    });
+    return `
+    <div class="pr-comment pr-item context pr-context-placeholder"
+         data-id="${comment._id}"
+         data-parent-id="${comment.parentCommentId || ""}"
+         data-post-id="${comment.postId}">
+      ${metadataHtml}
+      ${repliesHtml}
+    </div>
+  `;
+  };
   const renderComment = (comment, state2, repliesHtml = "") => {
-    if (isPlaceholderComment(comment)) {
-      return renderMissingParentPlaceholder(comment, repliesHtml);
-    }
+    const ct = getContextType(comment);
+    if (ct === "missing") return renderMissingParentPlaceholder(comment, repliesHtml);
+    if (ct === "stub") return renderContextPlaceholder(comment, state2, repliesHtml);
     const readState = getReadState();
     const isLocallyRead = !state2.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
-    const commentIsRead = comment.isContext || isLocallyRead;
+    const commentIsRead = ct === "fetched" || isLocallyRead;
     const unreadDescendantCount = getUnreadDescendantCount(comment._id, state2, readState);
     const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !comment.forceVisible;
     if (showAsPlaceholder) {
@@ -5086,7 +5105,7 @@ isFullPost
     const authorKarma = comment.user?.karma || 0;
     const normalized = calculateNormalizedScore(score, ageHours, authorHandle, authorKarma, false);
     const order = comment._order || 0;
-    const isContext = comment.isContext;
+    const isContext = ct === "fetched";
     const isReplyToYou = !!(state2.currentUsername && comment.parentComment?.user?.username === state2.currentUsername);
     const autoHide = !state2.isArchiveMode && shouldAutoHide(normalized) && !commentIsRead && !isContext;
     const clampedScore = clampScore(normalized);
@@ -5176,7 +5195,7 @@ isFullPost
       afExtendedScore: null,
       currentUserVote: null,
       currentUserExtendedVote: null,
-      isPlaceholder: true
+      contextType: "missing"
     };
   };
   const extractParentChain = (comment) => {
@@ -5982,7 +6001,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
     };
     sortedComments.forEach((c) => {
-      const isContext = c.isContext;
+      const ct = c.contextType;
+      const isContext = ct === "fetched" || ct === "stub";
       const isLocallyRead = isRead(c._id, readState, c.postedAt);
       const implicit = isImplicitlyRead(c);
       const commentIsRead = isLocallyRead || implicit;
@@ -6195,7 +6215,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6338,7 +6358,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -8288,7 +8308,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       let added = 0;
       for (const c of newComments) {
         if (!this.state.commentById.has(c._id)) {
-          if (markAsContext) c.isContext = true;
+          if (markAsContext) c.contextType = "fetched";
           if (postIdMap && postIdMap.has(c._id)) {
             c.postId = postIdMap.get(c._id);
           }
@@ -8463,6 +8483,7 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     window.addEventListener("beforeunload", () => observer.disconnect());
   };
+  const isThreadMode = (mode) => mode === "thread-full" || mode === "thread-placeholder";
   const createInitialArchiveState = (username) => ({
     username,
     userId: null,
@@ -8681,6 +8702,25 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
       getUIHost().mergeComments(fetched, true, commentPostIdMap);
     }
   };
+  const ensurePlaceholderContext = (items, state2) => {
+    const stubs = [];
+    const seen = new Set();
+    for (const item of items) {
+      if ("title" in item) continue;
+      const comment = item;
+      let current = comment.parentComment;
+      while (current?._id) {
+        if (!state2.commentById.has(current._id) && !seen.has(current._id)) {
+          seen.add(current._id);
+          stubs.push(parentRefToStub(current, comment));
+        }
+        current = current.parentComment;
+      }
+    }
+    if (stubs.length > 0) {
+      getUIHost().mergeComments(stubs, true);
+    }
+  };
   const renderArchiveFeed = async (container, items, viewMode, state2, sortBy) => {
     if (items.length === 0) {
       container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
@@ -8696,11 +8736,15 @@ ${md.split("\n").map((l) => "    " + l).join("\n")}
     }
     if (viewMode === "index") {
       container.innerHTML = visibleItems.map((item) => renderIndexItem(item)).join("");
-    } else if (viewMode === "thread") {
-      await ensureContextForItems(visibleItems, state2);
+    } else if (isThreadMode(viewMode)) {
+      if (viewMode === "thread-full") {
+        await ensureContextForItems(visibleItems, state2);
+      } else {
+        ensurePlaceholderContext(visibleItems, state2);
+      }
       renderThreadView(container, visibleItems, state2, sortBy);
     } else {
-      container.innerHTML = visibleItems.map((item) => renderCardItem(item)).join("");
+      container.innerHTML = visibleItems.map((item) => renderCardItem(item, state2)).join("");
     }
   };
   const renderThreadView = (container, items, state2, sortBy) => {
@@ -8801,37 +8845,57 @@ maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
     });
     container.innerHTML = html2;
   };
-  const renderCardItem = (item) => {
+  const parentRefToStub = (ref, sourceComment) => ({
+    _id: ref._id,
+    postedAt: ref.postedAt || "",
+    parentCommentId: ref.parentCommentId || "",
+    user: ref.user ? { ...ref.user, slug: "", karma: 0, htmlBio: "" } : null,
+    postId: sourceComment.postId,
+    post: sourceComment.post ?? null,
+    htmlBody: "",
+    baseScore: 0,
+    voteCount: 0,
+    pageUrl: "",
+    author: ref.user?.username || "",
+    rejected: false,
+    topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
+    parentComment: null,
+    extendedScore: null,
+    afExtendedScore: null,
+    currentUserVote: null,
+    currentUserExtendedVote: null,
+    contents: { markdown: null },
+    descendentCount: 0,
+    directChildrenCount: 0,
+    contextType: "stub"
+  });
+  const renderCardItem = (item, state2) => {
     const isPost = "title" in item;
-    const classes = `pr-archive-item pr-item ${isPost ? "pr-post" : "pr-comment"}`;
-    const metadataHtml = renderMetadata(item);
-    let contentHtml = "";
     if (isPost) {
       const post = item;
-      contentHtml = `<h3>${escapeHtml(post.title)}</h3>` + renderBody(post.htmlBody || "", post.extendedScore);
-    } else {
-      const comment = item;
-      contentHtml = renderBody(comment.htmlBody || "", comment.extendedScore);
-    }
-    const dataset = `data-id="${item._id}" ${!isPost && item.postId ? `data-post-id="${item.postId}"` : ""}`;
-    return `
-      <div class="${classes}" ${dataset}>
-        <div class="pr-archive-item-header">
-           ${metadataHtml}
-        </div>
-        <div class="pr-archive-item-body">
-           ${contentHtml}
-        </div>
+      const headerHtml = renderPostHeader(post, { isFullPost: true, state: state2 });
+      const bodyHtml = post.htmlBody ? renderPostBody(post, false) : "";
+      return `
+      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
+        ${headerHtml}
+        ${bodyHtml}
       </div>
     `;
+    }
+    const comment = item;
+    let contextHtml = "";
+    if (comment.parentCommentId && comment.parentComment) {
+      contextHtml = renderComment(parentRefToStub(comment.parentComment, comment), state2);
+    }
+    return `<div class="pr-archive-item">${contextHtml}${renderComment(comment, state2)}</div>`;
   };
   const renderIndexItem = (item) => {
     const isPost = "title" in item;
     const title = isPost ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
     const context = isPost ? "Post" : `Reply to ${getInterlocutorName$1(item)}`;
-    const date = new Date(item.postedAt).toLocaleDateString();
+    const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
     return `
-        <div class="pr-archive-index-item" data-id="${item._id}">
+        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
             <div class="pr-index-score" style="color: ${item.baseScore > 0 ? "var(--pr-highlight)" : "inherit"}">
                 ${item.baseScore || 0}
             </div>
@@ -8904,10 +8968,53 @@ sortCanonicalItems() {
         return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
       });
     }
+    upsertReaderComment(comment) {
+      const idx = this.readerState.comments.findIndex((c) => c._id === comment._id);
+      if (idx >= 0) {
+        this.readerState.comments[idx] = comment;
+      } else {
+        this.readerState.comments.push(comment);
+      }
+      this.readerState.commentById.set(comment._id, comment);
+    }
+    shouldReplaceExistingComment(existing, incoming, markAsContext) {
+      if (!markAsContext) return true;
+      const existingType = existing.contextType;
+      const incomingType = incoming.contextType;
+      const existingIsStub = existingType === "stub" || existingType === "missing";
+      const incomingIsStub = incomingType === "stub" || incomingType === "missing";
+      const existingHasBody = typeof existing.htmlBody === "string" && existing.htmlBody.trim().length > 0;
+      const incomingHasBody = typeof incoming.htmlBody === "string" && incoming.htmlBody.trim().length > 0;
+      if (existingIsStub && !incomingIsStub) return true;
+      if (!existingHasBody && incomingHasBody) return true;
+      if (incomingType === "fetched" && existingType !== "fetched") return true;
+      return false;
+    }
+    mergeComment(existing, incoming, markAsContext) {
+      const merged = { ...existing, ...incoming };
+      if (existing.forceVisible && !merged.forceVisible) {
+        merged.forceVisible = true;
+      }
+      if (existing.justRevealed && !merged.justRevealed) {
+        merged.justRevealed = true;
+      }
+      if (markAsContext) {
+        const existingType = existing.contextType;
+        const incomingType = incoming.contextType;
+        if (incomingType === "stub" && existingType && existingType !== "stub") {
+          merged.contextType = existingType;
+        } else if (!incomingType) {
+          merged.contextType = existingType || "fetched";
+        }
+      } else {
+        delete merged.contextType;
+      }
+      return merged;
+    }
     rerenderAll() {
       if (!this.feedContainer) return;
-      const existingContext = this.readerState.comments.filter((c) => c.isContext === true);
-      const existingPosts = this.readerState.posts.filter((p) => p.isContext === true);
+      const existingContext = this.readerState.comments.filter((c) => !this.archiveState.itemById.has(c._id));
+      const existingPosts = this.readerState.posts.filter((p) => !this.archiveState.itemById.has(p._id));
       this.readerState.comments.length = 0;
       this.readerState.posts.length = 0;
       this.readerState.commentById.clear();
@@ -8974,28 +9081,40 @@ sortCanonicalItems() {
       }
     }
     mergeComments(newComments, markAsContext = true, postIdMap) {
-      let added = 0;
-      for (const c of newComments) {
-        if (!this.readerState.commentById.has(c._id)) {
-          if (markAsContext) c.isContext = true;
-          if (postIdMap && postIdMap.has(c._id)) {
-            c.postId = postIdMap.get(c._id);
-          }
-          this.readerState.comments.push(c);
-          this.readerState.commentById.set(c._id, c);
-          added++;
+      let changed = 0;
+      let canonicalTouched = false;
+      for (const incoming of newComments) {
+        if (postIdMap && postIdMap.has(incoming._id)) {
+          incoming.postId = postIdMap.get(incoming._id);
+        }
+        if (markAsContext && !incoming.contextType) {
+          incoming.contextType = "fetched";
+        }
+        const existing = this.readerState.commentById.get(incoming._id);
+        if (!existing) {
+          this.upsertReaderComment(incoming);
+          changed++;
+        } else if (this.shouldReplaceExistingComment(existing, incoming, markAsContext)) {
+          const merged = this.mergeComment(existing, incoming, markAsContext);
+          this.upsertReaderComment(merged);
+          changed++;
         }
         if (!markAsContext) {
-          this.syncItemToCanonical(c);
+          const canonical = this.readerState.commentById.get(incoming._id) || incoming;
+          this.syncItemToCanonical(canonical);
+          canonicalTouched = true;
         }
       }
-      if (added > 0) {
+      if (canonicalTouched) {
         this.sortCanonicalItems();
+      }
+      if (changed > 0) {
         rebuildIndexes(this.readerState);
       }
-      return added;
+      return changed;
     }
     upsertPost(post) {
+      const isCanonicalPost = this.archiveState.itemById.has(post._id);
       if (!this.readerState.postById.has(post._id)) {
         this.readerState.posts.push(post);
       } else {
@@ -9003,8 +9122,12 @@ sortCanonicalItems() {
         if (idx >= 0) this.readerState.posts[idx] = post;
       }
       this.readerState.postById.set(post._id, post);
-      this.syncItemToCanonical(post);
-      this.sortCanonicalItems();
+      if (isCanonicalPost) {
+        this.syncItemToCanonical(post);
+        this.sortCanonicalItems();
+      } else {
+        if (!post.contextType) post.contextType = "fetched";
+      }
     }
   }
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
@@ -9169,6 +9292,12 @@ sortCanonicalItems() {
             contain-intrinsic-size: 0 300px;
         }
         
+        .pr-context-placeholder {
+            opacity: 0.7;
+            border-left: 2px solid #555;
+            padding-left: 8px;
+        }
+        
         /* Render limit dialog */
         .pr-archive-render-dialog {
             background: var(--pr-bg-secondary);
@@ -9205,7 +9334,7 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -9222,7 +9351,8 @@ sortCanonicalItems() {
              <select id="archive-view">
                 <option value="card">Card View</option>
                 <option value="index">Index View</option>
-                <option value="thread">Thread View</option>
+                <option value="thread-full">Thread View (Full Context)</option>
+                <option value="thread-placeholder">Thread View (Placeholder)</option>
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
@@ -9248,17 +9378,15 @@ sortCanonicalItems() {
       const resyncBtn = document.getElementById("archive-resync");
       const errorContainer = document.getElementById("archive-error-container");
       let activeItems = state2.items;
-      const LARGE_DATASET_THRESHOLD = 1e4;
+      const LARGE_DATASET_THRESHOLD = window.__PR_ARCHIVE_LARGE_THRESHOLD || 1e4;
       let pendingRenderCount = null;
       const runPostRenderHooks = () => {
         setupLinkPreviews(uiHost.getReaderState().comments);
-        if (state2.viewMode === "thread") {
-          const posts = feedEl.querySelectorAll(".pr-post");
-          posts.forEach((p) => {
-            const pid = p.getAttribute("data-id") || p.getAttribute("data-post-id");
-            if (pid) refreshPostActionButtons(pid);
-          });
-        }
+        const posts = feedEl.querySelectorAll(".pr-post");
+        posts.forEach((p) => {
+          const pid = p.getAttribute("data-id") || p.getAttribute("data-post-id");
+          if (pid) refreshPostActionButtons(pid);
+        });
       };
       const refreshView = async () => {
         let filtered = state2.items;
@@ -9355,7 +9483,7 @@ sortCanonicalItems() {
         state2.viewMode = viewSelect.value;
         const replyToOption = sortSelect.querySelector('option[value="replyTo"]');
         if (replyToOption) {
-          if (state2.viewMode === "thread") {
+          if (isThreadMode(state2.viewMode)) {
             replyToOption.disabled = true;
             if (state2.sortBy === "replyTo") {
               state2.sortBy = "date";
@@ -9371,6 +9499,42 @@ sortCanonicalItems() {
         incrementRenderLimit(PAGE_SIZE);
         await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
         runPostRenderHooks();
+      });
+      feedEl?.addEventListener("click", (e) => {
+        const target = e.target;
+        const expandTarget = target.closest('[data-action="expand-index-item"]');
+        if (expandTarget) {
+          const id = expandTarget.getAttribute("data-id");
+          const item = id ? state2.itemById.get(id) : null;
+          if (!item) return;
+          const wrapper = document.createElement("div");
+          wrapper.className = "pr-index-expanded";
+          wrapper.setAttribute("data-id", id);
+          wrapper.innerHTML = `
+        <button class="pr-button pr-index-collapse-btn"
+                data-action="collapse-index-item" data-id="${id}" style="margin-bottom: 8px;">▲ Collapse</button>
+        ${renderCardItem(item, uiHost.getReaderState())}
+      `;
+          expandTarget.replaceWith(wrapper);
+          runPostRenderHooks();
+          return;
+        }
+        const collapseTarget = target.closest('[data-action="collapse-index-item"]');
+        if (collapseTarget) {
+          const id = collapseTarget.getAttribute("data-id");
+          const item = id ? state2.itemById.get(id) : null;
+          if (!item) return;
+          const expanded = collapseTarget.closest(".pr-index-expanded");
+          if (expanded) {
+            const tmp = document.createElement("div");
+            tmp.innerHTML = renderIndexItem(item);
+            const collapsedRow = tmp.firstElementChild;
+            if (collapsedRow) {
+              expanded.replaceWith(collapsedRow);
+            }
+          }
+          return;
+        }
       });
       const showErrorUI = (error, onRetry, onCancel) => {
         if (!errorContainer) return;
@@ -9686,7 +9850,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.658"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.664"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

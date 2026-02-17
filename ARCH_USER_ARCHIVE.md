@@ -12,7 +12,7 @@ Transform the user profile into a powerful, offline-first research tool that agg
 - **Bulk Ingestion**: Specialized data loader to fetch 10,000+ items via pagination loops.
 - **Smart Caching (IndexedDB)**: Persist full history locally. Subsequent visits only fetch *new* items since the last sync watermark.
 - **Unified Feed**: A single chronological stream merging `Post` and `Comment` objects.
-- **Threaded Context**: (Pending) Group comments by thread, fetching surrounding context (parents/replies) from other users to reconstruct conversations.
+- **Threaded Context** ✅: Group comments by thread, with full or placeholder parent context.
 
 ### Phase 2: Parity & Search (✅ Completed)
 **Goal**: Match and exceed the utility of `lw_user_archive.html`.
@@ -23,9 +23,10 @@ Transform the user profile into a powerful, offline-first research tool that agg
   - **Date**: Oldest/Newest.
   - **Reply-To**: Group by interlocutor.
 - **View Modes (✅ Done)**:
-  - **Card View**: Full content (Power Reader style).
-  - **Index View**: Dense list of titles/snippets.
-  - **Thread View**: Context-heavy view focusing on conversation trees.
+  - **Card View**: Full content (Power Reader style). Each comment shows its immediate parent as a header-only stub.
+  - **Index View**: Dense list of titles/snippets. Click to expand in-place to card view.
+  - **Thread View (Full)**: Context-heavy view with full parent comments fetched from server.
+  - **Thread View (Placeholder)**: Context view with stub parent comments (metadata-only, no network requests).
 - ✅ **Profile Page Integration**: Injected "Archive" button on user profile pages.
 - ✅ **Feed Integration**: `[View in Archive]` buttons on user hover cards.
 
@@ -69,10 +70,16 @@ interface ArchiveState {
   lastSyncDate: string; // Watermark for incremental updates
   
   // View State
-  viewMode: 'card' | 'index' | 'thread';
+  viewMode: 'card' | 'index' | 'thread-full' | 'thread-placeholder';
   filters: ArchiveFilter; // { regex, score, date, etc. }
   sortBy: 'date' | 'score' | 'replyTo';
 }
+
+/**
+ * Helper to check if a view mode is any thread variant
+ */
+const isThreadMode = (mode: ArchiveViewMode): boolean =>
+  mode === 'thread-full' || mode === 'thread-placeholder';
 ```
 
 ### 3. Data Layer (`archive/loader.ts` & `archive/storage.ts`)
@@ -118,6 +125,33 @@ To avoid duplicating the complex rendering logic in `render/comment.ts` and `ren
 | `services/ReadTracker.ts` | ❌ No | Archive does not track read state (you are viewing history). |
 | `components/StickyHeader.ts` | ⚠️ TBD | Archive may need a simpler version (user stats vs post stats). |
 | `styles.ts` | ✅ Yes | Shared CSS variables and visual system. |
+
+### Context Type System
+
+The archive uses a unified `contextType` enum to represent different comment states:
+
+```typescript
+type ContextType = 'missing' | 'fetched' | 'stub' | undefined;
+
+// 'missing' - Structural placeholder (parent not in any query)
+// 'fetched' - Full comment loaded from server for ancestry
+// 'stub'    - Metadata-only from parentComment ref (author, date)
+// undefined - Normal user-authored comment
+```
+
+**Benefits**:
+- Replaces scattered boolean flags (`isPlaceholder`, `isContext`)
+- Enables discriminated rendering paths
+- Preserves context across view switches (both `'fetched'` and `'stub'` persist)
+- Guard in `mergeComments` prevents overwriting stubs with fetched versions
+
+**Rendering Behavior**:
+| contextType | CSS Class | Vote Buttons | Body Content |
+|-------------|-----------|--------------|--------------|
+| `'missing'` | `.pr-missing-parent` | ❌ | None (invisible div) |
+| `'fetched'` | `.context` | ✅ | Full body |
+| `'stub'` | `.pr-context-placeholder` | ❌ | None (header-only) |
+| `undefined` | - | ✅ | Full body |
 
 ### 6. Directory Structure
 ```

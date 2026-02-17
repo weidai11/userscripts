@@ -4,8 +4,14 @@
 
 import type { Post, Comment } from '../../../shared/graphql/queries';
 
-export type ArchiveViewMode = 'card' | 'index' | 'thread';
-export type ArchiveSortBy = 'date' | 'score' | 'replyTo';
+export type ArchiveViewMode = 'card' | 'index' | 'thread-full' | 'thread-placeholder';
+export type ArchiveSortBy = 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo';
+
+/**
+ * Helper to check if a view mode is any thread variant
+ */
+export const isThreadMode = (mode: ArchiveViewMode): boolean =>
+  mode === 'thread-full' || mode === 'thread-placeholder';
 
 export interface ArchiveFilter {
     regex: string;

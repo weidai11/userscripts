@@ -19,7 +19,7 @@ export interface PostGroup {
   fullPost?: Post;
 }
 
-type PlaceholderComment = Comment & { isPlaceholder: true };
+type PlaceholderComment = Comment & { contextType: 'missing' };
 
 const createMissingParentPlaceholder = (parentId: string, child: Comment): PlaceholderComment => {
   const postedAt = child.postedAt || new Date().toISOString();
@@ -44,7 +44,7 @@ const createMissingParentPlaceholder = (parentId: string, child: Comment): Place
     afExtendedScore: null,
     currentUserVote: null,
     currentUserExtendedVote: null,
-    isPlaceholder: true,
+    contextType: 'missing',
   } as unknown as PlaceholderComment;
 };
 

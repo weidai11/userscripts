@@ -79,7 +79,8 @@ export const buildPostGroups = (
   };
 
   sortedComments.forEach(c => {
-    const isContext = (c as any).isContext;
+    const ct = (c as any).contextType;
+    const isContext = ct === 'fetched' || ct === 'stub';
     const isLocallyRead = isRead(c._id, readState, c.postedAt);
     const implicit = isImplicitlyRead(c);
     const commentIsRead = isLocallyRead || implicit;

@@ -123,6 +123,10 @@ npx playwright test tests/power-reader.spec.ts --headed --debug
 ### Screenshots
 Tests often capture screenshots on failure or specific checkpoints. Look for `power_reader_screenshot.png` or check the `playwright-report/` folder after a run.
 
+### Archive Mode & Large Datasets
+Archive testing can be slow if rendering thousands of items.
+- **`__PR_ARCHIVE_LARGE_THRESHOLD`**: You can override the performance dialog threshold (default 10,000) by setting this on `window` in `onInit`. This allows testing the "Large Dataset" logic with small item counts (e.g., 100).
+
 ---
 
 ## 4. How E2E Tests Work

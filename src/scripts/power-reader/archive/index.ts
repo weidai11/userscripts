@@ -2,11 +2,11 @@
 import { executeTakeover, rebuildDocument, signalReady } from '../takeover';
 import { initializeReactions } from '../utils/reactions';
 import { Logger } from '../utils/logger';
-import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode } from './state';
+import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode, isThreadMode } from './state';
 import { loadArchiveData, saveArchiveData } from './storage';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
-import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit, resetRenderLimit } from './render';
+import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
 import { setUIHost } from '../render/uiHost';
 import { ArchiveUIHost } from './uiHost';
 import { attachEventListeners } from '../events/index';
@@ -51,9 +51,9 @@ export const initArchive = async (username: string): Promise<void> => {
 
     // Inject styles for archive specific layouts - Idempotent check
     if (!document.getElementById('pr-archive-styles')) {
-        const style = document.createElement('style');
-        style.id = 'pr-archive-styles';
-        style.textContent = `
+      const style = document.createElement('style');
+      style.id = 'pr-archive-styles';
+      style.textContent = `
         .pr-archive-toolbar {
             display: flex;
             gap: 10px;
@@ -198,6 +198,12 @@ export const initArchive = async (username: string): Promise<void> => {
             contain-intrinsic-size: 0 300px;
         }
         
+        .pr-context-placeholder {
+            opacity: 0.7;
+            border-left: 2px solid #555;
+            padding-left: 8px;
+        }
+        
         /* Render limit dialog */
         .pr-archive-render-dialog {
             background: var(--pr-bg-secondary);
@@ -230,7 +236,7 @@ export const initArchive = async (username: string): Promise<void> => {
             gap: 10px;
         }
     `;
-        document.head.appendChild(style);
+      document.head.appendChild(style);
     }
 
     root.innerHTML = `
@@ -252,7 +258,8 @@ export const initArchive = async (username: string): Promise<void> => {
              <select id="archive-view">
                 <option value="card">Card View</option>
                 <option value="index">Index View</option>
-                <option value="thread">Thread View</option>
+                <option value="thread-full">Thread View (Full Context)</option>
+                <option value="thread-placeholder">Thread View (Placeholder)</option>
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
@@ -280,20 +287,18 @@ export const initArchive = async (username: string): Promise<void> => {
     const errorContainer = document.getElementById('archive-error-container');
 
     let activeItems = state.items;
-    const LARGE_DATASET_THRESHOLD = 10000;
+    const LARGE_DATASET_THRESHOLD = (window as any).__PR_ARCHIVE_LARGE_THRESHOLD || 10000;
     let pendingRenderCount: number | null = null;
 
     const runPostRenderHooks = () => {
       setupLinkPreviews(uiHost.getReaderState().comments);
 
-      // Initialize post action buttons for thread view
-      if (state.viewMode === 'thread') {
-        const posts = feedEl!.querySelectorAll('.pr-post');
-        posts.forEach(p => {
-          const pid = p.getAttribute('data-id') || p.getAttribute('data-post-id');
-          if (pid) refreshPostActionButtons(pid);
-        });
-      }
+      // Post-action buttons can be introduced by thread renders and index expand-in-place cards.
+      const posts = feedEl!.querySelectorAll('.pr-post');
+      posts.forEach(p => {
+        const pid = p.getAttribute('data-id') || p.getAttribute('data-post-id');
+        if (pid) refreshPostActionButtons(pid);
+      });
     };
 
     const refreshView = async () => {
@@ -343,9 +348,9 @@ export const initArchive = async (username: string): Promise<void> => {
         updateRenderLimit(pendingRenderCount);
       }
 
-  // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
-  // [WS3-FIX] Pass sortBy for thread view group-level sorting
-  await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+      // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
+      // [WS3-FIX] Pass sortBy for thread view group-level sorting
+      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
 
       runPostRenderHooks();
     };
@@ -434,7 +439,7 @@ export const initArchive = async (username: string): Promise<void> => {
       // [PR-SORT-04] Disable "Reply To" sort in Thread View as it organizes by Post
       const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
       if (replyToOption) {
-        if (state.viewMode === 'thread') {
+        if (isThreadMode(state.viewMode)) {
           replyToOption.disabled = true;
           if (state.sortBy === 'replyTo') {
             state.sortBy = 'date';
@@ -448,13 +453,57 @@ export const initArchive = async (username: string): Promise<void> => {
       refreshView();
     });
 
-  // Setup Load More
-  loadMoreBtn?.querySelector('button')?.addEventListener('click', async () => {
-    incrementRenderLimit(PAGE_SIZE);
-    // [P2-FIX] Pass sortBy to maintain thread sort mode during pagination
-    await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
-    runPostRenderHooks();
-  });
+    // Setup Load More
+    loadMoreBtn?.querySelector('button')?.addEventListener('click', async () => {
+      incrementRenderLimit(PAGE_SIZE);
+      // [P2-FIX] Pass sortBy to maintain thread sort mode during pagination
+      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+      runPostRenderHooks();
+    });
+
+    // Index view click-to-expand handler
+    feedEl?.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+
+      // Expand: index row → card
+      const expandTarget = target.closest('[data-action="expand-index-item"]');
+      if (expandTarget) {
+        const id = expandTarget.getAttribute('data-id');
+        const item = id ? state.itemById.get(id) : null;
+        if (!item) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'pr-index-expanded';
+        wrapper.setAttribute('data-id', id!);
+        wrapper.innerHTML = `
+        <button class="pr-button pr-index-collapse-btn"
+                data-action="collapse-index-item" data-id="${id}" style="margin-bottom: 8px;">▲ Collapse</button>
+        ${renderCardItem(item, uiHost.getReaderState())}
+      `;
+        expandTarget.replaceWith(wrapper);
+        runPostRenderHooks();
+        return;
+      }
+
+      // Collapse: card → index row
+      const collapseTarget = target.closest('[data-action="collapse-index-item"]');
+      if (collapseTarget) {
+        const id = collapseTarget.getAttribute('data-id');
+        const item = id ? state.itemById.get(id) : null;
+        if (!item) return;
+
+        const expanded = collapseTarget.closest('.pr-index-expanded');
+        if (expanded) {
+          const tmp = document.createElement('div');
+          tmp.innerHTML = renderIndexItem(item);
+          const collapsedRow = tmp.firstElementChild;
+          if (collapsedRow) {
+            expanded.replaceWith(collapsedRow);
+          }
+        }
+        return;
+      }
+    });
 
     /**
      * Show error UI with retry options

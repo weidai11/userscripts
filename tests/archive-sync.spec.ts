@@ -49,7 +49,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Verify cached post is displayed
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Cached Post Before Sync Failure');
+        await expect(page.locator('.pr-item h2')).toHaveText('Cached Post Before Sync Failure');
 
         // 2. Second Visit - Simulate sync failure by returning no user (fetchUserId returns null)
         // This causes syncArchive to throw since user won't be found
@@ -72,7 +72,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Cached post should still be visible
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Cached Post Before Sync Failure');
+        await expect(page.locator('.pr-item h2')).toHaveText('Cached Post Before Sync Failure');
         
         // Status should indicate some kind of error state (sync failure or user not found)
         const statusText = await page.locator('#archive-status').textContent();
@@ -150,7 +150,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Old Cached Post');
+        await expect(page.locator('.pr-item h2')).toHaveText('Old Cached Post');
 
         // Second visit includes one in-flight item between syncStart and syncEnd.
         // Correct sync-start watermark should include this item; sync-end watermark would skip it.
@@ -208,7 +208,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         await expect(async () => {
-            const titles = await page.locator('.pr-archive-item h3').allTextContents();
+            const titles = await page.locator('.pr-item h2').allTextContents();
             expect(titles).toContain('Old Cached Post');
             expect(titles).toContain('In-Flight Post');
             expect(new Set(titles).size).toBe(2);
@@ -282,7 +282,7 @@ if (query.includes('GetCommentsByIds')) {
   await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
   // Switch to Thread View (triggers context fetch)
-  await page.locator('#archive-view').selectOption('thread');
+  await page.locator('#archive-view').selectOption('thread-full');
 
   // Wait for thread view to render with parent context
   await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
@@ -369,7 +369,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Verify Old Post is there
-        await expect(page.locator('.pr-archive-item h3')).toHaveText('Old Post');
+        await expect(page.locator('.pr-item h2')).toHaveText('Old Post');
         
         // Verify Status says "Sync complete"
         await expect(page.locator('#archive-status')).toContainText('Sync complete');
@@ -411,8 +411,8 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
 
         // It should load cache first (Old Post), then sync and find New Post.
         // We expect eventually both to be visible.
-        await expect(page.locator('.pr-archive-item')).toHaveCount(2);
-        await expect(page.locator('.pr-archive-item h3').first()).toHaveText('New Post');
+        await expect(page.locator('.pr-item')).toHaveCount(2);
+        await expect(page.locator('.pr-item h2').first()).toHaveText('New Post');
         await expect(page.locator('#archive-status')).toContainText('Sync complete');
     });
 });

@@ -85,9 +85,8 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
   return doc.body.innerHTML;
 };
 
-const isPlaceholderComment = (comment: Comment): boolean => {
-  return (comment as unknown as { isPlaceholder?: boolean }).isPlaceholder === true;
-};
+const getContextType = (comment: Comment): string | undefined =>
+  (comment as any).contextType;
 
 const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = ''): string => {
   const postId = comment.postId || '';
@@ -198,15 +197,34 @@ const getUnreadDescendantCount = (commentId: string, state: ReaderState, readSta
   return count;
 };
 
+const renderContextPlaceholder = (
+  comment: Comment, state: ReaderState, repliesHtml: string = ''
+): string => {
+  const metadataHtml = renderMetadata(comment, {
+    state,
+    style: 'font-size: 80%;',
+    isFullPost: false,
+  });
+  return `
+    <div class="pr-comment pr-item context pr-context-placeholder"
+         data-id="${comment._id}"
+         data-parent-id="${comment.parentCommentId || ''}"
+         data-post-id="${comment.postId}">
+      ${metadataHtml}
+      ${repliesHtml}
+    </div>
+  `;
+};
+
 export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
-  if (isPlaceholderComment(comment)) {
-    return renderMissingParentPlaceholder(comment, repliesHtml);
-  }
+  const ct = getContextType(comment);
+  if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml);
+  if (ct === 'stub') return renderContextPlaceholder(comment, state, repliesHtml);
 
   const readState = getReadState();
   // In archive mode, we ignore the local read state entirely to prevent collapsing context
   const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
-  const commentIsRead = (comment as any).isContext || isLocallyRead;
+  const commentIsRead = ct === 'fetched' || isLocallyRead;
   const unreadDescendantCount = getUnreadDescendantCount(comment._id, state, readState);
 
   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
@@ -234,7 +252,7 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
   const authorKarma = comment.user?.karma || 0;
   const normalized = calculateNormalizedScore(score, ageHours, authorHandle, authorKarma, false);
   const order = (comment as any)._order || 0;
-  const isContext = (comment as any).isContext;
+  const isContext = ct === 'fetched';
 
   // Check if reply to current user
   const isReplyToYou = !!(state.currentUsername &&
