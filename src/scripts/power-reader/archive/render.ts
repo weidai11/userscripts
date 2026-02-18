@@ -361,14 +361,20 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
 
   // Comment: render with shared renderComment
   const comment = item as Comment;
-  let contextHtml = '';
+  const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
+  const parentFromState = immediateParentId ? state.commentById.get(immediateParentId) : null;
+  const isContextParentFromState = !!parentFromState && !!(parentFromState as any).contextType;
+  const parentComment = isContextParentFromState
+    ? parentFromState
+    : (comment.parentComment ? parentRefToStub(comment.parentComment, comment) : null);
 
-  // Show immediate parent as stub placeholder
-  if (comment.parentCommentId && comment.parentComment) {
-    contextHtml = renderComment(parentRefToStub(comment.parentComment, comment), state);
+  if (!parentComment || parentComment._id === comment._id) {
+    return `<div class="pr-archive-item">${renderComment(comment, state)}</div>`;
   }
 
-  return `<div class="pr-archive-item">${contextHtml}${renderComment(comment, state)}</div>`;
+  // In card view, show immediate parent context with the current comment nested under it.
+  const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
+  return `<div class="pr-archive-item">${renderComment(parentComment, state, nestedCommentHtml)}</div>`;
 };
 
 /**

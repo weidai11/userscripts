@@ -589,7 +589,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-09] Sort Modes**: Archive supports `relevance` (search ranking), `date` (newest), `date-asc` (oldest), `score`, `score-asc`, and `replyTo`.
 - **[PR-UARCH-10] View Modes**: Archive supports `card`, `index`, and `thread` views.
 - **[PR-UARCH-11] Thread Context Loading**: In thread view, missing parent comments for visible items are fetched and injected into context maps before final render.
-- **[PR-UARCH-25] Context Isolation**: Context comments (fetched for thread view ancestry) MUST NOT leak into card or index views. They remain in the `ReaderState` projection for rendering but are excluded from the canonical `ArchiveState.items` collection.
+- **[PR-UARCH-25] Context Isolation**: Context comments (fetched for thread view ancestry) MUST remain excluded from the canonical `ArchiveState.items` collection. In card view they may render only as immediate-parent context for canonical comments; index rows remain canonical-only.
 - **[PR-UARCH-22] Context Persistence**: Context comments fetched during a thread view session MUST be preserved across rerenders (e.g., when switching sort modes or loading more items) within that session.
 - **[PR-UARCH-34] Persistent Context Cache**: Non-authored context items (ancestor comments and root posts used for thread reconstruction) MUST be persisted in IndexedDB under a dedicated contextual cache and scoped by target archive username.
 - **[PR-UARCH-35] Context Resolution Waterfall**: Thread context loading MUST resolve parents in this order: (1) authored/canonical in-memory state, (2) contextual IndexedDB cache, (3) network fetch for remaining IDs only.
@@ -607,11 +607,12 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-21] Thread Group Karma Sorting**: In `thread` view, post groups are sorted based on the highest karma score among all items within that group.
 - **[PR-UARCH-27] Context Type Enum**: Comments use a unified `contextType` field (`'missing' | 'fetched' | 'stub' | undefined`) instead of separate `isPlaceholder` and `isContext` boolean flags to represent different context states.
 - **[PR-UARCH-28] Thread View Modes**: Archive supports two thread view modes: `thread-full` (fetches full parent context from server) and `thread-placeholder` (creates stub context from parentComment references without network requests).
-- **[PR-UARCH-29] Card View Parent Context**: In card view, each comment displays its immediate parent as a stub placeholder (metadata-only, 80% font size) above the comment content.
+- **[PR-UARCH-29] Card View Parent Context**: In card view, each comment renders with its immediate parent context as the outer node and the current comment nested under `.pr-replies`. Use fetched parent context when available; otherwise render a metadata-only stub placeholder (80% font size).
 - **[PR-UARCH-30] Index View Expand**: In index view, clicking any item expands it in-place to card view rendering with a "Collapse" button to return to the index row.
 - **[PR-UARCH-31] Placeholder Context Rendering**: Comments with `contextType: 'stub'` render as header-only placeholders without vote buttons, using `.pr-context-placeholder` CSS class.
 - **[PR-UARCH-32] Context Persistence Across Modes**: Context comments (both `'fetched'` and `'stub'`) are preserved in ReaderState when switching between thread, card, and index views within the same session.
 - **[PR-UARCH-33] Thread Mode IsThread Helper**: A helper function `isThreadMode()` identifies both `thread-full` and `thread-placeholder` as thread variants without requiring multiple equality checks.
+- **[PR-UARCH-41] Search Worker Default + Opt-Out**: Archive search uses a Web Worker by default. Setting `window.__PR_ARCHIVE_SEARCH_USE_WORKER = false` before initialization disables worker creation and uses runtime search. If worker initialization fails, archive search falls back to runtime mode without breaking the UI.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

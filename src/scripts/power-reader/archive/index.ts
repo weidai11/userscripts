@@ -16,8 +16,10 @@ import { setupInlineReactions } from '../features/inlineReactions';
 import { setupLinkPreviews } from '../features/linkPreviews';
 import { initPreviewSystem } from '../utils/preview';
 import { refreshPostActionButtons } from '../utils/dom';
-import { ArchiveSearchRuntime } from './search/engine';
+import { ArchiveSearchManager } from './search';
 import { parseArchiveUrlState, writeArchiveUrlState } from './search/urlState';
+import { createSearchWorkerClient } from './search/workerFactory';
+import type { SearchWorkerClient } from './search/protocol';
 import type {
   ArchiveItem,
   ArchiveSearchScope,
@@ -371,7 +373,21 @@ export const initArchive = async (username: string): Promise<void> => {
     renderTopStatusLine();
 
     let activeItems = state.items;
-    const searchRuntime = new ArchiveSearchRuntime();
+    const workerPreference = (window as any).__PR_ARCHIVE_SEARCH_USE_WORKER;
+    const shouldUseSearchWorker = workerPreference !== false;
+    let workerClient: SearchWorkerClient | null = null;
+    if (shouldUseSearchWorker) {
+      try {
+        workerClient = createSearchWorkerClient();
+      } catch (error) {
+        Logger.warn('Archive search worker unavailable; falling back to runtime search.', error);
+      }
+    }
+
+    const searchManager = new ArchiveSearchManager({
+      useWorker: shouldUseSearchWorker,
+      workerClient
+    });
     const urlState = parseArchiveUrlState();
     let persistedContextItems: ArchiveItem[] = [];
     let useDedicatedScopeParam = urlState.scopeFromUrl;
@@ -413,7 +429,7 @@ export const initArchive = async (username: string): Promise<void> => {
     const syncAuthoredSearchIndex = (): void => {
       const canonicalRevision = uiHost.getCanonicalStateRevision();
       if (authoredIndexItemsRef === state.items && authoredIndexCanonicalRevision === canonicalRevision) return;
-      searchRuntime.setAuthoredItems(state.items, canonicalRevision);
+      searchManager.setAuthoredItems(state.items, canonicalRevision);
       authoredIndexItemsRef = state.items;
       authoredIndexCanonicalRevision = canonicalRevision;
       authoredItemsVersion += 1;
@@ -537,9 +553,9 @@ export const initArchive = async (username: string): Promise<void> => {
 
       syncAuthoredSearchIndex();
       const contextItems = collectContextSearchItems();
-      searchRuntime.setContextItems(contextItems);
+      searchManager.setContextItems(contextItems);
       const scopeParam = useDedicatedScopeParam ? (scopeSelect.value as ArchiveSearchScope) : undefined;
-      const result = searchRuntime.runSearch({
+      const result = await searchManager.runSearch({
         query: searchInput.value,
         scopeParam,
         sortMode,

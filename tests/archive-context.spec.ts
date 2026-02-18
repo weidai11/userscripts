@@ -271,16 +271,16 @@ test.describe('User Archive Context Type & View Modes', () => {
     // Verify card view is active
     await expect(page.locator('#archive-view')).toHaveValue('card');
 
-    // Verify child comment has parent context stub before it
-    const card = page.locator('.pr-comment[data-id="comment-child"]');
-    await expect(card).toBeVisible();
-
     // Verify parent context stub exists
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
     await expect(parentStub).toBeVisible();
-    await expect(parentStub.locator('.pr-author')).toContainText('Parent Author');
-    await expect(parentStub.locator('.pr-karma-score')).toHaveText('42');
-    await expect(parentStub.locator('.pr-agreement-score')).toHaveText('7');
+    await expect(parentStub.locator(':scope > .pr-comment-meta .pr-author')).toContainText('Parent Author');
+    await expect(parentStub.locator(':scope > .pr-comment-meta .pr-karma-score')).toHaveText('42');
+    await expect(parentStub.locator(':scope > .pr-comment-meta .pr-agreement-score')).toHaveText('7');
+
+    // Verify current comment is nested under the parent context block.
+    const nestedChild = parentStub.locator('.pr-replies .pr-comment[data-id="comment-child"]');
+    await expect(nestedChild).toBeVisible();
 
     // Verify stub has reduced opacity styling (placeholder)
     const stubStyle = await parentStub.evaluate(el => window.getComputedStyle(el).opacity);
@@ -406,7 +406,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await expect(voteButtons).toHaveCount(0);
 
     // Verify no comment body (just metadata)
-    const commentBody = parentStub.locator('.pr-comment-body');
+    const commentBody = parentStub.locator(':scope > .pr-comment-body');
     await expect(commentBody).toHaveCount(0);
   });
 

@@ -100,6 +100,131 @@ test.describe('Power Reader Archive Route', () => {
         await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
     });
 
+    test('[PR-UARCH-41] archive search worker is enabled by default', async ({ page }) => {
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onInit: `
+const win = window;
+win.__TEST_WORKER_CTOR_COUNT__ = 0;
+win.__TEST_WORKER_POST_COUNT__ = 0;
+const OriginalWorker = win.Worker;
+win.Worker = class WorkerSpy extends OriginalWorker {
+  constructor(...args) {
+    super(...args);
+    win.__TEST_WORKER_CTOR_COUNT__ += 1;
+  }
+  postMessage(...args) {
+    win.__TEST_WORKER_POST_COUNT__ += 1;
+    return super.postMessage(...args);
+  }
+};
+`,
+            onGraphQL: `
+const userId = 'u-worker-default';
+const userObj = { _id: userId, username: 'WorkerDefault_User', displayName: 'Worker Default User', slug: 'worker-default-user', karma: 100 };
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: userObj } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-worker-default',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 5,
+            htmlBody: '<p>Worker default path comment</p>',
+            user: userObj,
+            postId: 'p-worker-default',
+            post: { _id: 'p-worker-default', title: 'Worker Default Post', pageUrl: 'https://lesswrong.com/posts/p-worker-default', user: userObj },
+            parentComment: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerDefault_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0)).toBeGreaterThan(0);
+        await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0)).toBeGreaterThan(0);
+    });
+
+    test('[PR-UARCH-41] archive search worker can be disabled via global opt-out', async ({ page }) => {
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onInit: `
+const win = window;
+win.__PR_ARCHIVE_SEARCH_USE_WORKER = false;
+win.__TEST_WORKER_CTOR_COUNT__ = 0;
+win.__TEST_WORKER_POST_COUNT__ = 0;
+const OriginalWorker = win.Worker;
+win.Worker = class WorkerSpy extends OriginalWorker {
+  constructor(...args) {
+    super(...args);
+    win.__TEST_WORKER_CTOR_COUNT__ += 1;
+  }
+  postMessage(...args) {
+    win.__TEST_WORKER_POST_COUNT__ += 1;
+    return super.postMessage(...args);
+  }
+};
+`,
+            onGraphQL: `
+const userId = 'u-worker-off';
+const userObj = { _id: userId, username: 'WorkerOff_User', displayName: 'Worker Off User', slug: 'worker-off-user', karma: 100 };
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: userObj } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-worker-off',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 5,
+            htmlBody: '<p>Worker opt-out path comment</p>',
+            user: userObj,
+            postId: 'p-worker-off',
+            post: { _id: 'p-worker-off', title: 'Worker Off Post', pageUrl: 'https://lesswrong.com/posts/p-worker-off', user: userObj },
+            parentComment: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerOff_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const workerCtorCount = await page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0);
+        const workerPostCount = await page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0);
+        expect(workerCtorCount).toBe(0);
+        expect(workerPostCount).toBe(0);
+    });
+
     test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
         await setupMockEnvironment(page, {
             mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
@@ -1591,7 +1716,7 @@ return { data: {} };
         expect(secondPostHtml).toContain('Low Karma Post');
     });
 
-    test('[PR-UARCH-25] context comments do not leak into card/index view', async ({ page }) => {
+    test('[PR-UARCH-25] context comments stay out of canonical items but render nested parent context in card view', async ({ page }) => {
         const userId = 'u-context-test';
         const userObj = { _id: userId, username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
         const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
@@ -1668,22 +1793,16 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
         await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
 
-        // Step 2: Switch to Card View - context should NOT appear here
+        // Step 2: Switch to Card View - context parent should render above child (nested)
         await page.locator('#archive-view').selectOption('card');
 
         // Wait for card view to render
-        await expect(page.locator('.pr-item')).toBeVisible();
+        await expect(page.locator('.pr-archive-item')).toHaveCount(1);
 
-        // [P2-FIX] Verify parent context comment does NOT appear in card view
-        // It should only be in thread view, not in the canonical archive items
-        const cardItems = await page.locator('.pr-item').allTextContents();
-        const allCardText = cardItems.join(' ');
-
-        // Should contain the child comment (target user's content)
-        expect(allCardText).toContain('Child comment by target user');
-
-        // Should NOT contain the parent context comment (other user's content)
-        expect(allCardText).not.toContain('Parent context comment by other user');
+        const parentInCard = page.locator('.pr-archive-item .pr-comment[data-id="c-parent"]');
+        await expect(parentInCard).toBeVisible();
+        await expect(parentInCard).toContainText('Parent context comment by other user');
+        await expect(parentInCard.locator('.pr-replies .pr-comment[data-id="c-child"]')).toHaveCount(1);
 
         // Step 3: Switch to Index View - context should also NOT appear here
         await page.locator('#archive-view').selectOption('index');
@@ -1691,7 +1810,7 @@ return { data: {} };
         // Wait for index view to render
         await expect(page.locator('.pr-archive-index-item')).toBeVisible();
 
-        // [P2-FIX] Verify parent context comment does NOT appear in index view
+        // Verify index remains canonical-only (no context-only parent row leakage)
         const indexItems = await page.locator('.pr-archive-index-item').allTextContents();
         const allIndexText = indexItems.join(' ');
 

@@ -146,11 +146,7 @@ export const writeArchiveUrlState = (state: ArchiveUrlWriteState): void => {
     params.set(SCOPE_PARAM, state.scope);
   }
 
-  if (state.sort === 'date') {
-    params.delete(SORT_PARAM);
-  } else {
-    params.set(SORT_PARAM, state.sort);
-  }
+  params.set(SORT_PARAM, state.sort);
 
   const next = `${window.location.pathname}?${params.toString()}`;
   window.history.replaceState({}, '', next);

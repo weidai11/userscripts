@@ -1,0 +1,661 @@
+{
+    "version":  "1.0.0",
+    "dataset":  "baseline-v1",
+    "generatedAt":  "2026-02-18",
+    "fixtures":  [
+                     {
+                         "name":  "mesa_optimizer__relevance",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "mesa_optimizer__date",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "mesa_optimizer__date-asc",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "mesa_optimizer__score",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "mesa_optimizer__score-asc",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "mesa_optimizer__replyTo",
+                         "query":  "\"mesa optimizer\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__relevance",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__date",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__date-asc",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__score",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__score-asc",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_carol__replyTo",
+                         "query":  "type:comment author:\"carol\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "comment_by_dana__relevance",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "comment_by_dana__date",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "comment_by_dana__date-asc",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "comment_by_dana__score",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "comment_by_dana__score-asc",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "comment_by_dana__replyTo",
+                         "query":  "type:comment author:\"dana\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-context"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "all"
+                     },
+                     {
+                         "name":  "post_by_bob__relevance",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "post_by_bob__date",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "post_by_bob__date-asc",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "post_by_bob__score",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "post_by_bob__score-asc",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "post_by_bob__replyTo",
+                         "query":  "type:post author:\"bob\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__relevance",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__date",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__date-asc",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__score",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__score-asc",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "alice_high_score_post__replyTo",
+                         "query":  "type:post author:\"alice\" score:\u003e90",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__relevance",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__date",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__date-asc",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__score",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__score-asc",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "replyto_carol__replyTo",
+                         "query":  "replyto:\"carol\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__relevance",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__date",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__date-asc",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__score",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__score-asc",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_exact_post__replyTo",
+                         "query":  "date:2025-01-05 type:post",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-gamma"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__relevance",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__date",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__date-asc",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__score",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__score-asc",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "date_gt_comment__replyTo",
+                         "query":  "date:\u003e2025-01-10 type:comment",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-alpha"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__relevance",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__date",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__date-asc",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__score",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__score-asc",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "low_score_bob_comment__replyTo",
+                         "query":  "score:\u003c3 type:comment author:\"bob\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "c-beta"
+                                         ],
+                         "expectedTotal":  1,
+                         "scope":  "authored"
+                     },
+                     {
+                         "name":  "regex_context_post__relevance",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "relevance",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     },
+                     {
+                         "name":  "regex_context_post__date",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "date",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     },
+                     {
+                         "name":  "regex_context_post__date-asc",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "date-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     },
+                     {
+                         "name":  "regex_context_post__score",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "score",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     },
+                     {
+                         "name":  "regex_context_post__score-asc",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "score-asc",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     },
+                     {
+                         "name":  "regex_context_post__replyTo",
+                         "query":  "/external\\s+context/i scope:all type:post author:\"dana\"",
+                         "sort":  "replyTo",
+                         "limit":  20,
+                         "expectedIds":  [
+                                             "p-context"
+                                         ],
+                         "expectedTotal":  1
+                     }
+                 ]
+}
