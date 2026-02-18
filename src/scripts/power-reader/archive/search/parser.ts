@@ -136,13 +136,13 @@ const parseScoreClause = (value: string, negated: boolean): SearchClause | null 
   if (trimmed.startsWith('>')) {
     const n = parseNumber(trimmed.slice(1));
     if (n === null) return null;
-    return { kind: 'score', negated, op: 'gt', min: n, includeMin: false, includeMax: true };
+    return { kind: 'score', negated, op: 'gt', min: n, includeMin: false, includeMax: false };
   }
 
   if (trimmed.startsWith('<')) {
     const n = parseNumber(trimmed.slice(1));
     if (n === null) return null;
-    return { kind: 'score', negated, op: 'lt', max: n, includeMin: true, includeMax: false };
+    return { kind: 'score', negated, op: 'lt', max: n, includeMin: false, includeMax: false };
   }
 
   if (trimmed.includes('..')) {
@@ -192,13 +192,13 @@ const parseDateClause = (value: string, negated: boolean): SearchClause | null =
   if (trimmed.startsWith('>')) {
     const bounds = parseUtcDayBounds(trimmed.slice(1));
     if (!bounds) return null;
-    return { kind: 'date', negated, op: 'gt', minMs: bounds.endMs, includeMin: false, includeMax: true };
+    return { kind: 'date', negated, op: 'gt', minMs: bounds.endMs, includeMin: false, includeMax: false };
   }
 
   if (trimmed.startsWith('<')) {
     const bounds = parseUtcDayBounds(trimmed.slice(1));
     if (!bounds) return null;
-    return { kind: 'date', negated, op: 'lt', maxMs: bounds.startMs, includeMin: true, includeMax: false };
+    return { kind: 'date', negated, op: 'lt', maxMs: bounds.startMs, includeMin: false, includeMax: false };
   }
 
   if (trimmed.includes('..')) {

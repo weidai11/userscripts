@@ -16,8 +16,6 @@ export type ArchiveSearchDoc = {
   replyToNorm: string;
   titleNorm: string;
   bodyNorm: string;
-  combinedNorm: string;
-  item: ArchiveItem;
 };
 
 export type SearchWarningType =
@@ -77,6 +75,7 @@ export type SearchAst = {
 export type SearchCorpusIndex = {
   source: ArchiveCorpusName;
   docs: ArchiveSearchDoc[];
+  itemsById: Map<string, ArchiveItem>;
   docOrdinalsById: Map<string, number>;
   tokenIndex: Map<string, Uint32Array>;
   authorIndex: Map<string, Uint32Array>;

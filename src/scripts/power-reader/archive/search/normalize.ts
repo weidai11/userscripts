@@ -110,7 +110,6 @@ const getReplyToDisplayName = (item: ArchiveItem): string => {
 export const buildArchiveSearchDoc = (item: ArchiveItem, source: ArchiveCorpusName): ArchiveSearchDoc => {
   const titleNorm = normalizeTitle(item);
   const bodyNorm = normalizeBody(item);
-  const combinedNorm = collapseWhitespace(`${titleNorm} ${bodyNorm}`);
 
   return {
     id: item._id,
@@ -121,9 +120,7 @@ export const buildArchiveSearchDoc = (item: ArchiveItem, source: ArchiveCorpusNa
     authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),
     replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),
     titleNorm,
-    bodyNorm,
-    combinedNorm,
-    item
+    bodyNorm
   };
 };
 

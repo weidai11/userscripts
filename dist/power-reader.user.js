@@ -9610,7 +9610,6 @@ sortCanonicalItems() {
   const buildArchiveSearchDoc = (item, source) => {
     const titleNorm = normalizeTitle(item);
     const bodyNorm = normalizeBody(item);
-    const combinedNorm = collapseWhitespace(`${titleNorm} ${bodyNorm}`);
     return {
       id: item._id,
       itemType: getItemType(item),
@@ -9620,9 +9619,7 @@ sortCanonicalItems() {
       authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),
       replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),
       titleNorm,
-      bodyNorm,
-      combinedNorm,
-      item
+      bodyNorm
     };
   };
   const tokenizeForIndex = (normText) => {
@@ -9740,12 +9737,12 @@ sortCanonicalItems() {
     if (trimmed.startsWith(">")) {
       const n = parseNumber(trimmed.slice(1));
       if (n === null) return null;
-      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: true };
+      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };
     }
     if (trimmed.startsWith("<")) {
       const n = parseNumber(trimmed.slice(1));
       if (n === null) return null;
-      return { kind: "score", negated, op: "lt", max: n, includeMin: true, includeMax: false };
+      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };
     }
     if (trimmed.includes("..")) {
       const [minRaw, maxRaw] = trimmed.split("..");
@@ -9782,12 +9779,12 @@ sortCanonicalItems() {
     if (trimmed.startsWith(">")) {
       const bounds = parseUtcDayBounds(trimmed.slice(1));
       if (!bounds) return null;
-      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: true };
+      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };
     }
     if (trimmed.startsWith("<")) {
       const bounds = parseUtcDayBounds(trimmed.slice(1));
       if (!bounds) return null;
-      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: true, includeMax: false };
+      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };
     }
     if (trimmed.includes("..")) {
       const [startRaw, endRaw] = trimmed.split("..");
@@ -10128,13 +10125,32 @@ sortCanonicalItems() {
     });
     return compact;
   };
+  const appendPosting = (index, token, ordinal) => {
+    const postings = index.get(token);
+    if (!postings) {
+      index.set(token, Uint32Array.of(ordinal));
+      return;
+    }
+    const next = new Uint32Array(postings.length + 1);
+    next.set(postings);
+    next[postings.length] = ordinal;
+    index.set(token, next);
+  };
   const buildIndexes = (docs) => {
     const tokenMutable = new Map();
     const authorMutable = new Map();
     const replyToMutable = new Map();
     for (let ordinal = 0; ordinal < docs.length; ordinal++) {
       const doc = docs[ordinal];
-      for (const token of tokenizeForIndex(doc.combinedNorm)) {
+      const seenContentTokens = new Set();
+      for (const token of tokenizeForIndex(doc.titleNorm)) {
+        if (seenContentTokens.has(token)) continue;
+        seenContentTokens.add(token);
+        addPosting(tokenMutable, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.bodyNorm)) {
+        if (seenContentTokens.has(token)) continue;
+        seenContentTokens.add(token);
         addPosting(tokenMutable, token, ordinal);
       }
       for (const token of tokenizeForIndex(doc.authorNameNorm)) {
@@ -10153,14 +10169,47 @@ sortCanonicalItems() {
   const buildCorpusIndex = (source, items) => {
     const docs = items.map((item) => buildArchiveSearchDoc(item, source));
     const docOrdinalsById = new Map();
-    docs.forEach((doc, ordinal) => docOrdinalsById.set(doc.id, ordinal));
+    const itemsById = new Map();
+    docs.forEach((doc, ordinal) => {
+      docOrdinalsById.set(doc.id, ordinal);
+      itemsById.set(doc.id, items[ordinal]);
+    });
     const indexes = buildIndexes(docs);
     return {
       source,
       docs,
+      itemsById,
       docOrdinalsById,
       ...indexes
     };
+  };
+  const appendItemsToCorpusIndex = (index, source, upserts) => {
+    if (upserts.length === 0) return;
+    for (const item of upserts) {
+      if (index.docOrdinalsById.has(item._id)) continue;
+      const doc = buildArchiveSearchDoc(item, source);
+      const ordinal = index.docs.length;
+      index.docs.push(doc);
+      index.docOrdinalsById.set(doc.id, ordinal);
+      index.itemsById.set(doc.id, item);
+      const seenContentTokens = new Set();
+      for (const token of tokenizeForIndex(doc.titleNorm)) {
+        if (seenContentTokens.has(token)) continue;
+        seenContentTokens.add(token);
+        appendPosting(index.tokenIndex, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.bodyNorm)) {
+        if (seenContentTokens.has(token)) continue;
+        seenContentTokens.add(token);
+        appendPosting(index.tokenIndex, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.authorNameNorm)) {
+        appendPosting(index.authorIndex, token, ordinal);
+      }
+      for (const token of tokenizeForIndex(doc.replyToNorm)) {
+        appendPosting(index.replyToIndex, token, ordinal);
+      }
+    }
   };
   const DEFAULT_BUDGET_MS = 150;
   const createEmptySignals = () => ({
@@ -10210,6 +10259,26 @@ sortCanonicalItems() {
     }
     return result || new Set();
   };
+  const tryApplyAppendOnlyPatch = (index, source, items) => {
+    if (items.length < index.docs.length) return false;
+    const nextById = new Map();
+    for (const item of items) {
+      nextById.set(item._id, item);
+    }
+    for (const id of index.docOrdinalsById.keys()) {
+      const nextItem = nextById.get(id);
+      if (!nextItem) return false;
+      if (index.itemsById.get(id) !== nextItem) return false;
+    }
+    const upserts = [];
+    for (const item of items) {
+      if (!index.docOrdinalsById.has(item._id)) {
+        upserts.push(item);
+      }
+    }
+    appendItemsToCorpusIndex(index, source, upserts);
+    return true;
+  };
   const matchesScoreClause = (doc, clause) => {
     const value = doc.baseScore;
     if (clause.op === "gt") {
@@ -10234,10 +10303,11 @@ sortCanonicalItems() {
     const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;
     return minOk && maxOk;
   };
+  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);
   const matchesClause = (doc, clause) => {
     switch (clause.kind) {
       case "term":
-        return doc.combinedNorm.includes(clause.valueNorm);
+        return matchesNormalizedText(doc, clause.valueNorm);
       case "phrase":
         return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);
       case "regex":
@@ -10287,7 +10357,7 @@ sortCanonicalItems() {
                 break;
               }
               const doc = corpus.docs[ordinal];
-              if (doc.combinedNorm.includes(clause.valueNorm)) {
+              if (matchesNormalizedText(doc, clause.valueNorm)) {
                 matched.add(ordinal);
               }
             }
@@ -10298,7 +10368,7 @@ sortCanonicalItems() {
             const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);
             accelerated.forEach((ordinal) => {
               const doc = corpus.docs[ordinal];
-              if (!doc.combinedNorm.includes(clause.valueNorm)) return;
+              if (!matchesNormalizedText(doc, clause.valueNorm)) return;
               matched.add(ordinal);
             });
           }
@@ -10378,6 +10448,8 @@ sortCanonicalItems() {
         }
         const doc = corpus.docs[ordinal];
         stageBScanned++;
+        let stageBTokenHits = 0;
+        let stageBPhraseHits = 0;
         let matched = true;
         for (const clause of plan.stageB) {
           if (!matchesClause(doc, clause)) {
@@ -10385,15 +10457,18 @@ sortCanonicalItems() {
             break;
           }
           if (clause.kind === "phrase") {
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.phraseHits += 1;
+            stageBPhraseHits += 1;
           }
           if (clause.kind === "term") {
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.tokenHits += 1;
+            stageBTokenHits += 1;
           }
         }
         if (matched) {
+          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.phraseHits += stageBPhraseHits;
+            signal.tokenHits += stageBTokenHits;
+          }
           filtered.add(ordinal);
         }
       });
@@ -10407,14 +10482,25 @@ sortCanonicalItems() {
         }
         const doc = corpus.docs[ordinal];
         stageBScanned++;
+        let stageBTokenHits = 0;
+        let stageBPhraseHits = 0;
         let matched = true;
         for (const clause of plan.stageB) {
           if (!matchesClause(doc, clause)) {
             matched = false;
             break;
           }
+          if (clause.kind === "phrase") stageBPhraseHits += 1;
+          if (clause.kind === "term") stageBTokenHits += 1;
         }
-        if (matched) filtered.add(ordinal);
+        if (matched) {
+          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.phraseHits += stageBPhraseHits;
+            signal.tokenHits += stageBTokenHits;
+          }
+          filtered.add(ordinal);
+        }
       }
       candidateOrdinals = filtered;
     }
@@ -10433,7 +10519,9 @@ sortCanonicalItems() {
     }
     const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);
     const relevanceSignalsById = new Map();
+    const finalCandidateOrdinals = candidateOrdinals;
     relevanceSignalsByOrdinal.forEach((signals, ordinal) => {
+      if (!finalCandidateOrdinals.has(ordinal)) return;
       const doc = corpus.docs[ordinal];
       relevanceSignalsById.set(doc.id, signals);
     });
@@ -10453,12 +10541,21 @@ sortCanonicalItems() {
     contextItemsRef = null;
     setAuthoredItems(items, revisionToken = 0) {
       if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;
+      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {
+        this.authoredItemsRef = items;
+        this.authoredRevisionToken = revisionToken;
+        return;
+      }
       this.authoredItemsRef = items;
       this.authoredRevisionToken = revisionToken;
       this.authoredIndex = buildCorpusIndex("authored", items);
     }
     setContextItems(items) {
       if (this.contextItemsRef === items) return;
+      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {
+        this.contextItemsRef = items;
+        return;
+      }
       this.contextItemsRef = items;
       this.contextIndex = buildCorpusIndex("context", items);
     }
@@ -10480,14 +10577,20 @@ sortCanonicalItems() {
           });
         }
       }
-      const hasNegation = parsed.clauses.some((clause) => clause.negated);
-      const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);
-      if (hasNegation && !hasPositiveClause) {
-        warnings.push({
-          type: "negation-only",
-          token: parsed.rawQuery,
-          message: 'Add a positive clause or use "*" before negations'
-        });
+      let isNegationOnly = warnings.some((w) => w.type === "negation-only");
+      if (!isNegationOnly) {
+        const hasNegation = parsed.clauses.some((clause) => clause.negated);
+        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);
+        if (hasNegation && !hasPositiveClause) {
+          isNegationOnly = true;
+          warnings.push({
+            type: "negation-only",
+            token: parsed.rawQuery,
+            message: 'Add a positive clause or use "*" before negations'
+          });
+        }
+      }
+      if (isNegationOnly) {
         const diagnostics2 = {
           warnings,
           parseState: "invalid",
@@ -10539,8 +10642,15 @@ sortCanonicalItems() {
       const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);
       const total = sortedDocs.length;
       const limitedDocs = sortedDocs.slice(0, request.limit);
-      const ids = limitedDocs.map((doc) => doc.id);
-      const items = limitedDocs.map((doc) => doc.item);
+      const getItemForDoc = (doc) => {
+        if (doc.source === "authored") {
+          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;
+        }
+        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;
+      };
+      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));
+      const ids = resolved.map((entry) => entry.doc.id);
+      const items = resolved.map((entry) => entry.item);
       const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";
       const diagnostics = {
         warnings: mergedWarnings,
@@ -10693,6 +10803,7 @@ sortCanonicalItems() {
   const INITIAL_BACKOFF_MS = 2e3;
   const PAGE_SIZE = 1e4;
   const SEARCH_DEBOUNCE_MS = 180;
+  const ARCHIVE_SEARCH_HELP_TEXT = 'Search tips: terms, "phrases", /regex/i, author:, replyto:, type:post|comment, score:>10, date:2025-01-01..2025-01-31, scope:all';
   const initArchive = async (username) => {
     Logger.info(`Initializing User Archive for: ${username}`);
     try {
@@ -10924,7 +11035,7 @@ sortCanonicalItems() {
     
     <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder="Search archive (structured query: author:, date:, score:, /regex/)" class="pr-input" style="flex: 2; min-width: 260px;">
+            <input type="text" id="archive-search" placeholder='Search terms, "phrases", /regex/, author:, replyto:, type:, score:, date:, scope:' class="pr-input" style="flex: 2; min-width: 260px;">
             <select id="archive-scope">
                 <option value="authored">Scope: Authored</option>
                 <option value="all">Scope: Authored + Context</option>
@@ -10945,7 +11056,7 @@ sortCanonicalItems() {
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
-        <div id="archive-search-status" class="pr-archive-search-status">Structured query enabled.</div>
+        <div id="archive-search-status" class="pr-archive-search-status">${ARCHIVE_SEARCH_HELP_TEXT}</div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -10969,6 +11080,14 @@ sortCanonicalItems() {
       const resyncBtn = document.getElementById("archive-resync");
       const errorContainer = document.getElementById("archive-error-container");
       const searchStatusEl = document.getElementById("archive-search-status");
+      if (searchInput) {
+        searchInput.title = [
+          "Archive search examples:",
+          'author:"wei dai" type:comment score:>20',
+          'date:2025-01-01..2025-01-31 "alignment"',
+          "/mesa\\s+optimizer/i scope:all"
+        ].join("\n");
+      }
       let statusBaseMessage = "Checking local database...";
       let statusSearchResultCount = null;
       const renderTopStatusLine = () => {
@@ -11076,7 +11195,7 @@ sortCanonicalItems() {
           messages.push(diagnostics.warnings[0].message);
         }
         searchStatusEl.textContent = "";
-        searchStatusEl.appendChild(document.createTextNode(messages.join(" | ") || "Structured query enabled."));
+        searchStatusEl.appendChild(document.createTextNode(messages.join(" | ") || ARCHIVE_SEARCH_HELP_TEXT));
         if (diagnostics.partialResults) {
           const retryBtn = document.createElement("button");
           retryBtn.className = "pr-search-retry-btn";

@@ -19,6 +19,19 @@ const compactPostings = (mutable: Map<string, number[]>): Map<string, Uint32Arra
   return compact;
 };
 
+const appendPosting = (index: Map<string, Uint32Array>, token: string, ordinal: number): void => {
+  const postings = index.get(token);
+  if (!postings) {
+    index.set(token, Uint32Array.of(ordinal));
+    return;
+  }
+
+  const next = new Uint32Array(postings.length + 1);
+  next.set(postings);
+  next[postings.length] = ordinal;
+  index.set(token, next);
+};
+
 const buildIndexes = (docs: ArchiveSearchDoc[]): Pick<SearchCorpusIndex, 'tokenIndex' | 'authorIndex' | 'replyToIndex'> => {
   const tokenMutable = new Map<string, number[]>();
   const authorMutable = new Map<string, number[]>();
@@ -26,8 +39,16 @@ const buildIndexes = (docs: ArchiveSearchDoc[]): Pick<SearchCorpusIndex, 'tokenI
 
   for (let ordinal = 0; ordinal < docs.length; ordinal++) {
     const doc = docs[ordinal];
+    const seenContentTokens = new Set<string>();
 
-    for (const token of tokenizeForIndex(doc.combinedNorm)) {
+    for (const token of tokenizeForIndex(doc.titleNorm)) {
+      if (seenContentTokens.has(token)) continue;
+      seenContentTokens.add(token);
+      addPosting(tokenMutable, token, ordinal);
+    }
+    for (const token of tokenizeForIndex(doc.bodyNorm)) {
+      if (seenContentTokens.has(token)) continue;
+      seenContentTokens.add(token);
       addPosting(tokenMutable, token, ordinal);
     }
     for (const token of tokenizeForIndex(doc.authorNameNorm)) {
@@ -48,14 +69,55 @@ const buildIndexes = (docs: ArchiveSearchDoc[]): Pick<SearchCorpusIndex, 'tokenI
 export const buildCorpusIndex = (source: ArchiveCorpusName, items: readonly ArchiveItem[]): SearchCorpusIndex => {
   const docs = items.map(item => buildArchiveSearchDoc(item, source));
   const docOrdinalsById = new Map<string, number>();
-  docs.forEach((doc, ordinal) => docOrdinalsById.set(doc.id, ordinal));
+  const itemsById = new Map<string, ArchiveItem>();
+  docs.forEach((doc, ordinal) => {
+    docOrdinalsById.set(doc.id, ordinal);
+    itemsById.set(doc.id, items[ordinal]);
+  });
 
   const indexes = buildIndexes(docs);
 
   return {
     source,
     docs,
+    itemsById,
     docOrdinalsById,
     ...indexes
   };
+};
+
+export const appendItemsToCorpusIndex = (
+  index: SearchCorpusIndex,
+  source: ArchiveCorpusName,
+  upserts: readonly ArchiveItem[]
+): void => {
+  if (upserts.length === 0) return;
+
+  for (const item of upserts) {
+    if (index.docOrdinalsById.has(item._id)) continue;
+
+    const doc = buildArchiveSearchDoc(item, source);
+    const ordinal = index.docs.length;
+    index.docs.push(doc);
+    index.docOrdinalsById.set(doc.id, ordinal);
+    index.itemsById.set(doc.id, item);
+
+    const seenContentTokens = new Set<string>();
+    for (const token of tokenizeForIndex(doc.titleNorm)) {
+      if (seenContentTokens.has(token)) continue;
+      seenContentTokens.add(token);
+      appendPosting(index.tokenIndex, token, ordinal);
+    }
+    for (const token of tokenizeForIndex(doc.bodyNorm)) {
+      if (seenContentTokens.has(token)) continue;
+      seenContentTokens.add(token);
+      appendPosting(index.tokenIndex, token, ordinal);
+    }
+    for (const token of tokenizeForIndex(doc.authorNameNorm)) {
+      appendPosting(index.authorIndex, token, ordinal);
+    }
+    for (const token of tokenizeForIndex(doc.replyToNorm)) {
+      appendPosting(index.replyToIndex, token, ordinal);
+    }
+  }
 };

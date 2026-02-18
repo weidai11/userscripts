@@ -36,6 +36,8 @@ const INITIAL_BACKOFF_MS = 2000;
 
 const PAGE_SIZE = 10000;
 const SEARCH_DEBOUNCE_MS = 180;
+const ARCHIVE_SEARCH_HELP_TEXT =
+  'Search tips: terms, "phrases", /regex/i, author:, replyto:, type:post|comment, score:>10, date:2025-01-01..2025-01-31, scope:all';
 
 interface SyncErrorState {
   isRetrying: boolean;
@@ -282,7 +284,7 @@ export const initArchive = async (username: string): Promise<void> => {
     
     <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder="Search archive (structured query: author:, date:, score:, /regex/)" class="pr-input" style="flex: 2; min-width: 260px;">
+            <input type="text" id="archive-search" placeholder='Search terms, "phrases", /regex/, author:, replyto:, type:, score:, date:, scope:' class="pr-input" style="flex: 2; min-width: 260px;">
             <select id="archive-scope">
                 <option value="authored">Scope: Authored</option>
                 <option value="all">Scope: Authored + Context</option>
@@ -303,7 +305,7 @@ export const initArchive = async (username: string): Promise<void> => {
             </select>
             <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
         </div>
-        <div id="archive-search-status" class="pr-archive-search-status">Structured query enabled.</div>
+        <div id="archive-search-status" class="pr-archive-search-status">${ARCHIVE_SEARCH_HELP_TEXT}</div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -328,6 +330,14 @@ export const initArchive = async (username: string): Promise<void> => {
     const resyncBtn = document.getElementById('archive-resync');
     const errorContainer = document.getElementById('archive-error-container');
     const searchStatusEl = document.getElementById('archive-search-status');
+    if (searchInput) {
+      searchInput.title = [
+        'Archive search examples:',
+        'author:"wei dai" type:comment score:>20',
+        'date:2025-01-01..2025-01-31 "alignment"',
+        '/mesa\\s+optimizer/i scope:all'
+      ].join('\n');
+    }
     let statusBaseMessage = 'Checking local database...';
     let statusSearchResultCount: number | null = null;
 
@@ -473,7 +483,7 @@ export const initArchive = async (username: string): Promise<void> => {
       }
 
       searchStatusEl.textContent = '';
-      searchStatusEl.appendChild(document.createTextNode(messages.join(' | ') || 'Structured query enabled.'));
+      searchStatusEl.appendChild(document.createTextNode(messages.join(' | ') || ARCHIVE_SEARCH_HELP_TEXT));
 
       if (diagnostics.partialResults) {
         const retryBtn = document.createElement('button');

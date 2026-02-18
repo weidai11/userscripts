@@ -3,7 +3,7 @@ import { tokenizeForIndex } from './normalize';
 import { parseStructuredQuery } from './parser';
 import { buildExecutionPlan } from './planner';
 import { sortSearchDocs, type RelevanceSignals } from './ranker';
-import { buildCorpusIndex } from './searchIndex';
+import { appendItemsToCorpusIndex, buildCorpusIndex } from './searchIndex';
 import type {
   ArchiveItem,
   ArchiveSearchDoc,
@@ -84,6 +84,35 @@ const getTokenPostingIntersection = (
   return result || new Set<number>();
 };
 
+const tryApplyAppendOnlyPatch = (
+  index: SearchCorpusIndex,
+  source: ArchiveSearchDoc['source'],
+  items: readonly ArchiveItem[]
+): boolean => {
+  if (items.length < index.docs.length) return false;
+
+  const nextById = new Map<string, ArchiveItem>();
+  for (const item of items) {
+    nextById.set(item._id, item);
+  }
+
+  for (const id of index.docOrdinalsById.keys()) {
+    const nextItem = nextById.get(id);
+    if (!nextItem) return false;
+    if (index.itemsById.get(id) !== nextItem) return false;
+  }
+
+  const upserts: ArchiveItem[] = [];
+  for (const item of items) {
+    if (!index.docOrdinalsById.has(item._id)) {
+      upserts.push(item);
+    }
+  }
+
+  appendItemsToCorpusIndex(index, source, upserts);
+  return true;
+};
+
 const matchesScoreClause = (doc: ArchiveSearchDoc, clause: Extract<SearchClause, { kind: 'score' }>): boolean => {
   const value = doc.baseScore;
 
@@ -114,10 +143,13 @@ const matchesDateClause = (doc: ArchiveSearchDoc, clause: Extract<SearchClause, 
   return minOk && maxOk;
 };
 
+const matchesNormalizedText = (doc: ArchiveSearchDoc, valueNorm: string): boolean =>
+  doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);
+
 const matchesClause = (doc: ArchiveSearchDoc, clause: SearchClause): boolean => {
   switch (clause.kind) {
     case 'term':
-      return doc.combinedNorm.includes(clause.valueNorm);
+      return matchesNormalizedText(doc, clause.valueNorm);
     case 'phrase':
       return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);
     case 'regex':
@@ -186,7 +218,7 @@ const executeAgainstCorpus = (
               break;
             }
             const doc = corpus.docs[ordinal];
-            if (doc.combinedNorm.includes(clause.valueNorm)) {
+            if (matchesNormalizedText(doc, clause.valueNorm)) {
               matched.add(ordinal);
             }
           }
@@ -197,7 +229,7 @@ const executeAgainstCorpus = (
           const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);
           accelerated.forEach(ordinal => {
             const doc = corpus.docs[ordinal];
-            if (!doc.combinedNorm.includes(clause.valueNorm)) return;
+            if (!matchesNormalizedText(doc, clause.valueNorm)) return;
             matched.add(ordinal);
           });
         }
@@ -286,6 +318,8 @@ const executeAgainstCorpus = (
       }
       const doc = corpus.docs[ordinal];
       stageBScanned++;
+      let stageBTokenHits = 0;
+      let stageBPhraseHits = 0;
 
       let matched = true;
       for (const clause of plan.stageB) {
@@ -295,16 +329,19 @@ const executeAgainstCorpus = (
         }
 
         if (clause.kind === 'phrase') {
-          const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-          signal.phraseHits += 1;
+          stageBPhraseHits += 1;
         }
         if (clause.kind === 'term') {
-          const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-          signal.tokenHits += 1;
+          stageBTokenHits += 1;
         }
       }
 
       if (matched) {
+        if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
+          const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+          signal.phraseHits += stageBPhraseHits;
+          signal.tokenHits += stageBTokenHits;
+        }
         filtered.add(ordinal);
       }
     });
@@ -319,6 +356,8 @@ const executeAgainstCorpus = (
       }
       const doc = corpus.docs[ordinal];
       stageBScanned++;
+      let stageBTokenHits = 0;
+      let stageBPhraseHits = 0;
 
       let matched = true;
       for (const clause of plan.stageB) {
@@ -326,8 +365,17 @@ const executeAgainstCorpus = (
           matched = false;
           break;
         }
+        if (clause.kind === 'phrase') stageBPhraseHits += 1;
+        if (clause.kind === 'term') stageBTokenHits += 1;
       }
-      if (matched) filtered.add(ordinal);
+      if (matched) {
+        if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
+          const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+          signal.phraseHits += stageBPhraseHits;
+          signal.tokenHits += stageBTokenHits;
+        }
+        filtered.add(ordinal);
+      }
     }
     candidateOrdinals = filtered;
   }
@@ -348,7 +396,9 @@ const executeAgainstCorpus = (
 
   const docs = Array.from(candidateOrdinals.values()).map(ordinal => corpus.docs[ordinal]);
   const relevanceSignalsById = new Map<string, RelevanceSignals>();
+  const finalCandidateOrdinals = candidateOrdinals;
   relevanceSignalsByOrdinal.forEach((signals, ordinal) => {
+    if (!finalCandidateOrdinals.has(ordinal)) return;
     const doc = corpus.docs[ordinal];
     relevanceSignalsById.set(doc.id, signals);
   });
@@ -371,6 +421,15 @@ export class ArchiveSearchRuntime {
 
   setAuthoredItems(items: readonly ArchiveItem[], revisionToken = 0): void {
     if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;
+    if (
+      this.authoredItemsRef &&
+      this.authoredItemsRef !== items &&
+      tryApplyAppendOnlyPatch(this.authoredIndex, 'authored', items)
+    ) {
+      this.authoredItemsRef = items;
+      this.authoredRevisionToken = revisionToken;
+      return;
+    }
     this.authoredItemsRef = items;
     this.authoredRevisionToken = revisionToken;
     this.authoredIndex = buildCorpusIndex('authored', items);
@@ -378,6 +437,13 @@ export class ArchiveSearchRuntime {
 
   setContextItems(items: readonly ArchiveItem[]): void {
     if (this.contextItemsRef === items) return;
+    if (
+      this.contextItemsRef &&
+      tryApplyAppendOnlyPatch(this.contextIndex, 'context', items)
+    ) {
+      this.contextItemsRef = items;
+      return;
+    }
     this.contextItemsRef = items;
     this.contextIndex = buildCorpusIndex('context', items);
   }
@@ -402,14 +468,20 @@ export class ArchiveSearchRuntime {
       }
     }
 
-    const hasNegation = parsed.clauses.some(clause => clause.negated);
-    const hasPositiveClause = parsed.clauses.some(clause => !clause.negated);
-    if (hasNegation && !hasPositiveClause) {
-      warnings.push({
-        type: 'negation-only',
-        token: parsed.rawQuery,
-        message: 'Add a positive clause or use "*" before negations'
-      });
+    let isNegationOnly = warnings.some(w => w.type === 'negation-only');
+    if (!isNegationOnly) {
+      const hasNegation = parsed.clauses.some(clause => clause.negated);
+      const hasPositiveClause = parsed.clauses.some(clause => !clause.negated);
+      if (hasNegation && !hasPositiveClause) {
+        isNegationOnly = true;
+        warnings.push({
+          type: 'negation-only',
+          token: parsed.rawQuery,
+          message: 'Add a positive clause or use "*" before negations'
+        });
+      }
+    }
+    if (isNegationOnly) {
       const diagnostics: SearchDiagnostics = {
         warnings,
         parseState: 'invalid',
@@ -470,8 +542,23 @@ export class ArchiveSearchRuntime {
     const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);
     const total = sortedDocs.length;
     const limitedDocs = sortedDocs.slice(0, request.limit);
-    const ids = limitedDocs.map(doc => doc.id);
-    const items = limitedDocs.map(doc => doc.item);
+    const getItemForDoc = (doc: ArchiveSearchDoc): ArchiveItem | null => {
+      if (doc.source === 'authored') {
+        return this.authoredIndex.itemsById.get(doc.id)
+          || this.contextIndex.itemsById.get(doc.id)
+          || null;
+      }
+      return this.contextIndex.itemsById.get(doc.id)
+        || this.authoredIndex.itemsById.get(doc.id)
+        || null;
+    };
+
+    const resolved = limitedDocs
+      .map(doc => ({ doc, item: getItemForDoc(doc) }))
+      .filter((entry): entry is { doc: ArchiveSearchDoc; item: ArchiveItem } => Boolean(entry.item));
+
+    const ids = resolved.map(entry => entry.doc.id);
+    const items = resolved.map(entry => entry.item);
 
     const parseState = mergedWarnings.some(w => w.type === 'negation-only' || w.type === 'invalid-query')
       ? 'invalid'

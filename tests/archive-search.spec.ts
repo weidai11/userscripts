@@ -97,6 +97,33 @@ test.describe('Archive Structured Search Core', () => {
     expect(result.total).toBe(1);
   });
 
+  test('normalized multi-token term does not match across title/body boundary', () => {
+    const runtime = new ArchiveSearchRuntime();
+    runtime.setAuthoredItems([
+      makePost({
+        _id: 'p-boundary-hit',
+        title: 'EA Forum announcement',
+        contents: { markdown: 'Additional details' }
+      }) as any,
+      makePost({
+        _id: 'p-boundary-cross',
+        title: 'EA',
+        contents: { markdown: 'Forum announcement' }
+      }) as any
+    ]);
+    runtime.setContextItems([]);
+
+    const result = runtime.runSearch({
+      query: 'ea-forum',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+
+    expect(result.ids).toContain('p-boundary-hit');
+    expect(result.ids).not.toContain('p-boundary-cross');
+  });
+
   test('field-positive query with negation is accepted', () => {
     const runtime = new ArchiveSearchRuntime();
     runtime.setAuthoredItems([
@@ -138,12 +165,47 @@ test.describe('Archive Structured Search Core', () => {
     expect(result.diagnostics.warnings.some(w => w.type === 'negation-only')).toBeFalsy();
   });
 
+  test('negation-only query is rejected with one warning entry', () => {
+    const runtime = new ArchiveSearchRuntime();
+    runtime.setAuthoredItems([
+      makePost({ _id: 'p-negonly', title: 'Any post' }) as any
+    ]);
+    runtime.setContextItems([]);
+
+    const result = runtime.runSearch({
+      query: '-type:post',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+
+    expect(result.ids).toEqual([]);
+    expect(result.diagnostics.parseState).toBe('invalid');
+    expect(result.diagnostics.warnings.filter(w => w.type === 'negation-only')).toHaveLength(1);
+  });
+
   test('impossible calendar dates in date filters are rejected [PR-UARCH-40]', () => {
     const parsed = parseStructuredQuery('date:2025-02-31');
 
     expect(parsed.warnings.some(w => w.type === 'malformed-date')).toBeTruthy();
     expect(parsed.clauses.some(clause => clause.kind === 'date')).toBeFalsy();
     expect(parsed.executableQuery).toBe('');
+  });
+
+  test('gt/lt field clauses set only relevant bound inclusivity flags', () => {
+    const scoreGt = parseStructuredQuery('score:>10').clauses.find(c => c.kind === 'score') as any;
+    const scoreLt = parseStructuredQuery('score:<10').clauses.find(c => c.kind === 'score') as any;
+    const dateGt = parseStructuredQuery('date:>2025-01-01').clauses.find(c => c.kind === 'date') as any;
+    const dateLt = parseStructuredQuery('date:<2025-01-01').clauses.find(c => c.kind === 'date') as any;
+
+    expect(scoreGt.includeMin).toBe(false);
+    expect(scoreGt.includeMax).toBe(false);
+    expect(scoreLt.includeMin).toBe(false);
+    expect(scoreLt.includeMax).toBe(false);
+    expect(dateGt.includeMin).toBe(false);
+    expect(dateGt.includeMax).toBe(false);
+    expect(dateLt.includeMin).toBe(false);
+    expect(dateLt.includeMax).toBe(false);
   });
 
   test('canonical query round-trip preserves normalized single-term semantics', () => {
@@ -215,6 +277,49 @@ test.describe('Archive Structured Search Core', () => {
     const secondIndex = (runtime as any).authoredIndex;
 
     expect(secondIndex).not.toBe(firstIndex);
+  });
+
+  test('append-only authored updates patch index without full rebuild', () => {
+    const runtime = new ArchiveSearchRuntime();
+    const first = [
+      makePost({ _id: 'p-a', title: 'Alpha' })
+    ] as any[];
+    const second = [
+      makePost({ _id: 'p-b', title: 'Beta' }),
+      ...first
+    ] as any[];
+
+    runtime.setAuthoredItems(first, 1);
+    const before = (runtime as any).authoredIndex;
+    runtime.setAuthoredItems(second, 2);
+    const after = (runtime as any).authoredIndex;
+
+    expect(after).toBe(before);
+
+    const result = runtime.runSearch({
+      query: 'beta',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+    expect(result.ids).toContain('p-b');
+  });
+
+  test('existing-item replacement triggers full authored rebuild', () => {
+    const runtime = new ArchiveSearchRuntime();
+    const first = [
+      makePost({ _id: 'p-a', title: 'Alpha', contents: { markdown: 'old body' } })
+    ] as any[];
+    const replaced = [
+      makePost({ _id: 'p-a', title: 'Alpha', contents: { markdown: 'new body' } })
+    ] as any[];
+
+    runtime.setAuthoredItems(first, 1);
+    const before = (runtime as any).authoredIndex;
+    runtime.setAuthoredItems(replaced, 2);
+    const after = (runtime as any).authoredIndex;
+
+    expect(after).not.toBe(before);
   });
 
   test('phrase-only query matches exact substring in body', () => {

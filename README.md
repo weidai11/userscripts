@@ -56,28 +56,36 @@ jj git push
 - **[GRAPHQL_API.md](./src/shared/GRAPHQL_API.md)**: Guide to the LessWrong and EA Forum API.
 - **[NOTES.md](./NOTES.md)**: Technical "gotchas" and environment-specific solutions.
 
-## 🔮 Roadmap: User Archive 2.0
-We are actively building a major feature to integrate and supercharge the functionality of legacy user archives (e.g., `lw_user_archive.html`) directly into Power Reader.
+## User Archive Status
+User Archive is live and usable in Power Reader at:
+`https://www.lesswrong.com/reader?view=archive&username=[username]`
 
-**For full technical details and implementation plan, see [ARCH_USER_ARCHIVE.md](./ARCH_USER_ARCHIVE.md).**
+For architecture notes and longer-term direction, see [ARCH_USER_ARCHIVE.md](./ARCH_USER_ARCHIVE.md).
 
-### Current Status (Beta)
-The foundation is now live! You can access the archive via `https://www.lesswrong.com/reader?view=archive&username=[Username]`.
+### Shipping Today
+- Adaptive cursor ingestion with retry-friendly sync behavior.
+- Offline-first IndexedDB cache plus incremental watermark-based updates.
+- Card, index, and thread modes (`thread-full` and `thread-placeholder`).
+- Structured archive search with:
+  - Plain terms and quoted phrases.
+  - Regex literals (`/pattern/flags`).
+  - Field operators: `author:`, `replyto:`, `type:`, `score:`, `date:`, `scope:`.
+- Search scope across authored-only or authored+context (`scope:all`) with authored-preferred dedup.
+- URL state sync for query/sort/scope, including canonicalized in-query `scope:`.
+- Large dataset guard dialog for archives over 10,000 items.
 
-**Completed Features (Phase 1 & 2):**
-- ✅ **Adaptive Ingestion**: Dynamically adjusts batch sizes (50-1000 items) to handle unstable network conditions.
-- ✅ **Offline-First Storage**: Caches history in IndexedDB for instant loads on return visits.
-- ✅ **Incremental Sync**: Only fetches new items since your last visit with stable watermark handling.
-- ✅ **Search & Sort**: Regex filtering and multiple sort modes (Karma, Date, Interlocutor).
-- ✅ **Unified Feed**: Threaded and chronological views of all user contributions.
-- ✅ **Pagination**: Virtualized "Load More" to handle massive histories smoothly.
-- ✅ **Resync Recovery**: Manual "Resync" button to recover from corrupted states or force a full refreshes.
+### Archive Search Quick Reference
+- `alignment` - plain term
+- `"multi agent"` - exact phrase
+- `/coordination\\s+failure/i` - regex literal
+- `author:"wei dai" type:comment`
+- `score:>20 date:2025-01-01..2025-01-31`
+- `scope:all replyto:"eliezer"`
 
-### Upcoming (Phase 3)
-- **Deep Query Engine**: Advanced metadata filters (e.g., `score:>50`, `date:2020..2023`).
-- **Analytics Dashboard**: Visualizations of user activity and karma trends.
-- **AI Synthesis**: "Chat with Archive" and contradiction checking.
-- **Export**: Download full history as **JSON**, **Markdown**, or **HTML** for personal backups or LLM fine-tuning.
+### Next Focus Areas
+- Broader structured-search conformance fixtures and edge-case coverage.
+- Analytics and archive exploration views.
+- Export/snapshot workflows.
 
 ## 🔗 References
 [CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./archive/old_power_reader_doc.md) | [Old Source](./archive/old_power_reader.js)
