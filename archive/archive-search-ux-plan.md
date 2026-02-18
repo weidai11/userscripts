@@ -1,39 +1,42 @@
 # Archive Search UX Implementation Plan
 
 **Date**: 2026-02-18  
-**Last reviewed**: 2026-02-18 (pass 5)  
+**Last reviewed**: 2026-02-19 (pass 13)  
 **Prerequisite**: Phases 0–3 of `archive-search-greenfield.md` (engine, parser, worker) are complete.  
 **Goal**: Complete Phase 4 (Structured Query UX + Facets) and implement UX improvements from the review in `archive/archive-search-ux-review.md`.
 
 ### Known Issues & Cross-Cutting Notes
 
-1. **CSS custom property orphans**: `--pr-bg-secondary`, `--pr-text-primary`, `--pr-border-color` etc. are used throughout the archive CSS but **never defined** anywhere in the codebase. They resolve to nothing (transparent/inherit). All new CSS in this plan uses `var(--pr-X, <fallback>)` with explicit fallback values, matching the existing pattern. A future cleanup should define these in a `:root` block.
+1. **CSS custom property baseline**: `--pr-*` tokens are now defined in global reader styles (`styles.ts`) and injected during takeover/rebuild. Archive-specific CSS should still use `var(--pr-X, <fallback>)` where practical for resilience and future portability.
 2. **Cross-change ordering for Changes 3→4→5**: Change 3 introduces `<select>` elements for scope and view as temporary placeholders. Changes 4 and 5 replace them with custom controls. The Reset button and `refreshView` code in Change 3 initially targets `<select>` elements; those references must be updated atomically when implementing Changes 4/5. Implementing B-batch (3+4+5) together avoids broken intermediate states.
-3. **`index.ts` is the only file with archive-specific CSS**: The archive embeds a `<style>` block inside the HTML template string starting at ~line 58 of `index.ts`. It does NOT use `styles.ts` (which is for the main reader). All CSS additions in this plan go into that embedded `<style>` block.
+3. **Archive CSS layering**: The archive embeds a `<style>` block inside the HTML template string starting at ~line 58 of `index.ts` for archive-specific rules. Global styles from `styles.ts` are still injected by takeover/rebuild and apply to archive UI too.
 4. **`runPostRenderHooks` (~line 404)**: This existing hook runs after every render cycle. Changes 10 (highlighting) and 11 (snippets) should wire into this hook rather than adding separate call sites.
-5. **No existing E2E tests reference toolbar selectors**: A grep for `archive-scope`, `archive-sort`, `archive-view` in `tests/` returns zero results. Changes 3–5 are therefore not breaking for existing tests, but new E2E tests should be added.
-6. **`ArchiveSortBy` vs `ArchiveSearchSortMode`**: These are identical type aliases defined in `state.ts` and `search/types.ts` respectively. The codebase uses both interchangeably. The plan uses `ArchiveSearchSortMode` consistently (from `search/types.ts`).
+5. **Toolbar selector changes have broader regression surface than E2E tests**: A grep for `archive-scope`, `archive-sort`, `archive-view` in `tests/` finds many hits, including `tests/archive-context.spec.ts`, `tests/archive-route.spec.ts`, and `tests/archive-sync.spec.ts`. Many flows currently use `selectOption(...)` on these controls. In addition to test migration, run a full source grep for `.value` reads/writes and `'change'` listeners touching `#archive-scope`/`#archive-view` before and after Changes 4/5 to catch runtime regressions. Treat Batch B as a test-breaking migration: UI changes and test updates must land together.
+6. **`ArchiveSortBy` vs `ArchiveSearchSortMode` type drift**: These are currently identical aliases in `state.ts` and `search/types.ts` but used interchangeably, which makes future changes error-prone. Add Change 0.5 (below) to unify aliases before implementing later UX changes.
+7. **Global shortcut lifecycle**: Document-level keyboard handlers (Change 2) must be scoped to active archive UI and self-clean when archive DOM is removed to avoid interfering with host-page shortcuts in SPA transitions.
+8. **UI state drift risk**: During the `<select>` → custom-control migration, keep DOM state, `ArchiveState`, and URL state synchronized via shared adapter helpers (`readUiState`, `applyUiState`, URL sync point) rather than ad-hoc per-handler writes.
 
 ---
 
 ## Table of Contents
 
 1. [Change 0: CSS Foundation — Define Missing Classes](#change-0)
-2. [Change 1: Search Clear Button](#change-1)
-3. [Change 2: Keyboard Shortcuts](#change-2)
-4. [Change 3: Two-Tier Toolbar Restructure](#change-3)
-5. [Change 4: Scope Segmented Control](#change-4)
-6. [Change 5: View Mode Icon Tabs](#change-5)
-7. [Change 6: Collapsible Syntax Cheatsheet](#change-6)
-8. [Change 7: Sort Behavior Improvements](#change-7)
-9. [Change 8: Structured Search Status Chips](#change-8)
-10. [Change 9: Result Count in Toolbar](#change-9)
-11. [Change 10: Search Result Term Highlighting](#change-10)
-12. [Change 11: Index View Snippet Extraction](#change-11)
-13. [Change 12: Facets — Type, Author, Date](#change-12)
-14. [Change 13: Explain Panel (Debug Mode)](#change-13)
-15. [Implementation Order](#implementation-order)
-16. [Testing Strategy](#testing-strategy)
+2. [Change 0.5: Sort Type Alias Unification](#change-0-5)
+3. [Change 1: Search Clear Button](#change-1)
+4. [Change 2: Keyboard Shortcuts](#change-2)
+5. [Change 3: Two-Tier Toolbar Restructure](#change-3)
+6. [Change 4: Scope Segmented Control](#change-4)
+7. [Change 5: View Mode Icon Tabs](#change-5)
+8. [Change 6: Collapsible Syntax Cheatsheet](#change-6)
+9. [Change 7: Sort Behavior Improvements](#change-7)
+10. [Change 8: Structured Search Status Chips](#change-8)
+11. [Change 9: Result Count in Toolbar](#change-9)
+12. [Change 10: Search Result Term Highlighting](#change-10)
+13. [Change 11: Index View Snippet Extraction](#change-11)
+14. [Change 12: Facets — Type, Author, Date](#change-12)
+15. [Change 13: Explain Panel (Debug Mode)](#change-13)
+16. [Implementation Order](#implementation-order)
+17. [Testing Strategy](#testing-strategy)
 
 ---
 
@@ -47,7 +50,7 @@
 - `pr-input` is used on the search `<input>` (line 287 of `index.ts`) but has no CSS definition anywhere.
 - `pr-button` is used on Resync, Load More, Render Selected/All, Retry, and collapse buttons (~9 instances in `index.ts`) but is never defined. The main reader uses a separate `pr-btn` class in `styles.ts` (line 157).
 - The archive container uses inline `style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;"`.
-- CSS custom properties like `--pr-bg-secondary` are used but never defined anywhere in the codebase (see Known Issues §1 above). The `var()` calls resolve to nothing, and the archive currently relies on host-page cascading.
+- CSS custom properties like `--pr-bg-secondary` are provided by global styles; keep fallback values in new archive rules for robustness.
 
 ### Plan
 
@@ -121,10 +124,52 @@ Remove the inline `style=` attribute from the `.pr-archive-container` div in the
 
 ---
 
+<a name="change-0-5"></a>
+## Change 0.5: Sort Type Alias Unification
+
+**Goal**: Remove duplicate sort aliases (`ArchiveSortBy`, `ArchiveSearchSortMode`) before adding more search/sort wiring, so type usage is consistent and future refactors are safer.
+
+### Plan
+
+#### [MODIFY] `src/scripts/power-reader/archive/search/types.ts`
+
+Make `ArchiveSearchSortMode` the single exported alias wired to `ArchiveSortBy` (which remains the source of truth in `state.ts`):
+
+```typescript
+import type { ArchiveSortBy } from '../state';
+
+export type ArchiveSearchSortMode = ArchiveSortBy;
+```
+
+#### [MODIFY] dependency boundaries (required)
+
+- `state.ts` must stay dependency-light and must not import from `search/types.ts` (or any search-layer module).
+- Before merging, verify no import cycle is introduced (`state.ts` -> search/* -> `state.ts`).
+- If any existing imports make this alias direction unsafe, extract the shared union to a leaf type module (e.g., `archive/types.ts`) and have both `state.ts` and `search/types.ts` import from that leaf.
+
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` and related files
+
+- Prefer `ArchiveSearchSortMode` in search-facing APIs (`runSearch`, URL state, diagnostics plumbing).
+- Remove redundant casts between the two aliases where they are now identical.
+- Keep runtime behavior unchanged.
+
+#### [MODIFY] `src/scripts/power-reader/archive/state.ts`
+
+- Keep `ArchiveSortBy` as the source-of-truth domain type for archive state.
+- Add a short comment noting `ArchiveSearchSortMode` is intentionally an alias of this type.
+
+### Verification
+
+- Typecheck/build passes with no duplicate sort-type definitions.
+- Repo grep for `ArchiveSortBy` / `ArchiveSearchSortMode` shows intentional usage boundaries (state vs search API), not ad-hoc mixing.
+- Import graph check confirms no cycle between `state.ts` and search-layer modules.
+
+---
+
 <a name="change-1"></a>
 ## Change 1: Search Clear Button
 
-**Goal**: Add a visible `×` button inside the search input container to clear the query and reset to default state.
+**Goal**: Add a visible `×` button inside the search input container to clear the query text.
 
 ### Plan
 
@@ -222,46 +267,50 @@ clearBtn?.addEventListener('click', () => {
 #### [MODIFY] `src/scripts/power-reader/archive/index.ts` — After event wiring
 
 ```typescript
-// Keyboard shortcuts
-document.addEventListener('keydown', (e) => {
-  // '/' to focus search (when not already in an input/textarea)
-  if (e.key === '/' && !isInTextInput(e.target)) {
-    e.preventDefault();
-    searchInput.focus();
-    searchInput.select();
-    return;
-  }
-});
-
-searchInput.addEventListener('keydown', (e) => {
-  // Escape: clear query if non-empty, else blur
-  if (e.key === 'Escape') {
-    if (searchInput.value) {
-      searchInput.value = '';
-      updateClearButton();
-      refreshView();
-    } else {
-      searchInput.blur();
-    }
-    return;
-  }
-});
-
 const isInTextInput = (target: EventTarget | null): boolean => {
   if (!target || !(target instanceof HTMLElement)) return false;
   const tagName = target.tagName.toLowerCase();
   return tagName === 'input' || tagName === 'textarea' || tagName === 'select'
     || target.isContentEditable;
 };
-```
 
-**Implementation note**: The first code block above is conceptual. In practice, the Escape handler and the `/` handler should be merged into the existing event listeners rather than creating new ones:
+const isArchiveUiActive = (): boolean =>
+  searchInput.isConnected &&
+  searchInput.offsetParent !== null &&
+  !!document.getElementById('archive-feed');
 
-1. The existing `searchInput` `keydown` handler (line 697 of `index.ts`) only handles `Enter`. Merge `Escape` handling into it:
-2. The existing `searchInput` `input` handler (line 693 of `index.ts`) calls `scheduleSearchRefresh()`. The `updateClearButton()` call from Change 1 should already be merged into that handler (see Change 1).
+const ARCHIVE_SHORTCUT_HANDLER_KEY = '__PR_ARCHIVE_SHORTCUT_HANDLER__';
+const previousArchiveShortcutHandler =
+  (window as any)[ARCHIVE_SHORTCUT_HANDLER_KEY] as ((event: KeyboardEvent) => void) | undefined;
+if (previousArchiveShortcutHandler) {
+  document.removeEventListener('keydown', previousArchiveShortcutHandler);
+}
 
-```typescript
-searchInput?.addEventListener('keydown', (event) => {
+// Keep global shortcut scoped to active archive UI.
+// If archive DOM is torn down, remove this listener to prevent side-effects.
+const handleArchiveGlobalKeydown = (event: KeyboardEvent) => {
+  if (event.defaultPrevented) return;
+  if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+  if (!isArchiveUiActive()) {
+    document.removeEventListener('keydown', handleArchiveGlobalKeydown);
+    if ((window as any)[ARCHIVE_SHORTCUT_HANDLER_KEY] === handleArchiveGlobalKeydown) {
+      delete (window as any)[ARCHIVE_SHORTCUT_HANDLER_KEY];
+    }
+    return;
+  }
+
+  if (event.key === '/' && !isInTextInput(event.target)) {
+    event.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+  }
+};
+(window as any)[ARCHIVE_SHORTCUT_HANDLER_KEY] = handleArchiveGlobalKeydown;
+document.addEventListener('keydown', handleArchiveGlobalKeydown);
+
+// Merge into the existing search keydown handler (Enter already exists).
+searchInput?.addEventListener('keydown', (event: KeyboardEvent) => {
   if (event.key === 'Enter') {
     if (searchDispatchTimer) {
       window.clearTimeout(searchDispatchTimer);
@@ -273,6 +322,7 @@ searchInput?.addEventListener('keydown', (event) => {
       searchInput.value = '';
       updateClearButton();
       // Also update URL to remove old query
+      // NOTE: in batch B (Changes 3–5), replace scopeSelect.value with getScopeValue().
       writeArchiveUrlState({ query: '', scope: scopeSelect.value as ArchiveSearchScope, sort: sortSelect.value as ArchiveSearchSortMode });
       refreshView();
     } else {
@@ -287,6 +337,8 @@ searchInput?.addEventListener('keydown', (event) => {
 - The `/` shortcut mirrors GitHub, Gmail, and Slack conventions.
 - `Escape` follows a two-stage pattern: first clear, then blur. This is intentional — users often want to clear a query without losing focus.
 - `Escape` also updates the URL state (removes `?q=`) to stay in sync — without this, pressing Escape would clear the input visually but leave the old query in the URL.
+- The document-level `/` listener is idempotent: any prior archive shortcut handler is removed before adding a new one.
+- Shortcut handler ignores modified keystrokes (`Ctrl`/`Cmd`/`Alt`) and already-handled events to avoid clobbering host shortcuts.
 
 ### Verification
 
@@ -294,6 +346,7 @@ searchInput?.addEventListener('keydown', (event) => {
 - Press `Escape` with text in search → clears text.
 - Press `Escape` with empty search → blurs input.
 - Typing `/` while already in the search input → types a literal `/` (for regex).
+- Navigate away/unmount archive UI in SPA mode → `/` no longer hijacks host page shortcuts.
 
 ---
 
@@ -427,14 +480,64 @@ resetBtn?.addEventListener('click', () => {
   scopeSelect.value = 'authored';
   sortSelect.value = 'date';
   viewSelect.value = 'card';
+
+  // Keep ArchiveState in sync with toolbar defaults before refresh
+  useDedicatedScopeParam = true;
+  state.sortBy = 'date';
+  state.viewMode = 'card';
+
+  const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
+  const relevanceOption = sortSelect.querySelector('option[value="relevance"]') as HTMLOptionElement;
+  if (replyToOption) replyToOption.disabled = false;
+  if (relevanceOption) relevanceOption.disabled = false;
+
   updateClearButton();
   updateResetButton();
   writeArchiveUrlState({ query: '', scope: 'authored', sort: 'date' });
-  refreshView();
+  void refreshView();
 });
 
 // Call updateResetButton() after any control change
 ```
+
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` — add a small UI state adapter (recommended)
+
+Use shared helpers so handlers do not manually drift DOM/state/URL updates:
+
+```typescript
+type ArchiveUiState = {
+  query: string;
+  scope: ArchiveSearchScope;
+  sort: ArchiveSearchSortMode;
+  view: ArchiveViewMode;
+};
+
+const readUiState = (): ArchiveUiState => ({
+  query: searchInput.value,
+  scope: getScopeValue(),
+  sort: sortSelect.value as ArchiveSearchSortMode,
+  view: getViewValue()
+});
+
+const applyUiState = (next: Partial<ArchiveUiState>, options: { silent?: boolean } = {}) => {
+  if (next.query !== undefined) searchInput.value = next.query;
+  if (next.scope !== undefined) setScopeValue(next.scope);
+  if (next.sort !== undefined) {
+    sortSelect.value = next.sort;
+    state.sortBy = next.sort;
+  }
+  if (next.view !== undefined) {
+    setViewValue(next.view);
+    state.viewMode = next.view;
+  }
+  if (!options.silent) {
+    updateClearButton();
+    updateResetButton();
+  }
+};
+```
+
+Call these helpers from Reset, URL restoration, clear-button, and scope/view handlers to reduce stale-reference risk during Batch B migration. Prefer a single URL-write point (`refreshView` or an explicit `syncUrlState(readUiState())`) to avoid divergent query/scope/sort persistence.
 
 ### Notes
 
@@ -443,10 +546,12 @@ resetBtn?.addEventListener('click', () => {
 - The toolbar labels now include prefixes (`Scope:`, `Sort:`, `View:`) inside the `<option>` text itself, making each dropdown self-describing even without external labels.
 - The result count element (`#archive-result-count`) is populated in Change 9.
 - **Ordering note**: The Reset button code here uses `scopeSelect.value` and `viewSelect.value`, which only work if scope/view are still `<select>` elements. When implementing Changes 4/5, update these references to `getScopeValue()`/`setScopeValue()` and `getViewValue()`/`setViewValue()`. Implement batch B (3+4+5) atomically.
+- In batch B, route reset behavior through shared helpers (`setScopeValue`, `setViewValue`, `applyViewModeChange`) so visual control state and `ArchiveState` remain synchronized.
 
 ### Affected Tests
 
-- No existing E2E tests directly reference these toolbar selectors (verified by grep). New tests should be added — see Testing Strategy section.
+- Existing E2E tests already reference toolbar selectors in `tests/archive-context.spec.ts`, `tests/archive-route.spec.ts`, and `tests/archive-sync.spec.ts`.
+- Batch B must migrate those interactions from `<select>`-based calls (`selectOption(...)`) to segmented control/tab interactions.
 
 ---
 
@@ -462,9 +567,9 @@ resetBtn?.addEventListener('click', () => {
 Replace the `<select id="archive-scope">` with:
 
 ```html
-<div id="archive-scope" class="pr-segmented-control" role="group" aria-label="Search scope">
-    <button data-value="authored" class="pr-seg-btn active" aria-pressed="true">Authored</button>
-    <button data-value="all" class="pr-seg-btn" aria-pressed="false">All</button>
+<div id="archive-scope" class="pr-segmented-control" role="radiogroup" aria-label="Search scope">
+    <button data-value="authored" class="pr-seg-btn active" role="radio" aria-checked="true" tabindex="0">Authored</button>
+    <button data-value="all" class="pr-seg-btn" role="radio" aria-checked="false" tabindex="-1">All</button>
 </div>
 ```
 
@@ -497,6 +602,10 @@ Replace the `<select id="archive-scope">` with:
   background: #0078ff;
   color: #fff;
 }
+.pr-seg-btn:focus-visible {
+  outline: 2px solid #0078ff;
+  outline-offset: -2px;
+}
 ```
 
 #### [MODIFY] `src/scripts/power-reader/archive/index.ts` — Event wiring
@@ -504,23 +613,50 @@ Replace the `<select id="archive-scope">` with:
 Since `archive-scope` is no longer a `<select>`, adapt the scope reading:
 
 ```typescript
-const scopeContainer = document.getElementById('archive-scope')!;
-const getScopeValue = (): ArchiveSearchScope =>
-  (scopeContainer.querySelector('.pr-seg-btn.active') as HTMLElement)?.dataset.value as ArchiveSearchScope || 'authored';
+const scopeContainer = document.getElementById('archive-scope');
+let scopeFallbackValue: ArchiveSearchScope = 'authored';
+
+const getScopeValue = (): ArchiveSearchScope => {
+  if (!scopeContainer) return scopeFallbackValue;
+  const active = scopeContainer.querySelector('.pr-seg-btn.active') as HTMLElement | null;
+  return (active?.dataset.value as ArchiveSearchScope) || scopeFallbackValue;
+};
+
 const setScopeValue = (value: ArchiveSearchScope) => {
+  scopeFallbackValue = value;
+  if (!scopeContainer) return; // Safe during early boot / partial render states
   scopeContainer.querySelectorAll('.pr-seg-btn').forEach(btn => {
     const el = btn as HTMLElement;
     const isActive = el.dataset.value === value;
     el.classList.toggle('active', isActive);
-    el.setAttribute('aria-pressed', String(isActive));
+    el.setAttribute('aria-checked', String(isActive));
+    (el as HTMLButtonElement).tabIndex = isActive ? 0 : -1;
   });
 };
 
-scopeContainer.addEventListener('click', (e) => {
+scopeContainer?.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('.pr-seg-btn') as HTMLElement;
   if (!btn || btn.classList.contains('active')) return;
   setScopeValue(btn.dataset.value as ArchiveSearchScope);
+  useDedicatedScopeParam = true;
   refreshView();
+});
+
+scopeContainer?.addEventListener('keydown', (e: KeyboardEvent) => {
+  const current = (e.target as HTMLElement).closest('.pr-seg-btn') as HTMLButtonElement | null;
+  if (!current) return;
+  const buttons = Array.from(scopeContainer.querySelectorAll('.pr-seg-btn')) as HTMLButtonElement[];
+  const index = buttons.indexOf(current);
+  if (index < 0) return;
+
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  e.preventDefault();
+  const delta = e.key === 'ArrowRight' ? 1 : -1;
+  const nextButton = buttons[(index + delta + buttons.length) % buttons.length];
+  nextButton.focus();
+  setScopeValue(nextButton.dataset.value as ArchiveSearchScope);
+  useDedicatedScopeParam = true;
+  void refreshView();
 });
 ```
 
@@ -533,7 +669,9 @@ In `parseArchiveUrlState` usage, the scope value is restored from the URL. Updat
 ### Notes
 
 - The segmented control requires updating references from `scopeSelect.value` to the helper functions throughout `index.ts`.
-- The `aria-pressed` and `role="group"` attributes maintain accessibility parity with the `<select>`.
+- `getScopeValue`/`setScopeValue` are null-safe and maintain fallback state so early boot ordering (DOM not yet injected) does not throw.
+- Scope control uses `radiogroup`/`radio` semantics with roving tabindex and Left/Right keyboard support.
+- Regression hardening: run `rg -n "archive-scope|archive-view"` and `rg -n "\\.value|addEventListener\\('change'" src/scripts/power-reader/archive` to ensure no stale `<select>` assumptions remain outside the rewritten handlers.
 
 ---
 
@@ -551,22 +689,22 @@ Replace `<select id="archive-view">` with:
 ```html
 <div id="archive-view" class="pr-view-tabs" role="tablist" aria-label="View mode">
     <button data-value="card" class="pr-view-tab active" role="tab"
-            aria-selected="true" title="Card View">
+            aria-selected="true" tabindex="0" aria-label="Card view" title="Card View">
         <span class="pr-view-icon">☰</span>
         <span class="pr-view-label">Card</span>
     </button>
     <button data-value="index" class="pr-view-tab" role="tab"
-            aria-selected="false" title="Index View">
+            aria-selected="false" tabindex="-1" aria-label="Index view" title="Index View">
         <span class="pr-view-icon">≡</span>
         <span class="pr-view-label">Index</span>
     </button>
     <button data-value="thread-full" class="pr-view-tab" role="tab"
-            aria-selected="false" title="Thread View (Full Context)">
+            aria-selected="false" tabindex="-1" aria-label="Thread view full context" title="Thread View (Full Context)">
         <span class="pr-view-icon">⊞</span>
         <span class="pr-view-label">Thread</span>
     </button>
     <button data-value="thread-placeholder" class="pr-view-tab" role="tab"
-            aria-selected="false" title="Thread View (Placeholder Context)">
+            aria-selected="false" tabindex="-1" aria-label="Thread view compact context" title="Thread View (Placeholder Context)">
         <span class="pr-view-icon">⊟</span>
         <span class="pr-view-label">Compact</span>
     </button>
@@ -609,6 +747,10 @@ Replace `<select id="archive-view">` with:
   color: var(--pr-text-primary, #000);
   font-weight: 600;
 }
+.pr-view-tab:focus-visible {
+  outline: 2px solid #0078ff;
+  outline-offset: -2px;
+}
 .pr-view-icon {
   font-size: 1.3em;
 }
@@ -625,27 +767,165 @@ Replace `<select id="archive-view">` with:
 
 #### Event wiring
 
-Same pattern as Change 4 — delegate click handler on the container, toggle `.active`, read `data-value`.
+Use the same delegated pattern as Change 4, but explicitly port the current `viewSelect?.addEventListener('change', ...)` behavior (state updates, sort-option disabling/enabling, fallback sort reassignment, `refreshView()`) to avoid regressions.
 
 ```typescript
-const viewContainer = document.getElementById('archive-view')!;
-const getViewValue = (): ArchiveViewMode =>
-  (viewContainer.querySelector('.pr-view-tab.active') as HTMLElement)?.dataset.value as ArchiveViewMode || 'card';
+const viewContainer = document.getElementById('archive-view');
+let viewFallbackValue: ArchiveViewMode = 'card';
+const getViewTabs = (): HTMLButtonElement[] =>
+  viewContainer
+    ? (Array.from(viewContainer.querySelectorAll('.pr-view-tab')) as HTMLButtonElement[])
+    : [];
+
+const getViewValue = (): ArchiveViewMode => {
+  if (!viewContainer) return viewFallbackValue;
+  const active = viewContainer.querySelector('.pr-view-tab.active') as HTMLElement | null;
+  return (active?.dataset.value as ArchiveViewMode) || viewFallbackValue;
+};
+
 const setViewValue = (value: ArchiveViewMode) => {
-  viewContainer.querySelectorAll('.pr-view-tab').forEach(btn => {
-    const el = btn as HTMLElement;
+  viewFallbackValue = value;
+  getViewTabs().forEach((el) => {
     const isActive = el.dataset.value === value;
     el.classList.toggle('active', isActive);
     el.setAttribute('aria-selected', String(isActive));
+    // Roving tabindex for keyboard focus management
+    el.tabIndex = isActive ? 0 : -1;
   });
 };
+
+let viewModeRefreshTimer: number | null = null;
+const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
+
+const scheduleViewRefresh = (source: 'pointer' | 'keyboard') => {
+  if (viewModeRefreshTimer) {
+    window.clearTimeout(viewModeRefreshTimer);
+    viewModeRefreshTimer = null;
+  }
+
+  if (source === 'pointer') {
+    void refreshView();
+    return;
+  }
+
+  viewModeRefreshTimer = window.setTimeout(() => {
+    viewModeRefreshTimer = null;
+    void refreshView();
+  }, VIEW_MODE_KEYBOARD_DEBOUNCE_MS);
+};
+
+const applyViewModeChange = (
+  nextView: ArchiveViewMode,
+  source: 'pointer' | 'keyboard'
+) => {
+  if (state.viewMode === nextView) return;
+  state.viewMode = nextView;
+
+  // Ported from existing viewSelect 'change' handler
+  const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
+  const relevanceOption = sortSelect.querySelector('option[value="relevance"]') as HTMLOptionElement;
+  if (replyToOption) {
+    if (isThreadMode(state.viewMode)) {
+      replyToOption.disabled = true;
+      if (relevanceOption) relevanceOption.disabled = true;
+      if (state.sortBy === 'replyTo' || state.sortBy === 'relevance') {
+        state.sortBy = 'date';
+        sortSelect.value = 'date';
+      }
+    } else {
+      replyToOption.disabled = false;
+      if (relevanceOption) relevanceOption.disabled = false;
+    }
+  }
+
+  scheduleViewRefresh(source);
+};
+
+viewContainer?.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
+  if (!btn) return;
+  const next = btn.dataset.value as ArchiveViewMode;
+  setViewValue(next);
+  applyViewModeChange(next, 'pointer');
+});
+
+const activateTabAt = (index: number, source: 'pointer' | 'keyboard' = 'keyboard') => {
+  const tabs = getViewTabs();
+  if (tabs.length === 0) return;
+
+  // Wrap index for Left/Right navigation
+  const normalized = (index + tabs.length) % tabs.length;
+  const target = tabs[normalized];
+  const next = target.dataset.value as ArchiveViewMode;
+  target.focus();
+  setViewValue(next);
+  applyViewModeChange(next, source);
+};
+
+viewContainer?.addEventListener('keydown', (e: KeyboardEvent) => {
+  const current = (e.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
+  if (!current) return;
+
+  const tabs = getViewTabs();
+  const currentIndex = tabs.indexOf(current);
+  if (currentIndex < 0) return;
+
+  switch (e.key) {
+    case 'ArrowRight':
+      e.preventDefault();
+      activateTabAt(currentIndex + 1, 'keyboard');
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      activateTabAt(currentIndex - 1, 'keyboard');
+      break;
+    case 'Home':
+      e.preventDefault();
+      activateTabAt(0, 'keyboard');
+      break;
+    case 'End':
+      e.preventDefault();
+      activateTabAt(tabs.length - 1, 'keyboard');
+      break;
+    case 'Enter':
+    case ' ':
+      e.preventDefault();
+      activateTabAt(currentIndex, 'keyboard');
+      break;
+    default:
+      // Do not intercept Tab/Shift+Tab so focus can leave the tablist normally.
+      break;
+  }
+});
 ```
+
+Remove the legacy `viewSelect?.addEventListener('change', ...)` handler once the tab handler is in place, and update remaining reads/writes to use `getViewValue()`/`setViewValue(...)` (including Reset and URL restoration paths).
+After initial DOM injection, call `setViewValue(getViewValue())` once so ARIA and roving-tabindex state is normalized even before first user interaction.
+
+#### Accessibility (required)
+
+Because this replaces a native `<select>`, implement keyboard behavior equivalent to a tablist:
+
+- Left/Right arrow: move focus and selection between tabs.
+- `Home`/`End`: jump to first/last tab.
+- `Enter`/`Space`: activate the focused tab (if not already selected).
+- Keep one tabbable tab at a time via roving `tabindex` (`0` on active, `-1` on others).
+- Do not trap focus: leave `Tab`/`Shift+Tab` behavior untouched.
 
 ### Notes
 
 - Thread modes are visually distinguished by different box symbols (⊞ vs ⊟), plus text labels when viewport allows.
-- On very narrow viewports, labels hide and only icons show — each has a `title` tooltip for hover clarity.
-- The `aria-selected` attribute on each tab button ensures screen readers announce the active view mode.
+- On very narrow viewports, labels hide and only icons show; each tab keeps an explicit `aria-label` (and optional `title`) so screen readers still announce intent.
+- Keep `aria-selected` in sync with the active tab and preserve visible labels (or an explicit `aria-label`) on icon-only layouts.
+- Keyboard-driven tab changes use a short debounce to reduce redundant refreshes while arrowing through tabs; pointer clicks remain immediate.
+- `refreshView` already uses `activeQueryRequestId` to ignore stale responses, so rapid tab changes remain correctness-safe even when overlapping work is in flight.
+- `getViewValue`/`setViewValue` are null-safe and preserve fallback state, preventing crashes during early boot before archive controls are injected.
+- Regression hardening: after migration, grep for `#archive-view` `.value`/`change` assumptions outside the rewritten tab helpers and port them to `getViewValue()`/`setViewValue()`.
+
+### Verification
+
+- Hold `ArrowRight`/`ArrowLeft` across tabs: UI selection moves immediately, but search/render refresh fires at most once per debounce window.
+- If multiple refreshes are in flight, stale responses are ignored by the existing `activeQueryRequestId` request guard.
 
 ---
 
@@ -751,13 +1031,13 @@ helpEl?.addEventListener('click', (e) => {
 <a name="change-7"></a>
 ## Change 7: Sort Behavior Improvements
 
-**Goal**: (a) Reorder sort options to put `Date (Newest)` first. (b) Conditionally show `Relevance` only when a content query is active. (c) Add disabled-state tooltips for thread-view-incompatible options.
+**Goal**: (a) Reorder sort options to put `Date (Newest)` first. (b) Conditionally enable `Relevance` only when a content query is active. (c) Add disabled-state tooltips for thread-view-incompatible options.
 
 ### Plan
 
 #### (a) Option reorder — already handled in Change 3 HTML template.
 
-#### (b) Conditional Relevance visibility
+#### (b) Conditional Relevance enablement
 
 In the `refreshView` function (or the `updateSearchStatus` callback), after parsing the query:
 
@@ -769,16 +1049,20 @@ const updateSortOptions = (hasContentQuery: boolean, isThread: boolean) => {
   if (relevanceOption) {
     relevanceOption.disabled = !hasContentQuery;
     relevanceOption.title = hasContentQuery ? '' : 'Relevance sorting requires a search query';
+    // Property update only; do not dispatch 'change' events from this helper.
     // If currently selected but now invalid, switch to date
     if (!hasContentQuery && sortSelect.value === 'relevance') {
       sortSelect.value = 'date';
+      state.sortBy = 'date';
     }
   }
   if (replyToOption) {
     replyToOption.disabled = isThread;
     replyToOption.title = isThread ? 'Not available in thread view' : '';
+    // Property update only; do not dispatch 'change' events from this helper.
     if (isThread && sortSelect.value === 'replyTo') {
       sortSelect.value = 'date';
+      state.sortBy = 'date';
     }
   }
 };
@@ -786,26 +1070,62 @@ const updateSortOptions = (hasContentQuery: boolean, isThread: boolean) => {
 
 Call `updateSortOptions(hasContentQuery, isThreadMode(viewMode))` inside `refreshView` after parsing the query.
 
+Important ordering in `refreshView`: capture `sortMode` **after** `updateSortOptions(...)` runs, because `updateSortOptions` may rewrite `sortSelect.value` (e.g., `relevance` → `date`).
+
+```typescript
+const refreshView = async (budgetMs?: number) => {
+  const requestId = ++activeQueryRequestId;
+  const currentQuery = searchInput.value;
+  const parsed = parseStructuredQuery(currentQuery);
+  const hasContentQuery = parsed.clauses.some(isPositiveContentWithoutWildcard);
+  const isThread = isThreadMode(state.viewMode);
+
+  updateSortOptions(hasContentQuery, isThread);
+
+  // Capture after option normalization so runSearch gets the effective value.
+  const sortMode = sortSelect.value as ArchiveSearchSortMode;
+
+  const result = await searchManager.runSearch({
+    query: currentQuery,
+    sortMode,
+    // ...
+  });
+  // ...
+};
+```
+
 **Note**: The existing `viewSelect` change handler (lines 717–738 of `index.ts`) already disables `replyTo` and `relevance` in thread mode. The new `updateSortOptions` function **replaces** that inline logic with a unified function that handles both thread-mode disabling and content-query disabling. Remove the duplicate inline logic from the `viewSelect` handler when implementing this change.
+
+Idempotency / loop-safety requirement:
+
+- `updateSortOptions` must remain side-effect-free beyond direct property updates (no synthetic `'change'` events).
+- Repeated calls with the same inputs should be no-op after first normalization.
+- Immediate UI normalization during typing is expected; `activeQueryRequestId` already prevents stale async responses from repainting outdated state.
 
 #### (c) Determine `hasContentQuery`
 
-Use the existing `isPositiveContentClause` from `ast.ts`:
+Use `isPositiveContentWithoutWildcard` from `ast.ts`:
 
 ```typescript
-import { isPositiveContentClause } from './search/ast';
+import { isPositiveContentWithoutWildcard } from './search/ast';
 
 // After parsing:
 const parsed = parseStructuredQuery(currentQuery);
-// NOTE: isPositiveContentClause already checks !clause.negated internally,
-// so no additional negation check is needed here.
-const hasContentQuery = parsed.clauses.some(isPositiveContentClause);
+// NOTE: helper already checks !clause.negated internally.
+const hasContentQuery = parsed.clauses.some(isPositiveContentWithoutWildcard);
 ```
 
 ### Notes
 
-- This avoids the confusing degenerate case where `Relevance` is selected with no query and produces chronological results.
+- This avoids degenerate cases where `Relevance` is selected with no meaningful scoring signal (`''`, wildcard-only `*`, etc.) and effectively falls back to chronology.
 - The sort dropdown retains its `<select>` form since it has 6 options — too many for a segmented control.
+
+### Verification
+
+- UI value may normalize before earlier requests settle; this is intentional and correctness-safe with request-id guarding.
+- When UI normalization rewrites sort to `date`, keep `state.sortBy` synchronized in the same branch.
+- With empty/non-content query and `relevance` selected, `updateSortOptions` rewrites UI to `date` and `runSearch` receives `sortMode: 'date'` (no stale captured value).
+- In thread mode, `replyTo` is disabled and if previously selected, both UI and request use fallback `date`.
 
 ---
 
@@ -869,7 +1189,7 @@ const updateSearchStatus = (
   }
 
   if (!hasMessages) {
-    searchStatusEl.textContent = ARCHIVE_SEARCH_HELP_TEXT;
+    searchStatusEl.textContent = 'Ready';
   }
 };
 ```
@@ -913,7 +1233,7 @@ updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length
 ### Notes
 
 - All warnings are now displayed, not just the first one (current code only shows `diagnostics.warnings[0]`).
-- The `ARCHIVE_SEARCH_HELP_TEXT` still appears when no search is active.
+- Keep no-message state short (`Ready`) since Change 6 adds a dedicated syntax cheatsheet.
 
 ---
 
@@ -926,7 +1246,7 @@ updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length
 
 #### [MODIFY] `src/scripts/power-reader/archive/index.ts`
 
-After `refreshView` completes and results are available, populate the result count element:
+`#archive-result-count` is introduced in Change 3 markup. In Change 9, do not add new HTML; only wire/update behavior after `refreshView` completes:
 
 ```typescript
 const resultCountEl = document.getElementById('archive-result-count');
@@ -945,11 +1265,50 @@ const updateResultCount = (total: number, tookMs: number) => {
 
 Call `updateResultCount(result.total, result.diagnostics.tookMs)` wherever search results are handled.
 
+Add lightweight loading feedback tied to request lifecycle:
+
+```typescript
+const setSearchLoading = (isLoading: boolean) => {
+  resultCountEl?.classList.toggle('is-loading', isLoading);
+  feedEl?.classList.toggle('is-loading', isLoading);
+};
+
+const refreshView = async (budgetMs?: number) => {
+  const requestId = ++activeQueryRequestId;
+  setSearchLoading(true);
+  try {
+    const result = await searchManager.runSearch(/* ... */);
+    if (requestId !== activeQueryRequestId) return;
+    // ... existing success path ...
+  } finally {
+    if (requestId === activeQueryRequestId) {
+      setSearchLoading(false);
+    }
+  }
+};
+```
+
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` â€” CSS block
+
+```css
+#archive-result-count.is-loading,
+#archive-feed.is-loading {
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+```
+
 ### Notes
 
 - When there's no active query, the count shows total archive size (e.g., "3,847 items") using `toLocaleString()` for comma formatting.
 - When searching, it shows "423 results • 3.2ms".
 - This provides always-visible feedback that the search actually ran.
+- Loading state is intentionally subtle (opacity-only) to avoid layout shift while still signaling active work.
+
+### Verification
+
+- While a search request is active, `#archive-result-count` and `#archive-feed` carry `.is-loading`.
+- On latest-request completion, loading classes are removed; stale-request completions do not clear loading for a newer in-flight request.
 
 ---
 
@@ -975,6 +1334,8 @@ import { parseStructuredQuery } from './parser';
 export const extractHighlightTerms = (query: string): string[] => {
   const parsed = parseStructuredQuery(query);
   const terms: string[] = [];
+  const MAX_HIGHLIGHT_TERMS = 20;
+  const MIN_HIGHLIGHT_TERM_LEN = 3;
 
   for (const clause of parsed.clauses) {
     if (clause.negated) continue;
@@ -991,7 +1352,9 @@ export const extractHighlightTerms = (query: string): string[] => {
     }
   }
 
-  return terms;
+  return Array.from(new Set(terms))
+    .filter(term => term.length >= MIN_HIGHLIGHT_TERM_LEN)
+    .slice(0, MAX_HIGHLIGHT_TERMS);
 };
 
 /**
@@ -1010,10 +1373,31 @@ export const highlightTermsInContainer = (
   container: HTMLElement,
   terms: string[]
 ): void => {
-  if (terms.length === 0) return;
+  // Stable signature: insensitive to query term ordering and duplicate clauses.
+  const stableTerms = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b));
+  const signature = stableTerms.join('\u001F');
+  const previousSignature = container.getAttribute('data-pr-highlighted-terms');
+
+  // Fast path for repeated renders with unchanged terms.
+  if (previousSignature === signature) return;
+
+  // If terms changed, remove old marks first so we don't accumulate stale highlights.
+  if (previousSignature !== null) {
+    container.querySelectorAll('mark.pr-search-highlight').forEach((mark) => {
+      const text = document.createTextNode(mark.textContent || '');
+      mark.replaceWith(text);
+    });
+    container.normalize();
+  }
+
+  if (stableTerms.length === 0) {
+    // Mark as processed for empty term set too, so callers can skip repeat work.
+    container.setAttribute('data-pr-highlighted-terms', signature);
+    return;
+  }
 
   // Build a regex that matches any of the terms (longest first to avoid partial matches)
-  const sorted = [...terms].sort((a, b) => b.length - a.length);
+  const sorted = [...stableTerms].sort((a, b) => b.length - a.length);
   const escaped = sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
 
@@ -1026,8 +1410,8 @@ export const highlightTermsInContainer = (
   for (const textNode of textNodes) {
     const parent = textNode.parentElement;
     if (!parent) continue;
-    // Skip existing highlights, code blocks, and script tags
-    if (parent.closest('mark, code, pre, script, style')) continue;
+    // Skip existing highlights, code blocks, link text, and script/style tags.
+    if (parent.closest('mark, code, pre, script, style, a')) continue;
 
     const text = textNode.textContent || '';
     // Split original text by the pattern — case-insensitive match against original.
@@ -1053,6 +1437,8 @@ export const highlightTermsInContainer = (
     }
     parent.replaceChild(fragment, textNode);
   }
+
+  container.setAttribute('data-pr-highlighted-terms', signature);
 };
 ```
 
@@ -1066,17 +1452,20 @@ import { extractHighlightTerms, highlightTermsInContainer } from './search/highl
 // After renderArchiveFeed completes:
 const applySearchHighlight = () => {
   const query = searchInput.value.trim();
-  if (!query) return;
-
   const terms = extractHighlightTerms(query);
-  if (terms.length === 0) return;
 
   const feedEl = document.getElementById('archive-feed');
   if (!feedEl) return;
 
-  // Apply to comment bodies and post bodies
-  feedEl.querySelectorAll('.pr-comment-body, .pr-post-body, .pr-index-title').forEach(el => {
-    highlightTermsInContainer(el as HTMLElement, terms);
+  const termsKey = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b)).join('\u001F');
+  const highlightTargets = feedEl.querySelectorAll('.pr-comment-body, .pr-post-body, .pr-index-title');
+  if (highlightTargets.length > 1200) return; // guardrail for very large DOMs
+
+  // Apply to comment bodies and post bodies. Skip nodes already highlighted for this exact term set.
+  highlightTargets.forEach(el => {
+    const node = el as HTMLElement;
+    if (node.getAttribute('data-pr-highlighted-terms') === termsKey) return;
+    highlightTermsInContainer(node, terms);
   });
 };
 ```
@@ -1098,13 +1487,19 @@ const applySearchHighlight = () => {
 - Regex highlighting is intentionally deferred — the regex might not correspond to a simple string pattern and could cause performance issues.
 - Per spec (§ Tokenization): "Preserve original text for snippet/highlight rendering; never highlight from normalized strings directly."
 - **Wire into `runPostRenderHooks`** (~line 404 of `index.ts`) rather than adding a separate call after `renderArchiveFeed`. This ensures highlighting runs on all render paths (initial load, load-more, index expand-in-place).
+- Run highlighting at the end of `runPostRenderHooks` so earlier hooks that inspect/attach behavior to raw text nodes execute first.
+- Use `data-pr-highlighted-terms` as a per-node term-signature marker. Re-renders with the same term set skip work; when terms change, old marks are removed then reapplied for only the affected nodes.
+- Longest-first term sorting avoids nested marks for substring overlaps (e.g., `align` vs `alignment`). True partial-overlap pairs (e.g., `abc` and `bcd`) follow standard leftmost regex matching and may not highlight both overlaps; acceptable for v1.
+- Guardrails: ignore tiny terms (`len < 3`), cap term count, and skip highlighting on very large rendered result sets.
 - **Limitation**: The normalized terms are lowercased. The `'gi'` regex flag handles case-insensitive matching against original text, but NFKC-normalized characters (e.g., `ﬁ` → `fi`) won't match the original if the original uses the composed form. This is acceptable for v1.
+- v2 TODO: evaluate a normalization-aware text walker (potentially with `Intl.Segmenter`) for better Unicode-equivalent highlighting.
 
 ### Verification
 
 - Search for `alignment` → all instances of "alignment" in visible results are wrapped in `<mark>`.
 - Phrase search `"alignment tax"` → the exact phrase is highlighted.
 - Performance: highlighting 500 DOM elements should complete in < 50ms.
+- Empty query path: nodes get `data-pr-highlighted-terms=""` and subsequent renders skip reprocessing.
 
 ---
 
@@ -1126,49 +1521,60 @@ This always shows the first 100 characters, which may not contain the matched te
 
 ### Plan
 
-#### [MODIFY] `src/scripts/power-reader/archive/render.ts` — add module-level snippet state
+#### [MODIFY] `src/scripts/power-reader/archive/render.ts` — make snippet terms an explicit render input
 
-`renderIndexItem` is a synchronous function that returns an HTML string, so it cannot use dynamic imports or async patterns. Use a pre-computed terms array stored at module scope:
+Avoid module-level mutable state by threading snippet terms through render calls:
 
 ```typescript
-// Module-level state for search-aware snippet extraction
-let currentSnippetTerms: string[] = [];
-
-export const setSnippetTerms = (terms: string[]) => {
-  currentSnippetTerms = terms;
+export type RenderArchiveOptions = {
+  snippetTerms?: readonly string[];
 };
 
 /**
  * Extract a snippet centered on the first match of any search term.
  * Falls back to head-of-body if no match found.
  */
-const extractSnippet = (text: string, maxLen: number): string => {
+const extractSnippet = (
+  text: string,
+  maxLen: number,
+  snippetTerms: readonly string[]
+): string => {
   if (!text) return '';
   const textLower = text.toLowerCase();
 
-  for (const term of currentSnippetTerms) {
+  for (const term of snippetTerms) {
     const idx = textLower.indexOf(term.toLowerCase());
     if (idx === -1) continue;
 
-    const contextRadius = Math.floor((maxLen - term.length) / 2);
-    const start = Math.max(0, idx - contextRadius);
-    const end = Math.min(text.length, idx + term.length + contextRadius);
+    const contextRadius = Math.max(0, Math.floor((maxLen - term.length) / 2));
+    let start = Math.max(0, idx - contextRadius);
+    let end = Math.min(text.length, idx + term.length + contextRadius);
+
+    // Re-balance to use the full snippet budget when one side is clipped by boundaries.
+    const targetLen = Math.min(maxLen, text.length);
+    const currentLen = end - start;
+    if (currentLen < targetLen) {
+      const deficit = targetLen - currentLen;
+      if (start === 0) {
+        end = Math.min(text.length, end + deficit);
+      } else if (end === text.length) {
+        start = Math.max(0, start - deficit);
+      }
+    }
+
     const prefix = start > 0 ? '…' : '';
     const suffix = end < text.length ? '…' : '';
     return prefix + text.slice(start, end) + suffix;
   }
 
-  // No match in body — fall back to head
   return text.slice(0, maxLen) + (text.length > maxLen ? '…' : '');
 };
-```
 
-#### [MODIFY] `src/scripts/power-reader/archive/render.ts` — `renderIndexItem`
-
-Update the comment title extraction:
-
-```typescript
-export const renderIndexItem = (item: Post | Comment): string => {
+export const renderIndexItem = (
+  item: Post | Comment,
+  options: RenderArchiveOptions = {}
+): string => {
+  const snippetTerms = options.snippetTerms ?? [];
   const isPost = 'title' in item;
 
   let title: string;
@@ -1176,31 +1582,62 @@ export const renderIndexItem = (item: Post | Comment): string => {
     title = (item as Post).title;
   } else {
     const bodyText = ((item as Comment).htmlBody || '').replace(/<[^>]+>/g, '');
-    title = extractSnippet(bodyText, 120);
+    title = extractSnippet(bodyText, 120, snippetTerms);
   }
 
   // ... rest unchanged ...
 };
 ```
 
-**Note**: The function signature is unchanged — no new parameters needed since snippet terms come from module state.
+#### [MODIFY] `src/scripts/power-reader/archive/render.ts` — `renderArchiveFeed`
 
-#### [MODIFY] `src/scripts/power-reader/archive/index.ts` — set snippet terms before render
-
-In `refreshView`, before calling `renderArchiveFeed`:
+Pass snippet terms down when rendering index rows:
 
 ```typescript
-import { setSnippetTerms } from './render';
+export const renderArchiveFeed = async (
+  container: HTMLElement,
+  items: ArchiveItem[],
+  viewMode: ArchiveViewMode,
+  readerState: ReaderState,
+  sortBy: ArchiveSortBy,
+  options: RenderArchiveOptions = {}
+) => {
+  // ...
+  const visibleItems = items.slice(0, currentRenderLimit);
+  if (viewMode === 'index') {
+    container.innerHTML = visibleItems.map(item =>
+      renderIndexItem(item as Post | Comment, { snippetTerms: options.snippetTerms })
+    ).join('');
+  }
+  // ...
+};
+```
+
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` and `src/scripts/power-reader/archive/uiHost.ts`
+
+Compute snippet terms from the active query and pass them to every `renderArchiveFeed` call site:
+
+```typescript
 import { extractHighlightTerms } from './search/highlight';
 
-// Inside refreshView, before renderArchiveFeed:
-setSnippetTerms(extractHighlightTerms(searchInput.value));
+const snippetTerms = extractHighlightTerms(searchInput.value);
+await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, { snippetTerms });
 ```
+
+Also update direct `renderIndexItem(item)` fallback paths (e.g., index collapse handler) to pass `{ snippetTerms }` so snippets stay query-consistent across incremental UI interactions.
+
+### Notes
+
+- Snippet extraction is best-effort and term/phrase-centric. It intentionally uses plain substring matching from `snippetTerms`, not full AST replay.
+- Match windows are re-balanced when one side is clipped by text boundaries so short leading/trailing matches still use most of `maxLen`.
+- Regex clauses and certain normalized matches that the search engine can find may not produce match-centered snippets; in those cases, fallback head snippets remain acceptable for v1.
+- A v2 path is to pass parsed query/AST match metadata into rendering for engine-exact snippet alignment.
 
 ### Verification
 
 - Search for `alignment` → index view shows "…discussing the alignment tax and its implications for…" (centered on match) instead of a random first-100-chars snippet.
 - Empty query shows head-of-body snippet as before.
+- Very long term/phrase (> `maxLen`) still preserves the matched segment (no negative-radius truncation bug).
 
 ---
 
@@ -1224,6 +1661,7 @@ Per spec:
 ```typescript
 import type { ArchiveItem } from './types';
 import { parseStructuredQuery } from './parser';
+import { normalizeForSearch } from './normalize';
 
 export type FacetGroup = {
   label: string;
@@ -1244,6 +1682,8 @@ export type FacetResult = {
 };
 
 const FACET_BUDGET_MS = 30;
+const escapeQueryQuotedValue = (value: string): string =>
+  value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
 /**
  * Determine which facet kinds are already active in the query by
@@ -1300,10 +1740,10 @@ export const computeFacets = (
     if (isPost) postCount++;
     else commentCount++;
 
-    // Author (use original displayName for display, normalized for keying)
+    // Author (use original displayName for display, normalize key exactly like parser/search docs)
     const displayName = item.user?.displayName || '';
     if (displayName) {
-      const key = displayName.toLowerCase();
+      const key = normalizeForSearch(displayName);
       const existing = authorCounts.get(key);
       if (existing) existing.count++;
       else authorCounts.set(key, { display: displayName, count: 1 });
@@ -1335,12 +1775,18 @@ export const computeFacets = (
   if (topAuthors.length > 0) {
     groups.push({
       label: 'Author',
-      items: topAuthors.map(([normName, { display, count }]) => ({
-        value: display,
-        queryFragment: display.includes(' ') ? `author:"${display}"` : `author:${display}`,
-        count,
-        active: active.authors.has(normName)
-      }))
+      items: topAuthors.map(([normName, { display, count }]) => {
+        const needsQuote = /[\s":]/u.test(display);
+        const queryFragment = needsQuote
+          ? `author:"${escapeQueryQuotedValue(display)}"`
+          : `author:${display}`;
+        return {
+          value: display,
+          queryFragment,
+          count,
+          active: active.authors.has(normName)
+        };
+      })
     });
   }
 
@@ -1439,12 +1885,18 @@ const renderFacets = (result: SearchRunResult) => {
     searchInput.value
   );
 
-  if (facetResult.groups.every(g => g.items.length === 0)) {
+  const hasFacetItems = facetResult.groups.some(g => g.items.length > 0);
+  if (!hasFacetItems && !facetResult.delayed) {
     facetsEl.style.display = 'none';
     return;
   }
 
   facetsEl.style.display = '';
+  if (!hasFacetItems && facetResult.delayed) {
+    facetsEl.innerHTML = '<span class="pr-facet-delayed">Facets delayed — refine query</span>';
+    return;
+  }
+
   facetsEl.innerHTML = facetResult.groups.map(group => `
     <div class="pr-facet-group">
       <span class="pr-facet-label">${group.label}:</span>
@@ -1489,32 +1941,45 @@ const getFragmentKind = (fragment: string): string | null => {
   return match ? match[1] : null;
 };
 
+const normalizeQueryWhitespace = (value: string): string =>
+  value.replace(/\s+/g, ' ').trim();
+
 const removeQueryFragment = (input: HTMLInputElement, fragment: string) => {
   // Remove the fragment from the query text
   const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  input.value = input.value.replace(new RegExp(`\\s*${escaped}`, 'gi'), '').trim();
+  input.value = normalizeQueryWhitespace(
+    input.value.replace(new RegExp(`(^|\\s)${escaped}(?=\\s|$)`, 'gi'), ' ')
+  );
 };
 
 const appendOrReplaceQueryFragment = (input: HTMLInputElement, fragment: string) => {
   const kind = getFragmentKind(fragment);
   if (kind) {
     // Remove existing operators of the same kind.
-    // Pattern handles both unquoted (type:post) and quoted (author:"Name") values.
-    const kindPattern = new RegExp(`${kind}:(?:"[^"]*"|\\S)+`, 'gi');
-    input.value = input.value.replace(kindPattern, '').trim();
+    // Intentional UX choice: this replaces all same-kind filters, including
+    // manually typed ones, to keep facet interactions deterministic.
+    // Pattern handles unquoted values and quoted values with escaped quotes.
+    const kindPattern = new RegExp(`(^|\\s)-?${kind}:(?:"(?:[^"\\\\]|\\\\.)*"|\\S+)(?=\\s|$)`, 'gi');
+    input.value = normalizeQueryWhitespace(input.value.replace(kindPattern, ' '));
   }
-  input.value = input.value ? `${input.value} ${fragment}` : fragment;
+  input.value = normalizeQueryWhitespace(input.value ? `${input.value} ${fragment}` : fragment);
 };
 ```
 
 ### Notes
 
 - **v1 Simplification**: Facets are computed on the main thread from the `SearchRunResult.items` array. This is fine for typical result sets (< 5000 items). The spec allows deferring worker-side facet computation.
-- The facet budget (30ms) is enforced — on large unfiltered archives, facets gracefully degrade with the "Facets delayed" message.
+- `escapeHtml` already exists in `../utils/rendering` and is already used/imported in archive rendering paths; Change 12 reuses that utility (no new helper needed).
+- The facet budget (30ms) is enforced — on large unfiltered archives, facets gracefully degrade with the "Facets delayed" message (including the empty-group case where no chips are yet available).
 - Author facet values now use original `item.user.displayName` for display and lowercased name for keying/active-detection (fixed from v1 plan which used `authorNameNorm` for display).
 - Active facet detection uses the parsed AST (`parseStructuredQuery`) instead of `queryLower.includes()`, preventing false positives on substrings like `type:poster` matching `type:post`.
 - Year buckets only show when there's more than one distinct year.
+- Date facet "active" is intentionally inferred from positive date-clause year starts (`minMs`). Complex cross-year ranges may light up the start year chip in v1.
+- Facet replacement is kind-based (`author:`, `type:`, `date:`). Clicking a facet replaces all existing operators of that kind, including manually typed ones; this is intentional for predictable single-choice facet UX.
+- String replacement uses token-boundary-aware patterns and handles negated forms (e.g., `-type:post`) to reduce accidental substring removals.
+- If future parser versions add boolean grouping/`OR`, revisit kind-wide replacement behavior so facet actions do not unexpectedly flatten complex same-kind expressions.
 - **Scalability note**: Since `SearchRunResult.items` returns full `ArchiveItem[]` hydrated on the main thread, facet computation on very large result sets (>10k items) may compete for main-thread time. If this becomes measurable, move facet computation to the worker post-v1.
+- Instrument facet runtime (`computeMs`) in debug logs so delayed-state frequency can be measured before deciding whether worker migration should be prioritized.
 
 ---
 
@@ -1535,18 +2000,47 @@ This is lower priority and can be done as a follow-up. The engine already emits 
   - Matched fields (title/body)
   - Matched terms/regex
   - Score breakdown (token hits, phrase hits, author/replyTo hits)
-  - RelevanceSignals for this item
+- RelevanceSignals for this item
+
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` — detect debug mode and pass through
+
+```typescript
+const isDebugMode = (): boolean =>
+  new URLSearchParams(window.location.search).get('debug') === '1';
+```
+
+Inside `refreshView`, pass debug mode into search execution:
+
+```typescript
+const result = await searchManager.runSearch({
+  query: searchInput.value,
+  scopeParam,
+  sortMode,
+  limit: state.items.length + contextItems.length + 5,
+  debugExplain: isDebugMode(),
+  ...(budgetMs !== undefined ? { budgetMs } : {})
+});
+```
 
 #### Data availability gap
 
 Currently, `SearchRunResult` returns `items` but not the per-item `RelevanceSignals`. The `runSearch` method computes `relevanceSignalsById` internally (engine.ts line 398) but doesn't expose it in the result type.
 
-**Fix**: Add `relevanceSignalsById?: Map<string, RelevanceSignals>` to `SearchRunResult` and populate it when debug mode is active. This avoids the overhead in production while enabling the explain panel in debug mode.
+**Fix**:
+
+- Add `debugExplain?: boolean` to `runSearch` request/options types (`ArchiveSearchManager` and underlying search execution request shape).
+- Update worker message schema in `src/scripts/power-reader/archive/search/protocol.ts` so `runQuery` request payload includes `debugExplain` and result payload can carry explainability metadata.
+- Wire `protocol.ts` shape changes through `worker.ts` and `workerFactory.ts` so main-thread and worker contracts stay in sync.
+- Add `relevanceSignalsById?: Map<string, RelevanceSignals>` to `SearchRunResult`.
+- Populate `relevanceSignalsById` only when `debugExplain` is true.
+
+This avoids the overhead in production while enabling the explain panel in debug mode.
 
 ### Verification
 
 - `?debug=1` → clicking a result's debug icon shows match explanation.
-- Without debug flag, no extra UI or computation overhead.
+- `?debug=1` → `runSearch` receives `debugExplain: true` and returns `relevanceSignalsById`.
+- Without debug flag, no extra UI or computation overhead (`debugExplain: false`, no signals payload).
 
 ---
 
@@ -1555,6 +2049,7 @@ Currently, `SearchRunResult` returns `items` but not the per-item `RelevanceSign
 
 ```
 Change 0: CSS Foundation          (~30 min)  — prerequisite for all UI changes
+Change 0.5: Sort Type Unification (~20 min)  — prevents alias drift before new wiring
    ↓
 Change 1: Clear Button            (~30 min)  — quick win, independent
 Change 2: Keyboard Shortcuts      (~20 min)  — quick win, independent
@@ -1580,10 +2075,10 @@ Change 13: Explain Panel          (~2 hr)    — optional, lowest priority
 
 | Batch | Changes | Est. Time | Description |
 |-------|---------|-----------|-------------|
-| **A** | 0, 1, 2 | ~1.5 hr | CSS foundation + basic UX quick wins |
+| **A** | 0, 0.5, 1, 2 | ~2 hr | Foundation + type cleanup + basic UX quick wins |
 | **B** | 3, 4, 5 | ~4 hr | Toolbar restructure (implement atomically — see Known Issues §2) |
 | **C** | 6, 7, 8, 9 | ~3 hr | Information architecture improvements |
-| **D** | 10, 11 | ~3.5 hr | Search result relevance visibility |
+| **D** | 10, 11 | ~3.5 hr | Search result relevance visibility, including `renderArchiveFeed` options signature rollout and index expand/collapse call-site updates |
 | **E** | 12 | ~4 hr | Facets (Phase 4 core) |
 | **F** | 13 | ~2 hr | Debug explain panel (optional) |
 
@@ -1594,15 +2089,20 @@ Change 13: Explain Panel          (~2 hr)    — optional, lowest priority
 
 ### Unit Tests
 
-- **`highlight.ts`**: New test file for `extractHighlightTerms` and `highlightTermsInContainer` with DOM fixtures.
+- **`highlight.ts`**: New test file for `extractHighlightTerms` and `highlightTermsInContainer` with DOM fixtures, including overlap cases (`align`/`alignment`) and documented partial-overlap behavior (`abc`/`bcd`).
 - **`facets.ts`**: Test `computeFacets` with mock `ArchiveItem` arrays, including budget-exceeded scenarios.
 - **Sort conditional visibility**: Test `updateSortOptions` logic.
 
 ### Existing Test Updates
 
-**No existing E2E tests reference toolbar selectors** (`archive-scope`, `archive-sort`, `archive-view`) — verified by grep across `tests/`. Changes 3–5 are therefore non-breaking for existing tests.
+Existing E2E tests already reference these selectors heavily, especially in `tests/archive-context.spec.ts`, `tests/archive-route.spec.ts`, and `tests/archive-sync.spec.ts`.
 
-However, if any tests are added before batch B, they should use `#archive-scope`, `#archive-sort`, `#archive-view` IDs (which are preserved across all changes) rather than element-type selectors like `select#archive-scope` (which would break after Changes 4/5).
+Batch B must include test migrations for scope/view interactions:
+
+1. Replace `selectOption(...)` for `#archive-scope` and `#archive-view` with helper actions that click segmented/tab buttons by `data-value`.
+2. Keep selectors ID-based (`#archive-scope`, `#archive-sort`, `#archive-view`) so test locators survive markup changes.
+3. Add assertions for tab semantics (`aria-selected`) and thread-mode sort disabling to preserve behavior currently validated through `<select>` state.
+4. Treat Batch B as breaking for old tests: merge UI changes and test migration in the same PR/commit range so CI is not left red on `selectOption` calls against non-`<select>` elements.
 
 ### New E2E Tests (recommended)
 
@@ -1611,6 +2111,8 @@ However, if any tests are added before batch B, they should use `#archive-scope`
 3. **Keyboard shortcut**: Press `/`, verify search input is focused.
 4. **Snippet preview**: Search in index view, verify snippet contains the search term.
 5. **Syntax cheatsheet**: Click an example query, verify it populates the search bar and runs.
+6. **View tab keyboard a11y**: With focus on `#archive-view`, verify Arrow/Home/End and Enter/Space change active tab, while Tab moves focus out normally.
+7. **Loading feedback**: Trigger a slow search path, verify `#archive-result-count`/`#archive-feed` enter and exit `.is-loading` state correctly.
 
 ---
 
@@ -1619,9 +2121,10 @@ However, if any tests are added before batch B, they should use `#archive-scope`
 | File | Changes | Notes |
 |------|---------|-------|
 | `src/scripts/power-reader/archive/index.ts` | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12 | CSS block + HTML template + event wiring |
-| `src/scripts/power-reader/archive/render.ts` | 11 | `setSnippetTerms` + `extractSnippet` + `renderIndexItem` |
+| `src/scripts/power-reader/archive/render.ts` | 11 | explicit `snippetTerms` render options + `extractSnippet` + `renderIndexItem` |
 | `src/scripts/power-reader/archive/search/highlight.ts` | 10, 11 (new file) | `extractHighlightTerms` + `highlightTermsInContainer` |
 | `src/scripts/power-reader/archive/search/facets.ts` | 12 (new file) | `computeFacets` (works on `ArchiveItem[]`) |
-| `src/scripts/power-reader/archive/search/types.ts` | 13 (add `relevanceSignalsById` to result type) | |
+| `src/scripts/power-reader/archive/search/types.ts` | 0.5, 13 | sort alias unification + `relevanceSignalsById` (debug explainability) |
+| `src/scripts/power-reader/archive/state.ts` | 0.5 | keep `ArchiveSortBy` as source-of-truth alias target |
 | `tests/archive-search-highlight.spec.ts` | 10 (new test file) | Unit tests for highlight extraction |
 | `tests/archive-facets.spec.ts` | 12 (new test file) | Unit tests incl. budget-exceeded scenario |

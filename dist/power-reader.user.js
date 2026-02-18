@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.682
+// @version    1.2.683
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1283,6 +1283,17 @@ dirty.indexOf("<") === -1) {
   }
 
   #power-reader-root {
+    /* Shared theme tokens used across archive + preview UI. */
+    --pr-bg-primary: #fff;
+    --pr-bg-secondary: #f9f9f9;
+    --pr-bg-hover: #f0f0f0;
+    --pr-text-primary: #000;
+    --pr-text-secondary: #666;
+    --pr-text-tertiary: #999;
+    --pr-border-color: #ddd;
+    --pr-border-subtle: #eee;
+    --pr-highlight: #0078ff;
+
     margin: 0 auto;
     padding: 20px;
     position: relative;
@@ -2662,7 +2673,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.682"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.683"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6257,7 +6268,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6403,7 +6414,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -9412,9 +9423,22 @@ sortCanonicalItems() {
       rebuildIndexes(this.readerState);
       this.bumpSearchStateRevision();
       if (this.renderCallback) {
-        this.renderCallback();
+        const maybePromise = this.renderCallback();
+        if (maybePromise instanceof Promise) {
+          void maybePromise.catch((error) => {
+            Logger.error("ArchiveUIHost: render callback failed", error);
+          });
+        }
       } else if (this.feedContainer) {
-        renderArchiveFeed(this.feedContainer, this.archiveState.items, this.archiveState.viewMode, this.readerState, this.archiveState.sortBy);
+        void renderArchiveFeed(
+          this.feedContainer,
+          this.archiveState.items,
+          this.archiveState.viewMode,
+          this.readerState,
+          this.archiveState.sortBy
+        ).catch((error) => {
+          Logger.error("ArchiveUIHost: renderArchiveFeed failed", error);
+        });
       }
     }
     rerenderPostGroup(postId, anchorCommentId) {
@@ -11490,7 +11514,7 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -12196,7 +12220,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.682"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

@@ -237,9 +237,22 @@ export class ArchiveUIHost implements UIHost {
     this.bumpSearchStateRevision();
 
     if (this.renderCallback) {
-      this.renderCallback();
+      const maybePromise = this.renderCallback();
+      if (maybePromise instanceof Promise) {
+        void maybePromise.catch((error) => {
+          Logger.error('ArchiveUIHost: render callback failed', error);
+        });
+      }
     } else if (this.feedContainer) {
-      renderArchiveFeed(this.feedContainer, this.archiveState.items, this.archiveState.viewMode, this.readerState, this.archiveState.sortBy);
+      void renderArchiveFeed(
+        this.feedContainer,
+        this.archiveState.items,
+        this.archiveState.viewMode,
+        this.readerState,
+        this.archiveState.sortBy
+      ).catch((error) => {
+        Logger.error('ArchiveUIHost: renderArchiveFeed failed', error);
+      });
     }
   }
 

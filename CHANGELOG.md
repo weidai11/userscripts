@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.683] - 2026-02-19
+
+### Changed
+- **Archive UX Plan**: Updated the Archive Search UX implementation plan with review feedback and expanded scope for toolbar migrations.
+- **Security Audit**: Lowered `prebuild` audit level to `critical` to avoid build blocks from high-severity dev dependencies (e.g. `minimatch`) that currently lack non-breaking fixes.
+
+### Fixed
+- **Archive Resilience**: Added error handling to `ArchiveUIHost` render callbacks and `renderArchiveFeed` to prevent silent failures.
+- **Test Stability**: Improved robustness of the archive resync E2E test by waiting for state-specific text before asserting on CSS classes.
+
+### Added
+- **Theme Tokens**: Defined shared CSS custom properties (`--pr-*`) in global styles for consistent theme application across archive and preview UI.
+
 ## [1.2.682] - 2026-02-17
 
 ### Added

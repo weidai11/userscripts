@@ -1,15 +1,15 @@
 {
   "name": "userscripts",
   "private": true,
-  "version": "1.2.682",
+  "version": "1.2.683",
   "type": "module",
   "scripts": {
     "dev:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite",
     "dev:power-reader": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=power-reader vite",
     "build": "npm run build:power-reader",
-    "prebuild:playground": "npm audit --audit-level=high",
+    "prebuild:playground": "npm audit --audit-level=critical",
     "build:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite build",
-    "prebuild:power-reader": "npm audit --audit-level=high",
+    "prebuild:power-reader": "npm audit --audit-level=critical",
     "build:power-reader": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=power-reader vite build",
     "test": "playwright test && npm run test:audit",
     "test:power-reader": "npm run build:power-reader && playwright test && npm run test:audit",

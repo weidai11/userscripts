@@ -19,6 +19,17 @@ export const STYLES = `
   }
 
   #power-reader-root {
+    /* Shared theme tokens used across archive + preview UI. */
+    --pr-bg-primary: #fff;
+    --pr-bg-secondary: #f9f9f9;
+    --pr-bg-hover: #f0f0f0;
+    --pr-text-primary: #000;
+    --pr-text-secondary: #666;
+    --pr-text-tertiary: #999;
+    --pr-border-color: #ddd;
+    --pr-border-subtle: #eee;
+    --pr-highlight: #0078ff;
+
     margin: 0 auto;
     padding: 20px;
     position: relative;

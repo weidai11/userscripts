@@ -1366,7 +1366,8 @@ return { data: {} };
         await resyncBtn.click();
 
         // Should briefly show syncing status or starting resync
-        // We wait for the syncing indicator to be added, then for it to be removed
+        // We wait for the specific text to appear first to ensure the status update has processed
+        await expect(statusEl).toContainText('Starting full resync');
         await expect(statusEl).toHaveClass(/status-syncing/);
         await expect(statusEl).not.toHaveClass(/status-syncing/, { timeout: 20000 });
 
