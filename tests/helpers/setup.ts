@@ -252,7 +252,7 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                                 if (options.onerror) {
                                     options.onerror({ message: msg });
                                 } else {
-                                    throw new Error(msg);
+                                    throw new Error(msg, { cause: e });
                                 }
                                 return;
                             }

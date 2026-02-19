@@ -3,6 +3,7 @@
  * Implements "transparent overlay" logic for previews
  */
 
+/* eslint-disable no-useless-assignment */
 import { Logger } from './logger';
 import { sanitizeHtml } from './sanitize';
 import { queryGraphQL } from '../../../shared/graphql/client';

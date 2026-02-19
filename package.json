@@ -7,9 +7,9 @@
     "dev:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite",
     "dev:power-reader": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=power-reader vite",
     "build": "npm run build:power-reader",
-    "prebuild:playground": "npm audit --audit-level=critical",
+    "prebuild:playground": "npm audit --audit-level=high",
     "build:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite build",
-    "prebuild:power-reader": "npm audit --audit-level=critical",
+    "prebuild:power-reader": "npm audit --audit-level=high",
     "build:power-reader": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=power-reader vite build",
     "test": "playwright test && npm run test:audit",
     "test:power-reader": "npm run build:power-reader && playwright test && npm run test:audit",
@@ -19,23 +19,26 @@
     "update-schema": "node src/shared/graphql/fetch_schema.js && npm run codegen"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.2",
+    "@eslint/js": "^10.0.0",
     "@graphql-codegen/cli": "^6.1.1",
     "@graphql-codegen/schema-ast": "^5.0.0",
     "@graphql-codegen/typescript": "^5.0.7",
     "@graphql-codegen/typescript-operations": "^5.0.7",
     "@playwright/test": "^1.58.1",
     "@types/node": "^25.1.0",
-    "@typescript-eslint/eslint-plugin": "^8.54.0",
-    "@typescript-eslint/parser": "^8.54.0",
+    "@typescript-eslint/eslint-plugin": "^8.56.0",
+    "@typescript-eslint/parser": "^8.56.0",
     "cross-env": "^10.1.0",
-    "eslint": "^9.39.2",
+    "eslint": "^10.0.0",
     "graphql": "^16.12.0",
     "tsx": "^4.21.0",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.54.0",
+    "typescript-eslint": "^8.56.0",
     "vite": "^7.2.4",
     "vite-plugin-monkey": "7.1.9"
+  },
+  "overrides": {
+    "minimatch": "^10.2.1"
   },
   "dependencies": {
     "dompurify": "^3.3.1"
