@@ -10,7 +10,7 @@ import { renderPostGroup, renderPostBody } from '../render/post';
 import { renderComment } from '../render/comment';
 import { getUIHost } from '../render/uiHost';
 
-let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
+let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 250;
 const INDEX_SNIPPET_MAX_LEN = 120;
 
 export type RenderArchiveOptions = {
@@ -22,21 +22,21 @@ export type RenderArchiveOptions = {
  * Configure view state (called by index.ts)
  */
 export const updateRenderLimit = (limit: number) => {
-    currentRenderLimit = limit;
+  currentRenderLimit = limit;
 };
 
 /**
  * Reset view limit to default (called by initArchive)
  */
 export const resetRenderLimit = () => {
-    currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
+  currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
 };
 
 /**
  * Increment view limit (Load More)
  */
 export const incrementRenderLimit = (delta: number) => {
-    currentRenderLimit += delta;
+  currentRenderLimit += delta;
 };
 
 /**
@@ -138,6 +138,42 @@ const ensurePlaceholderContext = (
  * [P2-FIX] Thread view now loads parent context before rendering
  * [WS3-FIX] Accepts sortBy parameter for group-level thread sorting
  */
+const renderChunked = <T>(
+  items: T[],
+  renderFn: (item: T) => string,
+  container: HTMLElement,
+  chunkSize: number = 50
+): Promise<void> => {
+  return new Promise((resolve) => {
+    container.innerHTML = '';
+    if (items.length === 0) {
+      resolve();
+      return;
+    }
+
+    let currentIndex = 0;
+    const renderNextChunk = () => {
+      let html = '';
+      const chunk = items.slice(currentIndex, currentIndex + chunkSize);
+
+      for (const item of chunk) {
+        html += renderFn(item);
+      }
+
+      container.insertAdjacentHTML('beforeend', html);
+      currentIndex += chunkSize;
+
+      if (currentIndex < items.length) {
+        requestAnimationFrame(renderNextChunk);
+      } else {
+        resolve();
+      }
+    };
+
+    requestAnimationFrame(renderNextChunk);
+  });
+};
+
 export const renderArchiveFeed = async (
   container: HTMLElement,
   items: (Post | Comment)[],
@@ -164,9 +200,11 @@ export const renderArchiveFeed = async (
   if (viewMode === 'index') {
     const snippetTerms = options.snippetTerms ?? [];
     const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
-    container.innerHTML = visibleItems
-      .map(item => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }))
-      .join('');
+    await renderChunked(
+      visibleItems,
+      (item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }),
+      container
+    );
   } else if (isThreadMode(viewMode)) {
     // [P2-FIX] Load parent context first, then render thread view
     // [WS3-FIX] Pass sortBy for group-level sorting
@@ -175,9 +213,13 @@ export const renderArchiveFeed = async (
     } else {
       ensurePlaceholderContext(visibleItems, state);
     }
-    renderThreadView(container, visibleItems, state, sortBy);
+    await renderThreadView(container, visibleItems, state, sortBy);
   } else {
-    container.innerHTML = visibleItems.map(item => renderCardItem(item, state)).join('');
+    await renderChunked(
+      visibleItems,
+      (item) => renderCardItem(item, state),
+      container
+    );
   }
 };
 
@@ -191,7 +233,7 @@ const renderThreadView = (
   items: (Post | Comment)[],
   state: ReaderState,
   sortBy?: ArchiveSortBy
-) => {
+): Promise<void> => {
   // 1. Build inclusion set: visible comments + their ancestors
   const visibleCommentIds = new Set<string>();
   const inclusionCommentIds = new Set<string>();
@@ -206,54 +248,66 @@ const renderThreadView = (
       // Handle both parentCommentId string and parentComment object
       let currentId: string | null = comment.parentCommentId || (comment as any).parentComment?._id || null;
       let depth = 0;
-      while (currentId && depth < 10) {
-        if (state.commentById.has(currentId)) {
-          inclusionCommentIds.add(currentId);
-          const parent = state.commentById.get(currentId)!;
-          currentId = parent.parentCommentId || (parent as any).parentComment?._id || null;
-        } else {
-          break;
-        }
+      while (currentId && depth < 20) { // Limit depth to prevent infinite loops
+        inclusionCommentIds.add(currentId);
+        const parent = state.commentById.get(currentId);
+        currentId = parent?.parentCommentId || (parent as any)?.parentComment?._id || null;
         depth++;
       }
     }
   });
 
-  // 2. Group comments by postId
-  const postGroups = new Map<string, { postId: string; comments: Comment[]; maxDate: Date; maxScore: number }>();
+  // 2. Group into Posts, filtering non-visible comments
+  const postGroups = new Map<string, {
+    postId: string;
+    comments: Comment[];
+    maxDate: Date;
+    maxScore: number;
+  }>();
 
-  // [WS2-FIX] Also collect post IDs from visible items (posts without comments)
-  const visiblePostIds = new Set<string>();
-  items.forEach(item => {
-    if ('title' in item) {
-      visiblePostIds.add(item._id);
-    }
-  });
-
-  // Initialize groups for all post IDs (from comments and from visible posts)
+  // [WS2-FIX] Use the broader inclusion set instead of just visible items
   inclusionCommentIds.forEach(commentId => {
     const comment = state.commentById.get(commentId);
     if (!comment) return;
-    const postId = comment.postId;
-    visiblePostIds.add(postId);
+
+    if (!postGroups.has(comment.postId)) {
+      postGroups.set(comment.postId, {
+        postId: comment.postId,
+        comments: [],
+        maxDate: new Date(0),
+        maxScore: Number.NEGATIVE_INFINITY
+      });
+    }
+    postGroups.get(comment.postId)!.comments.push(comment);
   });
 
-  // Create post groups with metrics
-  visiblePostIds.forEach(postId => {
-    const comments: Comment[] = [];
+  // Also include standalone posts
+  items.forEach(item => {
+    if ('title' in item) {
+      if (!postGroups.has(item._id)) {
+        postGroups.set(item._id, {
+          postId: item._id,
+          comments: [],
+          maxDate: new Date(0),
+          maxScore: Number.NEGATIVE_INFINITY
+        });
+      }
+    }
+  });
+
+  // Calculate metrics per group
+  postGroups.forEach((group, postId) => {
     let maxDate = new Date(0);
     let maxScore = Number.NEGATIVE_INFINITY;
 
-    // Collect comments for this post
-    inclusionCommentIds.forEach(commentId => {
-      const comment = state.commentById.get(commentId);
-      if (comment && comment.postId === postId) {
-        comments.push(comment);
-        const commentDate = new Date(comment.postedAt);
-        if (commentDate > maxDate) maxDate = commentDate;
-        if (typeof comment.baseScore === 'number' && comment.baseScore > maxScore) {
-          maxScore = comment.baseScore;
-        }
+    const comments = group.comments;
+
+    // Evaluate all included comments for group sorting metrics
+    comments.forEach(c => {
+      const cDate = new Date(c.postedAt);
+      if (cDate > maxDate) maxDate = cDate;
+      if (typeof c.baseScore === 'number' && c.baseScore > maxScore) {
+        maxScore = c.baseScore;
       }
     });
 
@@ -267,13 +321,8 @@ const renderThreadView = (
       }
     }
 
-    postGroups.set(postId, {
-      postId,
-      comments,
-      maxDate,
-      // Preserve negative karma; fallback to 0 only when no numeric score exists.
-      maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
-    });
+    group.maxDate = maxDate;
+    group.maxScore = maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore;
   });
 
   // 3. [WS3-FIX] Sort post groups by computed metrics
@@ -299,29 +348,51 @@ const renderThreadView = (
   // 4. Clear container
   container.innerHTML = '';
 
-  // 5. Render each post group with all inclusion comments
-  let html = '';
+  // 5. Render each post group with all inclusion comments in chunks
+  return new Promise<void>((resolve) => {
+    if (sortedGroups.length === 0) {
+      resolve();
+      return;
+    }
 
-  sortedGroups.forEach(group => {
-    const post = state.postById.get(group.postId);
+    const CHUNK_SIZE = 15; // smaller chunk size for groups (heavy)
+    let currentIndex = 0;
 
-    // [WS2-FIX] Include all comments in the inclusion set (visible + ancestors)
-    const postComments = group.comments;
+    const renderNextChunk = () => {
+      let html = '';
+      const chunk = sortedGroups.slice(currentIndex, currentIndex + CHUNK_SIZE);
 
-    // If we have neither post nor comments, skip (shouldn't happen directly from items)
-    if (!post && postComments.length === 0) return;
+      chunk.forEach(group => {
+        const post = state.postById.get(group.postId);
 
-    const postGroup = {
-      postId: group.postId,
-      title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
-      comments: postComments,
-      fullPost: post
+        // [WS2-FIX] Include all comments in the inclusion set (visible + ancestors)
+        const postComments = group.comments;
+
+        // If we have neither post nor comments, skip (shouldn't happen directly from items)
+        if (!post && postComments.length === 0) return;
+
+        const postGroup = {
+          postId: group.postId,
+          title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
+          comments: postComments,
+          fullPost: post
+        };
+
+        html += renderPostGroup(postGroup, state);
+      });
+
+      container.insertAdjacentHTML('beforeend', html);
+      currentIndex += CHUNK_SIZE;
+
+      if (currentIndex < sortedGroups.length) {
+        requestAnimationFrame(renderNextChunk);
+      } else {
+        resolve();
+      }
     };
 
-    html += renderPostGroup(postGroup, state);
+    requestAnimationFrame(renderNextChunk);
   });
-
-  container.innerHTML = html;
 };
 
 

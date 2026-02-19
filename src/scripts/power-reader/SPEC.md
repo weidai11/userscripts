@@ -613,6 +613,11 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-32] Context Persistence Across Modes**: Context comments (both `'fetched'` and `'stub'`) are preserved in ReaderState when switching between thread, card, and index views within the same session.
 - **[PR-UARCH-33] Thread Mode IsThread Helper**: A helper function `isThreadMode()` identifies both `thread-full` and `thread-placeholder` as thread variants without requiring multiple equality checks.
 - **[PR-UARCH-41] Search Worker Default + Opt-Out**: Archive search uses a Web Worker by default. Setting `window.__PR_ARCHIVE_SEARCH_USE_WORKER = false` before initialization disables worker creation and uses runtime search. If worker initialization fails, archive search falls back to runtime mode without breaking the UI.
+- **[PR-UARCH-42] Engine Initialization Warning Resilience**: Initialization handles partial index building gracefully. If `Worker` throws warnings during initial sync or cache loading, it resolves correctly instead of throwing fatal exceptions.
+- **[PR-UARCH-43] Segmented Scope Toggle**: The UI utilizes a custom segmented control (`.pr-segmented-control`) for the authored vs. all scopes. This logic securely bounds state switches and updates `ArchiveState` uniformly relative to URLs.
+- **[PR-UARCH-44] Custom View Mode Selection**: The UI uses an icon-tab structure (`.pr-view-tabs`) matching Power Reader norms instead of standard dropdowns. Values trigger correct event emission and URL synchronization.
+- **[PR-UARCH-45] Debug Explain Output**: Utilizing the query parameter `?debug=1` turns on relevance transparency, outputting diagnostic math alongside results (`tokenHits`, `phraseHits`, internal scoring bounds). 
+- **[PR-UARCH-46] Interactive Facet Filtering**: Clickable dynamic `.pr-facet-chip` elements populate based on current result aggregations. Activating a facet updates the native search bar text string and automatically dispatches a new search via event triggering.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

@@ -27,7 +27,6 @@ import type { SearchWorkerClient } from './search/protocol';
 import type {
   ArchiveItem,
   ArchiveSearchScope,
-  ArchiveSearchSortMode,
   RelevanceSignals,
   SearchDiagnostics
 } from './search/types';
@@ -808,7 +807,7 @@ export const initArchive = async (username: string): Promise<void> => {
     const LARGE_DATASET_THRESHOLD = (window as any).__PR_ARCHIVE_LARGE_THRESHOLD || 10000;
     let pendingRenderCount: number | null = null;
     const DEFAULT_SCOPE: ArchiveSearchScope = 'authored';
-    const DEFAULT_SORT: ArchiveSearchSortMode = 'date';
+    const DEFAULT_SORT: ArchiveSortBy = 'date';
     const DEFAULT_VIEW: ArchiveViewMode = 'card';
     let scopeFallbackValue: ArchiveSearchScope = DEFAULT_SCOPE;
     let viewFallbackValue: ArchiveViewMode = DEFAULT_VIEW;
@@ -885,7 +884,7 @@ export const initArchive = async (username: string): Promise<void> => {
           : (!hasContentQuery ? 'Relevance sorting requires a search query' : '');
       }
 
-      const selectedSort = sortSelect.value as ArchiveSearchSortMode;
+      const selectedSort = sortSelect.value as ArchiveSortBy;
       if (threadMode && selectedSort === 'replyTo') {
         sortSelect.value = DEFAULT_SORT;
         state.sortBy = DEFAULT_SORT;
@@ -904,14 +903,14 @@ export const initArchive = async (username: string): Promise<void> => {
     type ArchiveUiState = {
       query: string;
       scope: ArchiveSearchScope;
-      sort: ArchiveSearchSortMode;
+      sort: ArchiveSortBy;
       view: ArchiveViewMode;
     };
 
     const readUiState = (): ArchiveUiState => ({
       query: searchInput.value,
       scope: getScopeValue(),
-      sort: sortSelect.value as ArchiveSearchSortMode,
+      sort: sortSelect.value as ArchiveSortBy,
       view: getViewValue()
     });
 
@@ -1077,7 +1076,7 @@ export const initArchive = async (username: string): Promise<void> => {
     applyUiState({
       query: urlState.query,
       scope: urlState.scope,
-      sort: initialSort as ArchiveSearchSortMode,
+      sort: initialSort as ArchiveSortBy,
       view: state.viewMode
     }, { silent: true });
     setScopeValue(getScopeValue());
@@ -1225,7 +1224,7 @@ export const initArchive = async (username: string): Promise<void> => {
       diagnostics: SearchDiagnostics,
       resolvedScope: ArchiveSearchScope,
       contextItemCount: number,
-      sortMode: ArchiveSearchSortMode
+      sortMode: ArchiveSortBy
     ) => {
       if (!searchStatusEl) return;
 
@@ -1320,7 +1319,7 @@ export const initArchive = async (username: string): Promise<void> => {
       const debugExplain = isDebugExplainEnabled();
       const hasContentQuery = deriveHasContentQuery(currentUi.query);
       updateSortOptions(hasContentQuery, currentUi.view);
-      const sortMode = sortSelect.value as ArchiveSearchSortMode;
+      const sortMode = sortSelect.value as ArchiveSortBy;
       setSearchLoading(true);
 
       try {

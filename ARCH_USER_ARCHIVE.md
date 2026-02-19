@@ -37,6 +37,14 @@ Transform the user profile into a powerful, offline-first research tool that agg
 - **AI Synthesis**: "Chat with Archive", Contradiction Checker.
 - **Export**: JSON/Markdown dumps.
 
+### Phase 4: Advanced Search (Greenfield Architecture, ✅ Completed)
+**Goal**: Deterministic, multi-stage local search engine capable of complex AST evaluation without blocking the UI thread.
+- **Worker Architecture**: `worker.ts` maintains partitioned indices (`authored`, `context`) off the main thread to prevent UI lockup.
+- **Structured Parser**: Safe AST parsing (`parser.ts`) supporting exact phrases, ReDoS-protected regex literals, negated clauses, and structured operators (`score:`, `date:`, `type:`, `author:`, `replyto:`).
+- **Execution Engine**: `engine.ts` executes **Stage A** (cheap operations: structured field bounds, negative filters, index-driven token intersections) before proceeding to candidate scanning in **Stage B** (expensive regex/phrase evaluation on matched body text).
+- **Time Budgeting**: Engine respects configurable latency bounds (`budgetMs`) to degrade gracefully and return partial results on massive candidate sets without thrashing CPU.
+- **UX Parity & Upgrades**: Semantic UI elements (Segmented Controls for Scope, Icon Tabs for View Mode), dynamic keyword Highlighting, intelligent Facet extraction, and robust URL state synchronization.
+
 ---
 
 ## 🏗️ Technical Architecture

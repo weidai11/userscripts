@@ -320,8 +320,15 @@ const maybeParseFieldClause = (
   }
 };
 
-const containsUnsafeRegexPattern = (pattern: string): boolean =>
-  /(\([^)]*[+*][^)]*\)[+*])/.test(pattern) || /(\+|\*|\{[^}]+\})\s*(\+|\*|\{[^}]+\})/.test(pattern);
+const containsUnsafeRegexPattern = (pattern: string): boolean => {
+  if (pattern.length > 250) return true; // tight safety limit for regex length
+  return (
+    /(\([^)]*[+*][^)]*\)[+*])/.test(pattern) || // nested quantifiers
+    /(\+|\*|\{[^}]+\})\s*(\+|\*|\{[^}]+\})/.test(pattern) || // consecutive quantifiers
+    /\\[1-9]/.test(pattern) || // backreferences 
+    /(?:\(.*?\|.*?\).*?){3,}/.test(pattern) // excessive alternation
+  );
+};
 
 const serializeNormalizedTermToken = (termNorm: string): string =>
   termNorm.includes(' ') ? termNorm.replace(/\s+/g, '-') : termNorm;
