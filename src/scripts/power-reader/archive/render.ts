@@ -2,7 +2,8 @@
 import { Logger } from '../utils/logger';
 import { escapeHtml, renderPostHeader } from '../utils/rendering';
 import { fetchCommentsByIds } from './loader';
-import { type ArchiveViewMode, isThreadMode } from './state';
+import { type ArchiveSortBy, type ArchiveViewMode, isThreadMode } from './state';
+import { buildHighlightRegex } from './search/highlight';
 import type { Post, Comment, ParentCommentRef } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
 import { renderPostGroup, renderPostBody } from '../render/post';
@@ -10,6 +11,12 @@ import { renderComment } from '../render/comment';
 import { getUIHost } from '../render/uiHost';
 
 let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
+const INDEX_SNIPPET_MAX_LEN = 120;
+
+export type RenderArchiveOptions = {
+  snippetTerms?: readonly string[];
+  snippetPattern?: RegExp | null;
+};
 
 /**
  * Configure view state (called by index.ts)
@@ -136,7 +143,8 @@ export const renderArchiveFeed = async (
   items: (Post | Comment)[],
   viewMode: ArchiveViewMode,
   state: ReaderState,
-  sortBy?: 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+  sortBy?: ArchiveSortBy,
+  options: RenderArchiveOptions = {}
 ): Promise<void> => {
   if (items.length === 0) {
     container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
@@ -154,7 +162,11 @@ export const renderArchiveFeed = async (
   }
 
   if (viewMode === 'index') {
-    container.innerHTML = visibleItems.map(item => renderIndexItem(item)).join('');
+    const snippetTerms = options.snippetTerms ?? [];
+    const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
+    container.innerHTML = visibleItems
+      .map(item => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }))
+      .join('');
   } else if (isThreadMode(viewMode)) {
     // [P2-FIX] Load parent context first, then render thread view
     // [WS3-FIX] Pass sortBy for group-level sorting
@@ -178,7 +190,7 @@ const renderThreadView = (
   container: HTMLElement,
   items: (Post | Comment)[],
   state: ReaderState,
-  sortBy?: 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo'
+  sortBy?: ArchiveSortBy
 ) => {
   // 1. Build inclusion set: visible comments + their ancestors
   const visibleCommentIds = new Set<string>();
@@ -380,9 +392,68 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
 /**
  * 2. Index View
  */
-export const renderIndexItem = (item: Post | Comment): string => {
+const stripHtmlTags = (value: string): string => value.replace(/<[^>]+>/g, '');
+
+export const extractSnippet = (
+  text: string,
+  maxLen: number,
+  snippetTerms: readonly string[],
+  snippetPattern?: RegExp | null
+): string => {
+  if (!text) return '';
+  let bestMatchIndex = Number.POSITIVE_INFINITY;
+  let bestMatchLength = 0;
+
+  const matchPattern = snippetPattern === undefined
+    ? buildHighlightRegex(snippetTerms)
+    : snippetPattern;
+  if (matchPattern) {
+    matchPattern.lastIndex = 0;
+    const firstMatch = matchPattern.exec(text);
+    if (firstMatch && typeof firstMatch.index === 'number') {
+      bestMatchIndex = firstMatch.index;
+      bestMatchLength = firstMatch[0]?.length ?? 0;
+    }
+  }
+
+  if (bestMatchIndex !== Number.POSITIVE_INFINITY) {
+    const contextRadius = Math.max(0, Math.floor((maxLen - bestMatchLength) / 2));
+    let start = Math.max(0, bestMatchIndex - contextRadius);
+    let end = Math.min(text.length, bestMatchIndex + bestMatchLength + contextRadius);
+
+    const targetLen = Math.min(maxLen, text.length);
+    const currentLen = end - start;
+    if (currentLen < targetLen) {
+      const deficit = targetLen - currentLen;
+      if (start === 0) {
+        end = Math.min(text.length, end + deficit);
+      } else if (end === text.length) {
+        start = Math.max(0, start - deficit);
+      }
+    }
+
+    const prefix = start > 0 ? '...' : '';
+    const suffix = end < text.length ? '...' : '';
+    return `${prefix}${text.slice(start, end)}${suffix}`;
+  }
+
+  return text.slice(0, maxLen) + (text.length > maxLen ? '...' : '');
+};
+
+export const renderIndexItem = (
+  item: Post | Comment,
+  options: RenderArchiveOptions = {}
+): string => {
+  const snippetTerms = options.snippetTerms ?? [];
+  const snippetPattern = options.snippetPattern;
   const isPost = 'title' in item;
-  const title = isPost ? (item as Post).title : ((item as Comment).htmlBody || '').replace(/<[^>]+>/g, '').slice(0, 100) + '...';
+  let title: string;
+  if (isPost) {
+    title = (item as Post).title;
+  } else {
+    const bodyText = stripHtmlTags((item as Comment).htmlBody || '');
+    title = extractSnippet(bodyText, INDEX_SNIPPET_MAX_LEN, snippetTerms, snippetPattern);
+  }
   const context = isPost ? 'Post' : `Reply to ${getInterlocutorName(item)}`;
   const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : '';
 

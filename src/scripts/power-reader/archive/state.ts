@@ -5,6 +5,7 @@
 import type { Post, Comment } from '../../../shared/graphql/queries';
 
 export type ArchiveViewMode = 'card' | 'index' | 'thread-full' | 'thread-placeholder';
+// Search layer aliases ArchiveSearchSortMode to this state-domain source of truth.
 export type ArchiveSortBy = 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo';
 
 /**

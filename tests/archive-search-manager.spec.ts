@@ -43,6 +43,7 @@ class FakeWorkerClient {
     requestId: string;
     query: string;
     scopeParam?: 'authored' | 'all';
+    debugExplain?: boolean;
     resolve: (value: any) => void;
     reject: (reason: Error) => void;
   }>();
@@ -51,6 +52,12 @@ class FakeWorkerClient {
     resolve: (value: any) => void;
   }>();
   readonly runQueryRequestIds: string[] = [];
+  readonly runQueryMessages: Array<{
+    requestId: string;
+    query: string;
+    scopeParam?: 'authored' | 'all';
+    debugExplain?: boolean;
+  }> = [];
 
   constructor(private readonly deferIndexReady = false) { }
 
@@ -92,18 +99,36 @@ class FakeWorkerClient {
 
   runQuery(message: any): Promise<any> {
     this.runQueryRequestIds.push(message.requestId);
+    this.runQueryMessages.push({
+      requestId: message.requestId,
+      query: message.query,
+      scopeParam: message.scopeParam,
+      debugExplain: message.debugExplain
+    });
     return new Promise((resolve, reject) => {
       this.pendingQueries.set(message.requestId, {
         requestId: message.requestId,
         query: message.query,
         scopeParam: message.scopeParam,
+        debugExplain: message.debugExplain,
         resolve,
         reject
       });
     });
   }
 
-  resolveLatestQuery(ids: string[], total = ids.length): void {
+  resolveLatestQuery(
+    ids: string[],
+    total = ids.length,
+    debugExplain?: {
+      relevanceSignalsById: Record<string, {
+        tokenHits: number;
+        phraseHits: number;
+        authorHit: boolean;
+        replyToHit: boolean;
+      }>;
+    }
+  ): void {
     const latest = Array.from(this.pendingQueries.values()).at(-1);
     if (!latest) return;
     this.pendingQueries.delete(latest.requestId);
@@ -125,7 +150,8 @@ class FakeWorkerClient {
         stageBScanned: total,
         totalCandidatesBeforeLimit: total,
         explain: []
-      }
+      },
+      ...(debugExplain ? { debugExplain } : {})
     });
   }
 
@@ -160,6 +186,10 @@ class FakeWorkerClient {
   getIndexFullCallCount(source: 'authored' | 'context'): number {
     return this.indexFullCallCounts[source];
   }
+
+  getLatestRunQueryDebugExplain(): boolean | undefined {
+    return this.runQueryMessages.at(-1)?.debugExplain;
+  }
 }
 
 class FakeProtocolWorker {
@@ -168,13 +198,14 @@ class FakeProtocolWorker {
     error: [],
     messageerror: []
   };
+  readonly postedMessages: any[] = [];
 
   addEventListener(type: 'message' | 'error' | 'messageerror', listener: (event: any) => void): void {
     this.listeners[type].push(listener);
   }
 
-  postMessage(): void {
-    // no-op
+  postMessage(message: any): void {
+    this.postedMessages.push(message);
   }
 
   terminate(): void {
@@ -187,6 +218,10 @@ class FakeProtocolWorker {
 
   emitMessageError(): void {
     this.listeners.messageerror.forEach(listener => listener({}));
+  }
+
+  emitMessage(data: any): void {
+    this.listeners.message.forEach(listener => listener({ data }));
   }
 }
 
@@ -260,6 +295,37 @@ test.describe('Archive Search Manager/Fallback', () => {
     manager.destroy();
   });
 
+  test('runtime search emits debug relevance payload only when requested', async () => {
+    const manager = new ArchiveSearchManager();
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-runtime-debug',
+        title: 'Runtime Debug Result',
+        contents: { markdown: 'runtime debug token payload' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const withoutDebug = await manager.runSearch({
+      query: 'runtime debug',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+    expect(withoutDebug.debugExplain).toBeUndefined();
+
+    const withDebug = await manager.runSearch({
+      query: 'runtime debug',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20,
+      debugExplain: true
+    });
+    expect(withDebug.debugExplain).toBeDefined();
+    expect(withDebug.debugExplain?.relevanceSignalsById['p-runtime-debug']?.tokenHits).toBeGreaterThan(0);
+    manager.destroy();
+  });
+
   test('worker requested without client falls back to runtime mode when Worker unavailable', () => {
     const manager = new ArchiveSearchManager({ useWorker: true });
     const status = manager.getStatus();
@@ -297,6 +363,47 @@ test.describe('Archive Search Manager/Fallback', () => {
     client.resolveLatestQuery(['p-manager-sync']);
     const result = await searchPromise;
     expect(result.ids).toEqual(['p-manager-sync']);
+    manager.destroy();
+  });
+
+  test('superseded query during index sync is cancelled before worker run', async () => {
+    const client = new FakeWorkerClient(true);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-manager-sync-cancel',
+        title: 'Manager Sync Cancel Result',
+        contents: { markdown: 'manager sync cancel target' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const firstPromise = manager.runSearch({
+      query: 'first pending',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+    const secondPromise = manager.runSearch({
+      query: 'second pending',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+
+    await Promise.resolve();
+    expect(client.runQueryRequestIds).toHaveLength(0);
+
+    client.resolveIndex('authored');
+    client.resolveIndex('context');
+    await expect.poll(() => client.runQueryRequestIds.length).toBe(1);
+
+    client.resolveLatestQuery(['p-manager-sync-cancel']);
+    const [firstResult, secondResult] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(firstResult.ids).toEqual([]);
+    expect(firstResult.diagnostics.explain).toContain('cancelled-superseded');
+    expect(secondResult.ids).toEqual(['p-manager-sync-cancel']);
     manager.destroy();
   });
 
@@ -366,6 +473,136 @@ test.describe('Archive Search Manager/Fallback', () => {
     manager.destroy();
   });
 
+  test('manager forwards debugExplain to worker and exposes worker debug payload', async () => {
+    const client = new FakeWorkerClient(false);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-manager-debug',
+        title: 'Manager Debug Result',
+        contents: { markdown: 'manager debug payload' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const searchPromise = manager.runSearch({
+      query: 'manager debug',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20,
+      debugExplain: true
+    });
+    await expect.poll(() => client.getPendingQueryCount()).toBe(1);
+    expect(client.getLatestRunQueryDebugExplain()).toBe(true);
+
+    client.resolveLatestQuery(
+      ['p-manager-debug'],
+      1,
+      {
+        relevanceSignalsById: {
+          'p-manager-debug': {
+            tokenHits: 2,
+            phraseHits: 0,
+            authorHit: false,
+            replyToHit: false
+          }
+        }
+      }
+    );
+    const result = await searchPromise;
+    expect(result.debugExplain?.relevanceSignalsById['p-manager-debug']?.tokenHits).toBe(2);
+    manager.destroy();
+  });
+
+  test('manager suppresses worker debug payload when request does not enable debugExplain', async () => {
+    const client = new FakeWorkerClient(false);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-manager-nodebug',
+        title: 'Manager No Debug Result',
+        contents: { markdown: 'manager no debug payload' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const searchPromise = manager.runSearch({
+      query: 'manager no debug',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+    await expect.poll(() => client.getPendingQueryCount()).toBe(1);
+
+    client.resolveLatestQuery(
+      ['p-manager-nodebug'],
+      1,
+      {
+        relevanceSignalsById: {
+          'p-manager-nodebug': {
+            tokenHits: 3,
+            phraseHits: 1,
+            authorHit: false,
+            replyToHit: false
+          }
+        }
+      }
+    );
+
+    const result = await searchPromise;
+    expect(result.debugExplain).toBeUndefined();
+    manager.destroy();
+  });
+
+  test('manager filters worker debug payload to mapped ids', async () => {
+    const client = new FakeWorkerClient(false);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-manager-present-debug',
+        title: 'Present Debug Result',
+        contents: { markdown: 'present debug body' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const searchPromise = manager.runSearch({
+      query: 'present debug',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20,
+      debugExplain: true
+    });
+    await expect.poll(() => client.getPendingQueryCount()).toBe(1);
+
+    client.resolveLatestQuery(
+      ['p-manager-present-debug', 'p-manager-missing-debug'],
+      2,
+      {
+        relevanceSignalsById: {
+          'p-manager-present-debug': {
+            tokenHits: 4,
+            phraseHits: 0,
+            authorHit: false,
+            replyToHit: false
+          },
+          'p-manager-missing-debug': {
+            tokenHits: 99,
+            phraseHits: 99,
+            authorHit: true,
+            replyToHit: true
+          }
+        }
+      }
+    );
+
+    const result = await searchPromise;
+    expect(result.ids).toEqual(['p-manager-present-debug']);
+    expect(result.debugExplain?.relevanceSignalsById['p-manager-present-debug']?.tokenHits).toBe(4);
+    expect(result.debugExplain?.relevanceSignalsById['p-manager-missing-debug']).toBeUndefined();
+    manager.destroy();
+  });
+
   test('manager skips redundant context worker full-index when context references are unchanged', () => {
     const client = new FakeWorkerClient(false);
     const manager = new ArchiveSearchManager({ workerClient: client as any });
@@ -382,6 +619,24 @@ test.describe('Archive Search Manager/Fallback', () => {
     manager.setContextItems(context);
 
     expect(client.getIndexFullCallCount('context')).toBe(1);
+    manager.destroy();
+  });
+
+  test('manager skips redundant authored worker full-index when authored refs and revision are unchanged', () => {
+    const client = new FakeWorkerClient(false);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    const authored = [
+      makePost({
+        _id: 'p-manager-authored',
+        title: 'Manager Authored Result',
+        contents: { markdown: 'manager authored query target' }
+      }) as any
+    ];
+
+    manager.setAuthoredItems(authored, 7);
+    manager.setAuthoredItems(authored, 7);
+
+    expect(client.getIndexFullCallCount('authored')).toBe(1);
     manager.destroy();
   });
 
@@ -409,6 +664,58 @@ test.describe('Archive Search Manager/Fallback', () => {
       limit: 20,
       sortMode: 'relevance'
     })).rejects.toThrow('kaboom');
+  });
+
+  test('worker client transports debugExplain request and response payloads', async () => {
+    const worker = new FakeProtocolWorker();
+    const client = new SearchWorkerClient(worker as any);
+
+    const pending = client.runQuery({
+      kind: 'query.run',
+      requestId: 'q-debug',
+      query: 'debug payload',
+      limit: 20,
+      sortMode: 'relevance',
+      debugExplain: true
+    });
+
+    const sent = worker.postedMessages.at(-1);
+    expect(sent?.kind).toBe('query.run');
+    expect(sent?.debugExplain).toBe(true);
+
+    worker.emitMessage({
+      kind: 'query.result',
+      requestId: 'q-debug',
+      indexVersion: 1,
+      ids: ['p-debug'],
+      total: 1,
+      canonicalQuery: 'debug payload',
+      resolvedScope: 'authored',
+      diagnostics: {
+        warnings: [],
+        parseState: 'valid',
+        degradedMode: false,
+        partialResults: false,
+        tookMs: 0,
+        stageACandidateCount: 1,
+        stageBScanned: 1,
+        totalCandidatesBeforeLimit: 1,
+        explain: []
+      },
+      debugExplain: {
+        relevanceSignalsById: {
+          'p-debug': {
+            tokenHits: 1,
+            phraseHits: 1,
+            authorHit: false,
+            replyToHit: false
+          }
+        }
+      }
+    });
+
+    const response = await pending;
+    expect(response.debugExplain?.relevanceSignalsById['p-debug']?.phraseHits).toBe(1);
   });
 
   test('worker client rejects pending requests when worker emits messageerror', async () => {

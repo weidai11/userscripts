@@ -1,10 +1,11 @@
 import type { Comment, Post } from '../../../../shared/graphql/queries';
+import type { ArchiveSortBy } from '../state';
 
 export type ArchiveItem = Post | Comment;
 export type ArchiveItemType = 'post' | 'comment';
 export type ArchiveCorpusName = 'authored' | 'context';
 export type ArchiveSearchScope = 'authored' | 'all';
-export type ArchiveSearchSortMode = 'relevance' | 'date' | 'date-asc' | 'score' | 'score-asc' | 'replyTo';
+export type ArchiveSearchSortMode = ArchiveSortBy;
 
 export type ArchiveSearchDoc = {
   id: string;
@@ -94,12 +95,24 @@ export type SearchDiagnostics = {
   explain: string[];
 };
 
+export type RelevanceSignals = {
+  tokenHits: number;
+  phraseHits: number;
+  authorHit: boolean;
+  replyToHit: boolean;
+};
+
+export type SearchDebugExplainPayload = {
+  relevanceSignalsById: Record<string, RelevanceSignals>;
+};
+
 export type SearchRunRequest = {
   query: string;
   scopeParam?: ArchiveSearchScope;
   sortMode: ArchiveSearchSortMode;
   limit: number;
   budgetMs?: number;
+  debugExplain?: boolean;
 };
 
 export type SearchRunResult = {
@@ -109,4 +122,5 @@ export type SearchRunResult = {
   canonicalQuery: string;
   resolvedScope: ArchiveSearchScope;
   diagnostics: SearchDiagnostics;
+  debugExplain?: SearchDebugExplainPayload;
 };

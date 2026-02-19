@@ -50,6 +50,8 @@ export class ArchiveSearchManager {
   private contextIndexSync: Promise<void> | null = null;
   private authoredSyncToken = 0;
   private contextSyncToken = 0;
+  private authoredRevisionToken = 0;
+  private requestSequence = 0;
 
   constructor(options: ArchiveSearchManagerOptions = {}) {
     const useWorker = options.useWorker === true;
@@ -67,7 +69,9 @@ export class ArchiveSearchManager {
   }
 
   setAuthoredItems(items: readonly ArchiveItem[], revisionToken = 0): void {
+    if (hasSameItemRefs(this.authoredItems, items) && this.authoredRevisionToken === revisionToken) return;
     this.authoredItems = items;
+    this.authoredRevisionToken = revisionToken;
     this.runtime.setAuthoredItems(items, revisionToken);
     this.rebuildItemsById();
     this.docCount = this.authoredItems.length + this.contextItems.length;
@@ -122,6 +126,7 @@ export class ArchiveSearchManager {
   }
 
   async runSearch(request: SearchRunRequest): Promise<SearchRunResult> {
+    const requestSequence = ++this.requestSequence;
     this.docCount = this.authoredItems.length + this.contextItems.length;
 
     if (!this.workerEnabled || !this.workerClient) {
@@ -136,6 +141,9 @@ export class ArchiveSearchManager {
     if (this.contextIndexSync) syncTasks.push(this.contextIndexSync);
     if (syncTasks.length > 0) {
       await Promise.all(syncTasks);
+      if (requestSequence !== this.requestSequence) {
+        return this.createCancelledResult(request);
+      }
       if (!this.workerEnabled || !this.workerClient) {
         return this.runtime.runSearch(request);
       }
@@ -156,6 +164,7 @@ export class ArchiveSearchManager {
         sortMode: request.sortMode,
         scopeParam: request.scopeParam,
         budgetMs: request.budgetMs,
+        debugExplain: request.debugExplain,
         expectedIndexVersion: this.indexVersion
       });
 
@@ -174,6 +183,16 @@ export class ArchiveSearchManager {
       }
       const droppedIds = response.ids.length - ids.length;
       const total = Math.max(ids.length, response.total - droppedIds);
+      let debugExplain: SearchRunResult['debugExplain'];
+      if (request.debugExplain && response.debugExplain) {
+        const relevanceSignalsById: NonNullable<SearchRunResult['debugExplain']>['relevanceSignalsById'] = {};
+        for (const id of ids) {
+          const signals = response.debugExplain.relevanceSignalsById[id];
+          if (!signals) continue;
+          relevanceSignalsById[id] = { ...signals };
+        }
+        debugExplain = { relevanceSignalsById };
+      }
 
       return {
         ids,
@@ -181,7 +200,8 @@ export class ArchiveSearchManager {
         items,
         canonicalQuery: response.canonicalQuery,
         resolvedScope: response.resolvedScope,
-        diagnostics: response.diagnostics
+        diagnostics: response.diagnostics,
+        ...(debugExplain ? { debugExplain } : {})
       };
     } catch (error) {
       if (error instanceof SearchQueryCancelledError) {
@@ -241,7 +261,8 @@ export class ArchiveSearchManager {
         stageBScanned: 0,
         totalCandidatesBeforeLimit: 0,
         explain: ['cancelled-superseded']
-      }
+      },
+      ...(request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {})
     };
   }
 }

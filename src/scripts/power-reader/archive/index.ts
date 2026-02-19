@@ -1,4 +1,4 @@
-
+﻿
 import { executeTakeover, rebuildDocument, signalReady } from '../takeover';
 import { initializeReactions } from '../utils/reactions';
 import { Logger } from '../utils/logger';
@@ -19,11 +19,16 @@ import { refreshPostActionButtons } from '../utils/dom';
 import { ArchiveSearchManager } from './search';
 import { parseArchiveUrlState, writeArchiveUrlState } from './search/urlState';
 import { createSearchWorkerClient } from './search/workerFactory';
+import { parseStructuredQuery } from './search/parser';
+import { isPositiveContentWithoutWildcard } from './search/ast';
+import { extractHighlightTerms, highlightTermsInContainer } from './search/highlight';
+import { computeFacets } from './search/facets';
 import type { SearchWorkerClient } from './search/protocol';
 import type {
   ArchiveItem,
   ArchiveSearchScope,
   ArchiveSearchSortMode,
+  RelevanceSignals,
   SearchDiagnostics
 } from './search/types';
 
@@ -38,8 +43,7 @@ const INITIAL_BACKOFF_MS = 2000;
 
 const PAGE_SIZE = 10000;
 const SEARCH_DEBOUNCE_MS = 180;
-const ARCHIVE_SEARCH_HELP_TEXT =
-  'Search tips: terms, "phrases", /regex/i, author:, replyto:, type:post|comment, score:>10, date:2025-01-01..2025-01-31, scope:all';
+const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
 
 interface SyncErrorState {
   isRetrying: boolean;
@@ -69,29 +73,257 @@ export const initArchive = async (username: string): Promise<void> => {
       const style = document.createElement('style');
       style.id = 'pr-archive-styles';
       style.textContent = `
+        .pr-input {
+            padding: 8px 12px;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            background: var(--pr-bg-primary, #fff);
+            color: var(--pr-text-primary, #000);
+            font-size: 0.95em;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            box-sizing: border-box;
+        }
+        .pr-input:focus {
+            border-color: #0078ff;
+            box-shadow: 0 0 0 2px rgba(0, 120, 255, 0.15);
+        }
+        .pr-input::placeholder {
+            color: var(--pr-text-tertiary, #999);
+        }
+        .pr-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 16px;
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-primary, #000);
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .pr-button:hover {
+            background: var(--pr-bg-hover, #e0e0e0);
+        }
+        .pr-button:active {
+            background: var(--pr-bg-active, #d0d0d0);
+        }
+        .pr-button.primary {
+            background: #0078ff;
+            color: #fff;
+            border-color: #0078ff;
+        }
+        .pr-button.primary:hover {
+            background: #0056cc;
+        }
+        .pr-archive-container {
+            padding: 10px;
+            background: var(--pr-bg-secondary, #f9f9f9);
+            border-radius: 8px;
+        }
         .pr-archive-toolbar {
             display: flex;
-            gap: 10px;
+            flex-direction: column;
+            gap: 8px;
             margin: 10px 0;
+        }
+        .pr-archive-toolbar-primary {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .pr-archive-toolbar-secondary {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        .pr-toolbar-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
             flex-wrap: wrap;
         }
-        .pr-archive-toolbar select {
+        .pr-toolbar-info {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-left: auto;
+            font-size: 0.85em;
+            color: var(--pr-text-secondary, #666);
+        }
+        .pr-result-count {
+            white-space: nowrap;
+            min-width: 90px;
+        }
+        .pr-toolbar-reset {
+            background: none;
+            border: none;
+            color: var(--pr-text-tertiary, #999);
+            cursor: pointer;
+            font-size: 0.85em;
+            text-decoration: underline;
+            padding: 2px 4px;
+            display: none;
+        }
+        .pr-toolbar-reset:hover {
+            color: var(--pr-text-primary, #000);
+        }
+        .pr-search-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 260px;
+        }
+        .pr-search-container .pr-input {
+            width: 100%;
+            padding-right: 30px;
+        }
+        .pr-search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--pr-text-tertiary, #999);
+            font-size: 1.2em;
+            cursor: pointer;
+            padding: 0 4px;
+            line-height: 1;
+            transition: color 0.2s;
+            display: none;
+        }
+        .pr-search-clear:hover {
+            color: var(--pr-text-primary, #000);
+        }
+        .pr-search-highlight {
+            background: rgba(255, 235, 59, 0.4);
+            border-radius: 2px;
+            padding: 0 1px;
+        }
+        .pr-debug-explain {
+            margin-top: 6px;
+            padding-top: 4px;
+            border-top: 1px dashed var(--pr-border-subtle, #ddd);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.72em;
+            color: var(--pr-text-tertiary, #999);
+            line-height: 1.35;
+        }
+        .pr-toolbar-controls select {
             padding: 8px;
             border-radius: 4px;
-            border: 1px solid var(--pr-border-color);
-            background: var(--pr-bg-secondary);
-            color: var(--pr-text-primary);
+            border: 1px solid var(--pr-border-color, #ddd);
+            background: var(--pr-bg-secondary, #f9f9f9);
+            color: var(--pr-text-primary, #000);
+            box-sizing: border-box;
+        }
+        .pr-segmented-control {
+            display: inline-flex;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .pr-seg-btn {
+            padding: 6px 14px;
+            border: none;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .pr-seg-btn + .pr-seg-btn {
+            border-left: 1px solid var(--pr-border-color, #ddd);
+        }
+        .pr-seg-btn:hover:not(.active) {
+            background: var(--pr-bg-hover, #f0f0f0);
+        }
+        .pr-seg-btn.active {
+            background: #0078ff;
+            color: #fff;
+        }
+        .pr-seg-btn:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: -2px;
+        }
+        .pr-view-tabs {
+            display: inline-flex;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .pr-view-tab {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 4px 12px;
+            border: none;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            cursor: pointer;
+            font-size: 0.75em;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .pr-view-tab + .pr-view-tab {
+            border-left: 1px solid var(--pr-border-color, #ddd);
+        }
+        .pr-view-tab:hover:not(.active) {
+            background: var(--pr-bg-hover, #f0f0f0);
+        }
+        .pr-view-tab.active {
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-primary, #000);
+            font-weight: 600;
+        }
+        .pr-view-tab:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: -2px;
+        }
+        .pr-view-icon {
+            font-size: 1.2em;
+        }
+        .pr-view-label {
+            font-size: 0.85em;
+        }
+        @media (max-width: 800px) {
+            .pr-view-label { display: none; }
+            .pr-view-tab { padding: 6px 10px; }
         }
         .pr-archive-search-status {
             margin-top: 8px;
             font-size: 0.9em;
             color: var(--pr-text-secondary);
         }
-        .pr-archive-search-status.warning {
-            color: #f6c453;
+        .pr-status-chip {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            margin-right: 6px;
+            margin-bottom: 4px;
+            vertical-align: middle;
         }
-        .pr-archive-search-status.error {
-            color: #ff6b6b;
+        .pr-status-info {
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-secondary, #666);
+        }
+        .pr-status-warning {
+            background: rgba(246, 196, 83, 0.15);
+            color: #b8860b;
+        }
+        .pr-status-error {
+            background: rgba(255, 107, 107, 0.15);
+            color: #d32f2f;
         }
         .pr-search-retry-btn {
             margin-left: 8px;
@@ -105,6 +337,78 @@ export const initArchive = async (username: string): Promise<void> => {
         }
         .pr-search-retry-btn:hover {
             background: var(--pr-bg-hover, #333);
+        }
+        .pr-search-help {
+            margin-top: 8px;
+        }
+        .pr-archive-facets {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .pr-facet-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .pr-facet-label {
+            font-size: 0.8em;
+            color: var(--pr-text-tertiary, #999);
+            margin-right: 2px;
+        }
+        .pr-facet-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 14px;
+            font-size: 0.8em;
+            cursor: pointer;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .pr-facet-chip:hover {
+            background: var(--pr-bg-hover, #f0f0f0);
+            border-color: #aaa;
+        }
+        .pr-facet-chip.active {
+            background: rgba(0, 120, 255, 0.1);
+            border-color: #0078ff;
+            color: #0078ff;
+        }
+        .pr-facet-count {
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        .pr-facet-delayed {
+            font-size: 0.8em;
+            color: var(--pr-text-tertiary, #999);
+            font-style: italic;
+        }
+        .pr-search-example {
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font: inherit;
+            color: inherit;
+        }
+        .pr-search-example:hover {
+            background: var(--pr-bg-hover, #e0e0e0);
+        }
+        .pr-search-example:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: 1px;
+        }
+        #archive-result-count.is-loading,
+        #archive-feed.is-loading {
+            opacity: 0.6;
+            transition: opacity 120ms ease;
         }
         .pr-archive-index-item {
             display: flex;
@@ -284,30 +588,104 @@ export const initArchive = async (username: string): Promise<void> => {
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
-    <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
+    <div class="pr-archive-container">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder='Search terms, "phrases", /regex/, author:, replyto:, type:, score:, date:, scope:' class="pr-input" style="flex: 2; min-width: 260px;">
-            <select id="archive-scope">
-                <option value="authored">Scope: Authored</option>
-                <option value="all">Scope: Authored + Context</option>
-            </select>
-            <select id="archive-sort">
-                <option value="relevance">Relevance</option>
-                <option value="date">Date (Newest)</option>
-                <option value="date-asc">Date (Oldest)</option>
-                <option value="score">Karma (High-Low)</option>
-                <option value="score-asc">Karma (Low-High)</option>
-                <option value="replyTo">Reply To (Name)</option>
-            </select>
-             <select id="archive-view">
-                <option value="card">Card View</option>
-                <option value="index">Index View</option>
-                <option value="thread-full">Thread View (Full Context)</option>
-                <option value="thread-placeholder">Thread View (Placeholder)</option>
-            </select>
-            <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
+            <div class="pr-archive-toolbar-primary">
+                <div class="pr-search-container">
+                    <input type="text" id="archive-search" placeholder='Search by keyword, "phrase", or operator...' class="pr-input">
+                    <button id="archive-search-clear" class="pr-search-clear" type="button" aria-label="Clear search">&times;</button>
+                </div>
+                <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
+            </div>
+            <div class="pr-archive-toolbar-secondary">
+                <div class="pr-toolbar-controls">
+                    <div id="archive-scope" class="pr-segmented-control" role="radiogroup" aria-label="Search scope">
+                        <button type="button" data-value="authored" class="pr-seg-btn active" role="radio" aria-checked="true" tabindex="0">Authored</button>
+                        <button type="button" data-value="all" class="pr-seg-btn" role="radio" aria-checked="false" tabindex="-1">All</button>
+                    </div>
+                    <select id="archive-sort">
+                        <option value="date">Date (Newest)</option>
+                        <option value="date-asc">Date (Oldest)</option>
+                        <option value="score">Karma (High-Low)</option>
+                        <option value="score-asc">Karma (Low-High)</option>
+                        <option value="replyTo">Reply To (Name)</option>
+                        <option value="relevance">Relevance</option>
+                    </select>
+                    <div id="archive-view" class="pr-view-tabs" role="tablist" aria-label="View mode">
+                        <button type="button" data-value="card" class="pr-view-tab active" role="tab"
+                                aria-selected="true" tabindex="0" aria-label="Card view" title="Card View">
+                            <span class="pr-view-icon">☰</span>
+                            <span class="pr-view-label">Card</span>
+                        </button>
+                        <button type="button" data-value="index" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Index view" title="Index View">
+                            <span class="pr-view-icon">≡</span>
+                            <span class="pr-view-label">Index</span>
+                        </button>
+                        <button type="button" data-value="thread-full" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Thread view full context" title="Thread View (Full Context)">
+                            <span class="pr-view-icon">⊞</span>
+                            <span class="pr-view-label">Thread</span>
+                        </button>
+                        <button type="button" data-value="thread-placeholder" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Thread view compact context" title="Thread View (Placeholder Context)">
+                            <span class="pr-view-icon">⊟</span>
+                            <span class="pr-view-label">Compact</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="pr-toolbar-info">
+                    <span id="archive-result-count" class="pr-result-count"></span>
+                    <button id="archive-reset-filters" class="pr-toolbar-reset" type="button">Reset</button>
+                </div>
+            </div>
         </div>
-        <div id="archive-search-status" class="pr-archive-search-status">${ARCHIVE_SEARCH_HELP_TEXT}</div>
+        <div id="archive-search-status" class="pr-archive-search-status">Ready</div>
+        <details class="pr-help pr-search-help" id="archive-search-help">
+            <summary>Search syntax reference</summary>
+            <div class="pr-help-content">
+                <div class="pr-help-columns">
+                    <div class="pr-help-section">
+                        <h4>Text Search</h4>
+                        <ul>
+                            <li><code>word</code> - plain keyword</li>
+                            <li><code>"exact phrase"</code> - phrase match</li>
+                            <li><code>/regex/i</code> - regex literal</li>
+                            <li><code>*</code> - match all items</li>
+                            <li><code>-term</code> - exclude results matching <code>term</code></li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Field Operators</h4>
+                        <ul>
+                            <li><code>author:name</code> - filter by author</li>
+                            <li><code>replyto:name</code> - filter by parent author</li>
+                            <li><code>type:post</code> or <code>type:comment</code></li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Range Operators</h4>
+                        <ul>
+                            <li><code>score:&gt;10</code> - karma above 10</li>
+                            <li><code>score:5..20</code> - karma 5 to 20</li>
+                            <li><code>date:2025-01-01</code> - exact date</li>
+                            <li><code>date:2025-01..2025-06</code> - date range</li>
+                            <li><code>date:&gt;2025-01-01</code> - after date</li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Examples</h4>
+                        <ul>
+                            <li><button type="button" class="pr-search-example" data-query='author:"Eliezer" score:>50'><code>author:"Eliezer" score:&gt;50</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='type:post date:2025-01..2025-06'><code>type:post date:2025-01..2025-06</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='"alignment tax" -type:comment'><code>"alignment tax" -type:comment</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='* -type:post'><code>* -type:post</code></button> (all comments)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </details>
+        <div id="archive-facets" class="pr-archive-facets" style="display: none;"></div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -326,12 +704,17 @@ export const initArchive = async (username: string): Promise<void> => {
     const feedEl = document.getElementById('archive-feed');
     const loadMoreBtn = document.getElementById('archive-load-more');
     const searchInput = document.getElementById('archive-search') as HTMLInputElement;
-    const scopeSelect = document.getElementById('archive-scope') as HTMLSelectElement;
+    const clearBtn = document.getElementById('archive-search-clear') as HTMLButtonElement;
+    const scopeContainer = document.getElementById('archive-scope') as HTMLDivElement | null;
     const sortSelect = document.getElementById('archive-sort') as HTMLSelectElement;
-    const viewSelect = document.getElementById('archive-view') as HTMLSelectElement;
+    const viewContainer = document.getElementById('archive-view') as HTMLDivElement | null;
+    const resultCountEl = document.getElementById('archive-result-count');
+    const resetBtn = document.getElementById('archive-reset-filters') as HTMLButtonElement;
     const resyncBtn = document.getElementById('archive-resync');
     const errorContainer = document.getElementById('archive-error-container');
     const searchStatusEl = document.getElementById('archive-search-status');
+    const searchHelpEl = document.getElementById('archive-search-help');
+    const facetsEl = document.getElementById('archive-facets') as HTMLDivElement | null;
     if (searchInput) {
       searchInput.title = [
         'Archive search examples:',
@@ -370,6 +753,20 @@ export const initArchive = async (username: string): Promise<void> => {
       renderTopStatusLine();
     };
 
+    const setSearchLoading = (isLoading: boolean): void => {
+      resultCountEl?.classList.toggle('is-loading', isLoading);
+      feedEl?.classList.toggle('is-loading', isLoading);
+    };
+
+    const updateResultCount = (total: number, tookMs: number, canonicalQuery: string): void => {
+      if (!resultCountEl) return;
+      if (canonicalQuery.trim().length === 0) {
+        resultCountEl.textContent = `${total.toLocaleString()} items`;
+        return;
+      }
+      resultCountEl.textContent = `${total.toLocaleString()} result${total === 1 ? '' : 's'} - ${tookMs.toFixed(1)}ms`;
+    };
+
     renderTopStatusLine();
 
     let activeItems = state.items;
@@ -389,11 +786,14 @@ export const initArchive = async (username: string): Promise<void> => {
       workerClient
     });
     const urlState = parseArchiveUrlState();
+    const isDebugExplainEnabled = (): boolean =>
+      new URLSearchParams(window.location.search).get('debug') === '1';
     let persistedContextItems: ArchiveItem[] = [];
     let useDedicatedScopeParam = urlState.scopeFromUrl;
     let searchDispatchTimer: number | null = null;
     let activeQueryRequestId = 0;
     let activeItemById = new Map<string, ArchiveItem>();
+    let activeDebugRelevanceSignalsById: Record<string, RelevanceSignals> | null = null;
     let authoredIndexItemsRef: readonly ArchiveItem[] | null = null;
     let authoredIndexCanonicalRevision = -1;
     let authoredItemsVersion = 0;
@@ -407,13 +807,358 @@ export const initArchive = async (username: string): Promise<void> => {
       | null = null;
     const LARGE_DATASET_THRESHOLD = (window as any).__PR_ARCHIVE_LARGE_THRESHOLD || 10000;
     let pendingRenderCount: number | null = null;
+    const DEFAULT_SCOPE: ArchiveSearchScope = 'authored';
+    const DEFAULT_SORT: ArchiveSearchSortMode = 'date';
+    const DEFAULT_VIEW: ArchiveViewMode = 'card';
+    let scopeFallbackValue: ArchiveSearchScope = DEFAULT_SCOPE;
+    let viewFallbackValue: ArchiveViewMode = DEFAULT_VIEW;
+    let viewModeRefreshTimer: number | null = null;
+    let pendingSortResetMessage: string | null = null;
 
-    searchInput.value = urlState.query;
-    sortSelect.value = urlState.sort;
-    if (!sortSelect.value) sortSelect.value = 'date';
-    scopeSelect.value = urlState.scope;
-    if (!scopeSelect.value) scopeSelect.value = 'authored';
-    state.sortBy = sortSelect.value as ArchiveSortBy;
+    const getScopeButtons = (): HTMLButtonElement[] =>
+      scopeContainer
+        ? Array.from(scopeContainer.querySelectorAll('.pr-seg-btn')) as HTMLButtonElement[]
+        : [];
+
+    const getScopeValue = (): ArchiveSearchScope => {
+      if (!scopeContainer) return scopeFallbackValue;
+      const active = scopeContainer.querySelector('.pr-seg-btn.active') as HTMLButtonElement | null;
+      return (active?.dataset.value as ArchiveSearchScope) || scopeFallbackValue;
+    };
+
+    const setScopeValue = (value: ArchiveSearchScope): void => {
+      scopeFallbackValue = value;
+      for (const button of getScopeButtons()) {
+        const isActive = button.dataset.value === value;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-checked', String(isActive));
+        button.tabIndex = isActive ? 0 : -1;
+      }
+    };
+
+    const getViewTabs = (): HTMLButtonElement[] =>
+      viewContainer
+        ? Array.from(viewContainer.querySelectorAll('.pr-view-tab')) as HTMLButtonElement[]
+        : [];
+
+    const getViewValue = (): ArchiveViewMode => {
+      if (!viewContainer) return viewFallbackValue;
+      const active = viewContainer.querySelector('.pr-view-tab.active') as HTMLButtonElement | null;
+      return (active?.dataset.value as ArchiveViewMode) || viewFallbackValue;
+    };
+
+    const setViewValue = (value: ArchiveViewMode): void => {
+      viewFallbackValue = value;
+      for (const tab of getViewTabs()) {
+        const isActive = tab.dataset.value === value;
+        tab.classList.toggle('active', isActive);
+        tab.setAttribute('aria-selected', String(isActive));
+        tab.tabIndex = isActive ? 0 : -1;
+      }
+    };
+
+    const updateClearButton = (): void => {
+      if (!clearBtn) return;
+      clearBtn.style.display = searchInput.value.length > 0 ? 'inline-flex' : 'none';
+    };
+
+    const deriveHasContentQuery = (query: string): boolean => {
+      const parsed = parseStructuredQuery(query);
+      return parsed.clauses.some(isPositiveContentWithoutWildcard);
+    };
+
+    const updateSortOptions = (hasContentQuery: boolean, viewMode: ArchiveViewMode): void => {
+      const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement | null;
+      const relevanceOption = sortSelect.querySelector('option[value="relevance"]') as HTMLOptionElement | null;
+      const threadMode = isThreadMode(viewMode);
+
+      if (replyToOption) {
+        replyToOption.disabled = threadMode;
+        replyToOption.title = threadMode ? 'Not available in thread view' : '';
+      }
+
+      const relevanceDisabled = threadMode || !hasContentQuery;
+      if (relevanceOption) {
+        relevanceOption.disabled = relevanceDisabled;
+        relevanceOption.title = threadMode
+          ? 'Not available in thread view'
+          : (!hasContentQuery ? 'Relevance sorting requires a search query' : '');
+      }
+
+      const selectedSort = sortSelect.value as ArchiveSearchSortMode;
+      if (threadMode && selectedSort === 'replyTo') {
+        sortSelect.value = DEFAULT_SORT;
+        state.sortBy = DEFAULT_SORT;
+        pendingSortResetMessage = 'Sort reset to Date: Reply To is not available in thread view';
+      }
+
+      if (relevanceDisabled && selectedSort === 'relevance') {
+        sortSelect.value = DEFAULT_SORT;
+        state.sortBy = DEFAULT_SORT;
+        pendingSortResetMessage = threadMode
+          ? 'Sort reset to Date: Relevance is not available in thread view'
+          : 'Sort reset to Date: Relevance requires a search query';
+      }
+    };
+
+    type ArchiveUiState = {
+      query: string;
+      scope: ArchiveSearchScope;
+      sort: ArchiveSearchSortMode;
+      view: ArchiveViewMode;
+    };
+
+    const readUiState = (): ArchiveUiState => ({
+      query: searchInput.value,
+      scope: getScopeValue(),
+      sort: sortSelect.value as ArchiveSearchSortMode,
+      view: getViewValue()
+    });
+
+    const getHighlightTermsFromQuery = (query: string): string[] =>
+      extractHighlightTerms(query.trim());
+
+    const getRenderOptionsForQuery = (query: string): { snippetTerms: string[] } => ({
+      snippetTerms: getHighlightTermsFromQuery(query)
+    });
+
+    const getCurrentRenderOptions = (): { snippetTerms: string[] } =>
+      getRenderOptionsForQuery(searchInput.value);
+
+    const normalizeQueryWhitespace = (value: string): string =>
+      value.replace(/\s+/g, ' ').trim();
+
+    const escapeRegExp = (value: string): string =>
+      value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const getFragmentKind = (fragment: string): string | null => {
+      const match = fragment.match(/^([a-z][a-z0-9_-]*):/i);
+      return match ? match[1].toLowerCase() : null;
+    };
+
+    const removeQueryFragment = (input: HTMLInputElement, fragment: string): boolean => {
+      const escaped = escapeRegExp(fragment);
+      let removed = false;
+      const pattern = new RegExp(`(^|\\s)${escaped}(?=\\s|$)`, 'gi');
+      input.value = normalizeQueryWhitespace(input.value.replace(pattern, () => {
+        removed = true;
+        return ' ';
+      }));
+      return removed;
+    };
+
+    const removeQueryFragmentsByKind = (input: HTMLInputElement, kind: string): boolean => {
+      let removed = false;
+      const kindPattern = new RegExp(
+        `(^|\\s)-?${escapeRegExp(kind)}:(?:"(?:[^"\\\\]|\\\\.)*"|\\S+)(?=\\s|$)`,
+        'gi'
+      );
+      input.value = normalizeQueryWhitespace(input.value.replace(kindPattern, () => {
+        removed = true;
+        return ' ';
+      }));
+      return removed;
+    };
+
+    const appendOrReplaceQueryFragment = (input: HTMLInputElement, fragment: string): void => {
+      const kind = getFragmentKind(fragment);
+      if (kind) {
+        removeQueryFragmentsByKind(input, kind);
+      }
+      input.value = normalizeQueryWhitespace(input.value ? `${input.value} ${fragment}` : fragment);
+    };
+
+    const createFacetDelayedMessageEl = (): HTMLSpanElement => {
+      const delayedEl = document.createElement('span');
+      delayedEl.className = 'pr-facet-delayed';
+      delayedEl.textContent = 'Facets delayed - refine query';
+      return delayedEl;
+    };
+
+    const clearFacetUi = (): void => {
+      if (!facetsEl) return;
+      facetsEl.replaceChildren();
+      facetsEl.style.display = 'none';
+    };
+
+    const renderFacets = (items: readonly ArchiveItem[], query: string): void => {
+      if (!facetsEl) return;
+
+      const facetResult = computeFacets(items, query);
+      const hasFacetItems = facetResult.groups.some(group => group.items.length > 0);
+      if (!hasFacetItems && !facetResult.delayed) {
+        clearFacetUi();
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      for (const group of facetResult.groups) {
+        if (group.items.length === 0) continue;
+        const groupEl = document.createElement('div');
+        groupEl.className = 'pr-facet-group';
+
+        const labelEl = document.createElement('span');
+        labelEl.className = 'pr-facet-label';
+        labelEl.textContent = `${group.label}:`;
+        groupEl.appendChild(labelEl);
+
+        for (const item of group.items) {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = `pr-facet-chip${item.active ? ' active' : ''}`;
+          chip.dataset.fragment = item.queryFragment;
+          chip.title = `${item.value} (${item.count})`;
+
+          const valueText = document.createTextNode(item.value);
+          const countEl = document.createElement('span');
+          countEl.className = 'pr-facet-count';
+          countEl.textContent = `(${item.count})`;
+          chip.append(valueText, countEl);
+          groupEl.appendChild(chip);
+        }
+
+        fragment.appendChild(groupEl);
+      }
+
+      if (facetResult.delayed) {
+        fragment.appendChild(createFacetDelayedMessageEl());
+      }
+
+      facetsEl.replaceChildren(fragment);
+      facetsEl.style.display = '';
+    };
+
+    const isNonDefaultState = (): boolean => {
+      const current = readUiState();
+      return (
+        current.query.length > 0 ||
+        current.scope !== DEFAULT_SCOPE ||
+        current.sort !== DEFAULT_SORT ||
+        current.view !== DEFAULT_VIEW
+      );
+    };
+
+    const updateResetButton = (): void => {
+      if (!resetBtn) return;
+      resetBtn.style.display = isNonDefaultState() ? 'inline-block' : 'none';
+    };
+
+    const applyUiState = (next: Partial<ArchiveUiState>, options: { silent?: boolean } = {}): void => {
+      if (next.query !== undefined) searchInput.value = next.query;
+      if (next.scope !== undefined) setScopeValue(next.scope);
+      if (next.sort !== undefined) {
+        sortSelect.value = next.sort;
+        state.sortBy = next.sort as ArchiveSortBy;
+      }
+      if (next.view !== undefined) {
+        setViewValue(next.view);
+        state.viewMode = next.view;
+        updateSortOptions(deriveHasContentQuery(searchInput.value), next.view);
+      }
+
+      if (!options.silent) {
+        updateClearButton();
+        updateResetButton();
+      }
+    };
+
+    const writeCurrentToolbarUrlState = (query: string): void => {
+      const current = readUiState();
+      writeArchiveUrlState({
+        query,
+        scope: current.scope,
+        sort: current.sort
+      });
+    };
+
+    const initialSort = sortSelect.querySelector(`option[value="${urlState.sort}"]`)
+      ? urlState.sort
+      : DEFAULT_SORT;
+    applyUiState({
+      query: urlState.query,
+      scope: urlState.scope,
+      sort: initialSort as ArchiveSearchSortMode,
+      view: state.viewMode
+    }, { silent: true });
+    setScopeValue(getScopeValue());
+    setViewValue(getViewValue());
+    updateClearButton();
+    updateResetButton();
+    updateResultCount(state.items.length, 0, '');
+
+    const applySearchHighlight = (): void => {
+      if (!feedEl) return;
+
+      const terms = getHighlightTermsFromQuery(searchInput.value);
+      const termsKey = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b)).join('\u001F');
+      const highlightTargets = feedEl.querySelectorAll('.pr-comment-body, .pr-post-body, .pr-index-title');
+      if (highlightTargets.length > 1200) return;
+
+      highlightTargets.forEach((el) => {
+        const node = el as HTMLElement;
+        if (node.getAttribute('data-pr-highlighted-terms') === termsKey) return;
+        highlightTermsInContainer(node, terms);
+      });
+    };
+
+    const computeDebugRelevanceScore = (signals: RelevanceSignals): number =>
+      (signals.tokenHits * 10)
+      + (signals.phraseHits * 15)
+      + (signals.authorHit ? 8 : 0)
+      + (signals.replyToHit ? 6 : 0);
+
+    const escapeSelectorAttrValue = (value: string): string =>
+      value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+    const clearDebugExplainAnnotations = (): void => {
+      if (!feedEl) return;
+      const existing = feedEl.querySelectorAll('.pr-debug-explain');
+      existing.forEach(node => node.remove());
+    };
+
+    const applyDebugExplainAnnotations = (): void => {
+      clearDebugExplainAnnotations();
+      if (!feedEl) return;
+      if (!isDebugExplainEnabled()) return;
+      if (!activeDebugRelevanceSignalsById) return;
+
+      const appendExplain = (target: HTMLElement, signals: RelevanceSignals | undefined): void => {
+        const explainEl = document.createElement('div');
+        explainEl.className = 'pr-debug-explain';
+        if (!signals) {
+          explainEl.textContent = 'debug: relevance=no-signal';
+        } else {
+          explainEl.textContent = [
+            `debug: relevance=${computeDebugRelevanceScore(signals)}`,
+            `token=${signals.tokenHits}`,
+            `phrase=${signals.phraseHits}`,
+            `author=${signals.authorHit ? 1 : 0}`,
+            `replyTo=${signals.replyToHit ? 1 : 0}`
+          ].join(' ');
+        }
+        target.appendChild(explainEl);
+      };
+
+      // Card rows can contain nested context comments that reuse data-id values.
+      // Map annotations by top-level render order to keep each badge attached to its result row.
+      if (getViewValue() === 'card') {
+        const cardRows = Array.from(feedEl.children).filter((node): node is HTMLElement =>
+          node instanceof HTMLElement && node.classList.contains('pr-archive-item')
+        );
+        const visibleCount = Math.min(cardRows.length, activeItems.length);
+        for (let i = 0; i < visibleCount; i++) {
+          const item = activeItems[i];
+          appendExplain(cardRows[i], activeDebugRelevanceSignalsById[item._id]);
+        }
+        return;
+      }
+
+      for (const item of activeItems) {
+        const target = feedEl.querySelector(`[data-id="${escapeSelectorAttrValue(item._id)}"]`) as HTMLElement | null;
+        if (!target) continue;
+        appendExplain(target, activeDebugRelevanceSignalsById[item._id]);
+      }
+    };
 
     const runPostRenderHooks = () => {
       setupLinkPreviews(uiHost.getReaderState().comments);
@@ -424,6 +1169,9 @@ export const initArchive = async (username: string): Promise<void> => {
         const pid = p.getAttribute('data-id') || p.getAttribute('data-post-id');
         if (pid) refreshPostActionButtons(pid);
       });
+
+      applySearchHighlight();
+      applyDebugExplainAnnotations();
     };
 
     const syncAuthoredSearchIndex = (): void => {
@@ -481,41 +1229,60 @@ export const initArchive = async (username: string): Promise<void> => {
     ) => {
       if (!searchStatusEl) return;
 
-      const messages: string[] = [];
+      searchStatusEl.textContent = '';
+      searchStatusEl.classList.remove('warning', 'error');
+
+      const addChip = (text: string, type: 'info' | 'warning' | 'error' = 'info'): void => {
+        const chip = document.createElement('span');
+        chip.className = `pr-status-chip pr-status-${type}`;
+        chip.textContent = text;
+        searchStatusEl.appendChild(chip);
+      };
+
+      let hasMessages = false;
+
       if (resolvedScope === 'all') {
-        messages.push(`Searching authored + cached context (${contextItemCount} items)`);
+        addChip(`Scope: authored + ${contextItemCount} context items`, 'info');
+        hasMessages = true;
         if (contextItemCount === 0) {
-          messages.push('Context cache may be incomplete');
+          addChip('Context cache may be incomplete', 'warning');
+          hasMessages = true;
         }
         if (sortMode === 'replyTo') {
-          messages.push('replyTo ordering is computed over mixed authored/context semantics');
+          addChip('replyTo ordering uses mixed authored/context semantics', 'info');
+          hasMessages = true;
         }
       }
-      if (diagnostics.partialResults) {
-        messages.push(`Partial results (${diagnostics.tookMs}ms budget hit)`);
-      }
-      if (diagnostics.warnings.length > 0) {
-        messages.push(diagnostics.warnings[0].message);
-      }
-
-      searchStatusEl.textContent = '';
-      searchStatusEl.appendChild(document.createTextNode(messages.join(' | ') || ARCHIVE_SEARCH_HELP_TEXT));
 
       if (diagnostics.partialResults) {
+        addChip(`Partial results (${diagnostics.tookMs}ms budget hit)`, 'warning');
+        hasMessages = true;
+
         const retryBtn = document.createElement('button');
         retryBtn.className = 'pr-search-retry-btn';
         retryBtn.textContent = 'Run without time limit';
         retryBtn.addEventListener('click', () => {
-          refreshView(0);
+          void refreshView(0);
         });
         searchStatusEl.appendChild(retryBtn);
       }
 
-      searchStatusEl.classList.remove('warning', 'error');
-      if (diagnostics.parseState === 'invalid') {
-        searchStatusEl.classList.add('error');
-      } else if (diagnostics.parseState === 'warning' || diagnostics.degradedMode || diagnostics.partialResults) {
-        searchStatusEl.classList.add('warning');
+      for (const warning of diagnostics.warnings) {
+        const type = warning.type === 'negation-only' || warning.type === 'invalid-query'
+          ? 'error'
+          : 'warning';
+        addChip(warning.message, type);
+        hasMessages = true;
+      }
+
+      if (pendingSortResetMessage) {
+        addChip(pendingSortResetMessage, 'info');
+        pendingSortResetMessage = null;
+        hasMessages = true;
+      }
+
+      if (!hasMessages) {
+        searchStatusEl.textContent = 'Ready';
       }
     };
 
@@ -549,65 +1316,84 @@ export const initArchive = async (username: string): Promise<void> => {
 
     const refreshView = async (budgetMs?: number) => {
       const requestId = ++activeQueryRequestId;
+      const currentUi = readUiState();
+      const debugExplain = isDebugExplainEnabled();
+      const hasContentQuery = deriveHasContentQuery(currentUi.query);
+      updateSortOptions(hasContentQuery, currentUi.view);
       const sortMode = sortSelect.value as ArchiveSearchSortMode;
+      setSearchLoading(true);
 
-      syncAuthoredSearchIndex();
-      const contextItems = collectContextSearchItems();
-      searchManager.setContextItems(contextItems);
-      const scopeParam = useDedicatedScopeParam ? (scopeSelect.value as ArchiveSearchScope) : undefined;
-      const result = await searchManager.runSearch({
-        query: searchInput.value,
-        scopeParam,
-        sortMode,
-        limit: state.items.length + contextItems.length + 5,
-        ...(budgetMs !== undefined ? { budgetMs } : {})
-      });
-
-      if (requestId !== activeQueryRequestId) {
-        return;
-      }
-
-      activeItems = result.items;
-      activeItemById = new Map(activeItems.map(item => [item._id, item]));
-      ensureSearchResultContextLoaded(activeItems);
-      if (!useDedicatedScopeParam && result.resolvedScope !== 'authored') {
-        useDedicatedScopeParam = true;
-      }
-      scopeSelect.value = result.resolvedScope;
-      writeArchiveUrlState({
-        query: result.canonicalQuery,
-        scope: result.resolvedScope,
-        sort: sortMode
-      });
-      setStatusSearchResultCount(result.total);
-      updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
-
-      // 3. Check if we need to ask user about render count for large datasets
-      const totalItems = activeItems.length;
-      if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
-        // Show dialog to ask user how many to render
-        showRenderCountDialog(totalItems, async (count: number) => {
-          pendingRenderCount = count;
-          updateRenderLimit(count);
-          // Render!
-          await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
-          runPostRenderHooks();
+      try {
+        syncAuthoredSearchIndex();
+        const contextItems = collectContextSearchItems();
+        searchManager.setContextItems(contextItems);
+        const scopeParam = useDedicatedScopeParam ? currentUi.scope : undefined;
+        const result = await searchManager.runSearch({
+          query: currentUi.query,
+          scopeParam,
+          sortMode,
+          limit: state.items.length + contextItems.length + 5,
+          debugExplain,
+          ...(budgetMs !== undefined ? { budgetMs } : {})
         });
-        return;
+
+        if (requestId !== activeQueryRequestId) {
+          return;
+        }
+
+        activeItems = result.items;
+        activeItemById = new Map(activeItems.map(item => [item._id, item]));
+        activeDebugRelevanceSignalsById = debugExplain
+          ? (result.debugExplain?.relevanceSignalsById || {})
+          : null;
+        ensureSearchResultContextLoaded(activeItems);
+        if (!useDedicatedScopeParam && result.resolvedScope !== 'authored') {
+          useDedicatedScopeParam = true;
+        }
+        setScopeValue(result.resolvedScope);
+        writeArchiveUrlState({
+          query: result.canonicalQuery,
+          scope: result.resolvedScope,
+          sort: sortMode
+        });
+        setStatusSearchResultCount(result.total);
+        updateResultCount(result.total, result.diagnostics.tookMs, result.canonicalQuery);
+        updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
+        renderFacets(result.items, result.canonicalQuery);
+        updateResetButton();
+        const renderOptions = getRenderOptionsForQuery(currentUi.query);
+
+        // 3. Check if we need to ask user about render count for large datasets
+        const totalItems = activeItems.length;
+        if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
+          // Show dialog to ask user how many to render
+          showRenderCountDialog(totalItems, async (count: number) => {
+            pendingRenderCount = count;
+            updateRenderLimit(count);
+            // Render!
+            await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, renderOptions);
+            runPostRenderHooks();
+          });
+          return;
+        }
+
+        // 4. Render
+        // Only override render limit for large datasets where user explicitly chose a count
+        // For normal datasets, keep the default limit to enable pagination
+        if (pendingRenderCount !== null) {
+          updateRenderLimit(pendingRenderCount);
+        }
+
+        // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
+        // [WS3-FIX] Pass sortBy for thread view group-level sorting
+        await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, renderOptions);
+
+        runPostRenderHooks();
+      } finally {
+        if (requestId === activeQueryRequestId) {
+          setSearchLoading(false);
+        }
       }
-
-      // 4. Render
-      // Only override render limit for large datasets where user explicitly chose a count
-      // For normal datasets, keep the default limit to enable pagination
-      if (pendingRenderCount !== null) {
-        updateRenderLimit(pendingRenderCount);
-      }
-
-      // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
-      // [WS3-FIX] Pass sortBy for thread view group-level sorting
-      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
-
-      runPostRenderHooks();
     };
 
     const uiHost = new ArchiveUIHost(state, feedEl, refreshView);
@@ -691,57 +1477,309 @@ export const initArchive = async (username: string): Promise<void> => {
     };
 
     searchInput?.addEventListener('input', () => {
+      updateClearButton();
+      updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+      updateResetButton();
       scheduleSearchRefresh();
     });
 
-    searchInput?.addEventListener('keydown', (event) => {
+    clearBtn?.addEventListener('click', () => {
+      if (searchInput.value.length === 0) return;
+      searchInput.value = '';
+      updateClearButton();
+      if (searchDispatchTimer) {
+        window.clearTimeout(searchDispatchTimer);
+        searchDispatchTimer = null;
+      }
+      updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+      updateResetButton();
+      writeCurrentToolbarUrlState('');
+      void refreshView();
+      searchInput.focus();
+    });
+
+    searchHelpEl?.addEventListener('click', (event: Event) => {
+      const target = (event.target as HTMLElement).closest('.pr-search-example') as HTMLElement | null;
+      if (!target) return;
+      const query = target.dataset.query;
+      if (!query) return;
+      searchInput.value = query;
+      updateClearButton();
+      updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+      updateResetButton();
+      if (searchDispatchTimer) {
+        window.clearTimeout(searchDispatchTimer);
+        searchDispatchTimer = null;
+      }
+      void refreshView();
+      searchInput.focus();
+    });
+
+    searchInput?.addEventListener('keydown', (event: KeyboardEvent) => {
       if (event.key === 'Enter') {
         if (searchDispatchTimer) {
           window.clearTimeout(searchDispatchTimer);
           searchDispatchTimer = null;
         }
         void refreshView();
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (searchInput.value.length > 0) {
+          event.preventDefault();
+          searchInput.value = '';
+          updateClearButton();
+          if (searchDispatchTimer) {
+            window.clearTimeout(searchDispatchTimer);
+            searchDispatchTimer = null;
+          }
+          updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+          updateResetButton();
+          writeCurrentToolbarUrlState('');
+          void refreshView();
+          return;
+        }
+        searchInput.blur();
       }
     });
 
-    scopeSelect?.addEventListener('change', () => {
+    facetsEl?.addEventListener('click', (event: Event) => {
+      const chip = (event.target as HTMLElement).closest('.pr-facet-chip') as HTMLButtonElement | null;
+      if (!chip) return;
+      const fragment = chip.dataset.fragment;
+      if (!fragment) return;
+
+      if (chip.classList.contains('active')) {
+        const removed = removeQueryFragment(searchInput, fragment);
+        if (!removed) {
+          const kind = getFragmentKind(fragment);
+          if (kind) {
+            removeQueryFragmentsByKind(searchInput, kind);
+          }
+        }
+      } else {
+        appendOrReplaceQueryFragment(searchInput, fragment);
+      }
+
+      updateClearButton();
+      updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+      updateResetButton();
+      if (searchDispatchTimer) {
+        window.clearTimeout(searchDispatchTimer);
+        searchDispatchTimer = null;
+      }
+      void refreshView();
+      searchInput.focus();
+    });
+
+    const isInTextInput = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tagName = target.tagName.toLowerCase();
+      return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || target.isContentEditable;
+    };
+
+    const isElementVisible = (element: HTMLElement | null): boolean => {
+      if (!element || !element.isConnected) return false;
+      const style = window.getComputedStyle(element);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      return element.getClientRects().length > 0;
+    };
+
+    const isArchiveUiActive = (): boolean =>
+      searchInput.isConnected
+      && isElementVisible(root as HTMLElement)
+      && isElementVisible(document.querySelector('.pr-archive-container'));
+
+    const shortcutWindow = window as Window & {
+      __PR_ARCHIVE_SHORTCUT_HANDLER__?: (event: KeyboardEvent) => void;
+    };
+    const previousArchiveShortcutHandler = shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
+    if (previousArchiveShortcutHandler) {
+      document.removeEventListener('keydown', previousArchiveShortcutHandler);
+    }
+
+    const handleArchiveGlobalKeydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      if (!isArchiveUiActive()) {
+        document.removeEventListener('keydown', handleArchiveGlobalKeydown);
+        if (shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ === handleArchiveGlobalKeydown) {
+          delete shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
+        }
+        return;
+      }
+
+      if (event.key === '/' && !isInTextInput(event.target)) {
+        event.preventDefault();
+        searchInput.focus();
+        searchInput.select();
+      }
+    };
+    shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ = handleArchiveGlobalKeydown;
+    document.addEventListener('keydown', handleArchiveGlobalKeydown);
+
+    resetBtn?.addEventListener('click', () => {
+      if (searchDispatchTimer) {
+        window.clearTimeout(searchDispatchTimer);
+        searchDispatchTimer = null;
+      }
+      if (viewModeRefreshTimer) {
+        window.clearTimeout(viewModeRefreshTimer);
+        viewModeRefreshTimer = null;
+      }
+
+      applyUiState({
+        query: '',
+        scope: DEFAULT_SCOPE,
+        sort: DEFAULT_SORT,
+        view: DEFAULT_VIEW
+      });
+      // Reset should return scope handling to fresh-load behavior:
+      // no dedicated URL scope param unless explicitly set by URL or scope control interaction.
+      useDedicatedScopeParam = false;
+      writeArchiveUrlState({
+        query: '',
+        scope: DEFAULT_SCOPE,
+        sort: DEFAULT_SORT
+      });
+      void refreshView();
+    });
+
+    scopeContainer?.addEventListener('click', (event: Event) => {
+      const button = (event.target as HTMLElement).closest('.pr-seg-btn') as HTMLButtonElement | null;
+      if (!button) return;
+      const nextValue = button.dataset.value as ArchiveSearchScope | undefined;
+      if (!nextValue || nextValue === getScopeValue()) return;
+      setScopeValue(nextValue);
       useDedicatedScopeParam = true;
+      updateResetButton();
+      void refreshView();
+    });
+
+    scopeContainer?.addEventListener('keydown', (event: KeyboardEvent) => {
+      const currentButton = (event.target as HTMLElement).closest('.pr-seg-btn') as HTMLButtonElement | null;
+      if (!currentButton) return;
+
+      const buttons = getScopeButtons();
+      const currentIndex = buttons.indexOf(currentButton);
+      if (currentIndex < 0 || buttons.length === 0) return;
+
+      let nextIndex: number | null = null;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % buttons.length;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+      if (event.key === 'Home') nextIndex = 0;
+      if (event.key === 'End') nextIndex = buttons.length - 1;
+      if (nextIndex === null) return;
+
+      event.preventDefault();
+      const nextButton = buttons[nextIndex];
+      const nextValue = nextButton.dataset.value as ArchiveSearchScope | undefined;
+      if (!nextValue) return;
+      nextButton.focus();
+      if (nextValue === getScopeValue()) return;
+      setScopeValue(nextValue);
+      useDedicatedScopeParam = true;
+      updateResetButton();
       void refreshView();
     });
 
     sortSelect?.addEventListener('change', () => {
       state.sortBy = sortSelect.value as ArchiveSortBy;
+      updateResetButton();
       void refreshView();
     });
 
-    viewSelect?.addEventListener('change', () => {
-      state.viewMode = viewSelect.value as ArchiveViewMode;
-
-      // [PR-SORT-04] Disable "Reply To" sort in Thread View as it organizes by Post
-      const replyToOption = sortSelect.querySelector('option[value="replyTo"]') as HTMLOptionElement;
-      const relevanceOption = sortSelect.querySelector('option[value="relevance"]') as HTMLOptionElement;
-      if (replyToOption) {
-        if (isThreadMode(state.viewMode)) {
-          replyToOption.disabled = true;
-          if (relevanceOption) relevanceOption.disabled = true;
-          if (state.sortBy === 'replyTo' || state.sortBy === 'relevance') {
-            state.sortBy = 'date';
-            sortSelect.value = 'date';
-          }
-        } else {
-          replyToOption.disabled = false;
-          if (relevanceOption) relevanceOption.disabled = false;
-        }
+    const scheduleViewRefresh = (source: 'pointer' | 'keyboard') => {
+      if (viewModeRefreshTimer) {
+        window.clearTimeout(viewModeRefreshTimer);
+        viewModeRefreshTimer = null;
       }
 
-      void refreshView();
+      if (source === 'pointer') {
+        void refreshView();
+        return;
+      }
+
+      viewModeRefreshTimer = window.setTimeout(() => {
+        viewModeRefreshTimer = null;
+        void refreshView();
+      }, VIEW_MODE_KEYBOARD_DEBOUNCE_MS);
+    };
+
+    const applyViewModeChange = (nextView: ArchiveViewMode, source: 'pointer' | 'keyboard') => {
+      if (nextView === getViewValue() && state.viewMode === nextView) return;
+
+      state.viewMode = nextView;
+      setViewValue(nextView);
+      updateSortOptions(deriveHasContentQuery(searchInput.value), nextView);
+      updateResetButton();
+      scheduleViewRefresh(source);
+    };
+
+    const activateViewTab = (index: number, source: 'pointer' | 'keyboard' = 'keyboard') => {
+      const tabs = getViewTabs();
+      if (tabs.length === 0) return;
+
+      const normalizedIndex = (index + tabs.length) % tabs.length;
+      const targetTab = tabs[normalizedIndex];
+      const nextView = targetTab.dataset.value as ArchiveViewMode | undefined;
+      if (!nextView) return;
+      targetTab.focus();
+      applyViewModeChange(nextView, source);
+    };
+
+    viewContainer?.addEventListener('click', (event: Event) => {
+      const tab = (event.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
+      if (!tab) return;
+      const nextView = tab.dataset.value as ArchiveViewMode | undefined;
+      if (!nextView) return;
+      applyViewModeChange(nextView, 'pointer');
+    });
+
+    viewContainer?.addEventListener('keydown', (event: KeyboardEvent) => {
+      const currentTab = (event.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
+      if (!currentTab) return;
+
+      const tabs = getViewTabs();
+      const currentIndex = tabs.indexOf(currentTab);
+      if (currentIndex < 0) return;
+
+      switch (event.key) {
+        case 'ArrowRight':
+        case 'ArrowDown':
+          event.preventDefault();
+          activateViewTab(currentIndex + 1, 'keyboard');
+          break;
+        case 'ArrowLeft':
+        case 'ArrowUp':
+          event.preventDefault();
+          activateViewTab(currentIndex - 1, 'keyboard');
+          break;
+        case 'Home':
+          event.preventDefault();
+          activateViewTab(0, 'keyboard');
+          break;
+        case 'End':
+          event.preventDefault();
+          activateViewTab(tabs.length - 1, 'keyboard');
+          break;
+        case 'Enter':
+        case ' ':
+          event.preventDefault();
+          activateViewTab(currentIndex, 'keyboard');
+          break;
+        default:
+          break;
+      }
     });
 
     // Setup Load More
     loadMoreBtn?.querySelector('button')?.addEventListener('click', async () => {
       incrementRenderLimit(PAGE_SIZE);
       // [P2-FIX] Pass sortBy to maintain thread sort mode during pagination
-      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy);
+      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, getCurrentRenderOptions());
       runPostRenderHooks();
     });
 
@@ -779,10 +1817,11 @@ export const initArchive = async (username: string): Promise<void> => {
         const expanded = collapseTarget.closest('.pr-index-expanded');
         if (expanded) {
           const tmp = document.createElement('div');
-          tmp.innerHTML = renderIndexItem(item);
+          tmp.innerHTML = renderIndexItem(item, getCurrentRenderOptions());
           const collapsedRow = tmp.firstElementChild;
           if (collapsedRow) {
             expanded.replaceWith(collapsedRow);
+            runPostRenderHooks();
           }
         }
         return;
@@ -873,6 +1912,12 @@ export const initArchive = async (username: string): Promise<void> => {
       }
       isSyncInProgress = true;
       pendingRetryCount = 0;
+      if (forceFull) {
+        // A full resync can significantly change corpus size; discard prior
+        // render-count choice so the large-dataset guard can re-evaluate.
+        pendingRenderCount = null;
+        resetRenderLimit();
+      }
       const cached = await loadArchiveData(username);
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
@@ -1024,7 +2069,7 @@ export const initArchive = async (username: string): Promise<void> => {
       const cachedContext = await loadAllContextualItems(username);
       persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
       contextSearchItemsCache = null;
-      if (persistedContextItems.length > 0 && (scopeSelect.value === 'all' || searchInput.value.trim().length > 0)) {
+      if (persistedContextItems.length > 0 && (getScopeValue() === 'all' || searchInput.value.trim().length > 0)) {
         await refreshView();
       }
     } catch (e) {

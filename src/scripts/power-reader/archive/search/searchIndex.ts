@@ -19,16 +19,17 @@ const compactPostings = (mutable: Map<string, number[]>): Map<string, Uint32Arra
   return compact;
 };
 
-const appendPosting = (index: Map<string, Uint32Array>, token: string, ordinal: number): void => {
+const appendPostingBatch = (index: Map<string, Uint32Array>, token: string, ordinals: readonly number[]): void => {
+  if (ordinals.length === 0) return;
   const postings = index.get(token);
   if (!postings) {
-    index.set(token, Uint32Array.of(ordinal));
+    index.set(token, Uint32Array.from(ordinals));
     return;
   }
 
-  const next = new Uint32Array(postings.length + 1);
+  const next = new Uint32Array(postings.length + ordinals.length);
   next.set(postings);
-  next[postings.length] = ordinal;
+  next.set(ordinals, postings.length);
   index.set(token, next);
 };
 
@@ -93,6 +94,10 @@ export const appendItemsToCorpusIndex = (
 ): void => {
   if (upserts.length === 0) return;
 
+  const tokenBatch = new Map<string, number[]>();
+  const authorBatch = new Map<string, number[]>();
+  const replyToBatch = new Map<string, number[]>();
+
   for (const item of upserts) {
     if (index.docOrdinalsById.has(item._id)) continue;
 
@@ -106,18 +111,22 @@ export const appendItemsToCorpusIndex = (
     for (const token of tokenizeForIndex(doc.titleNorm)) {
       if (seenContentTokens.has(token)) continue;
       seenContentTokens.add(token);
-      appendPosting(index.tokenIndex, token, ordinal);
+      addPosting(tokenBatch, token, ordinal);
     }
     for (const token of tokenizeForIndex(doc.bodyNorm)) {
       if (seenContentTokens.has(token)) continue;
       seenContentTokens.add(token);
-      appendPosting(index.tokenIndex, token, ordinal);
+      addPosting(tokenBatch, token, ordinal);
     }
     for (const token of tokenizeForIndex(doc.authorNameNorm)) {
-      appendPosting(index.authorIndex, token, ordinal);
+      addPosting(authorBatch, token, ordinal);
     }
     for (const token of tokenizeForIndex(doc.replyToNorm)) {
-      appendPosting(index.replyToIndex, token, ordinal);
+      addPosting(replyToBatch, token, ordinal);
     }
   }
+
+  tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));
+  authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));
+  replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));
 };

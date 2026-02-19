@@ -113,7 +113,9 @@ const handleFullChunk = (message: Extract<SearchWorkerRequest, { kind: 'index.fu
     return;
   }
 
-  fullBatch.items.push(...message.items);
+  for (const item of message.items) {
+    fullBatch.items.push(item);
+  }
   fullBatch.nextChunkIndex += 1;
 };
 
@@ -170,7 +172,8 @@ const handleQuery = (message: QueryRequest): void => {
     limit: message.limit,
     sortMode: message.sortMode,
     scopeParam: message.scopeParam,
-    budgetMs: message.budgetMs
+    budgetMs: message.budgetMs,
+    debugExplain: message.debugExplain
   });
 
   if (consumeCancel(message.requestId)) return;
@@ -183,7 +186,8 @@ const handleQuery = (message: QueryRequest): void => {
     total: result.total,
     canonicalQuery: result.canonicalQuery,
     resolvedScope: result.resolvedScope,
-    diagnostics: result.diagnostics
+    diagnostics: result.diagnostics,
+    ...(result.debugExplain ? { debugExplain: result.debugExplain } : {})
   });
 };
 

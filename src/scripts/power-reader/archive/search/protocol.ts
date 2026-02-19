@@ -3,6 +3,7 @@ import type {
   ArchiveItem,
   ArchiveSearchScope,
   ArchiveSearchSortMode,
+  SearchDebugExplainPayload,
   SearchDiagnostics
 } from './types';
 
@@ -36,6 +37,7 @@ export type SearchWorkerRequest =
     sortMode: ArchiveSearchSortMode;
     scopeParam?: ArchiveSearchScope;
     budgetMs?: number;
+    debugExplain?: boolean;
     expectedIndexVersion?: number;
   }
   | { kind: 'query.cancel'; requestId: string };
@@ -60,6 +62,7 @@ export type SearchWorkerResponse =
     canonicalQuery: string;
     resolvedScope: ArchiveSearchScope;
     diagnostics: SearchDiagnostics;
+    debugExplain?: SearchDebugExplainPayload;
   }
   | { kind: 'error'; requestId?: string; batchId?: string; patchId?: string; message: string };
 

@@ -3,7 +3,18 @@
 **Date**: 2026-02-18  
 **Last reviewed**: 2026-02-19 (pass 13)  
 **Prerequisite**: Phases 0–3 of `archive-search-greenfield.md` (engine, parser, worker) are complete.  
-**Goal**: Complete Phase 4 (Structured Query UX + Facets) and implement UX improvements from the review in `archive/archive-search-ux-review.md`.
+**Goal**: Phase 4 (Structured Query UX + Facets) and the UX improvements from `archive/archive-search-ux-review.md` have been implemented.
+
+### Status Snapshot (2026-02-19)
+
+- Changes 0 through 13 have been implemented in the current codebase (`src/scripts/power-reader/archive/*` + related tests).
+- This document is now primarily a historical implementation plan and audit reference, not a pending TODO list.
+- Current intentional deviations/clarifications from early plan snippets:
+  - Reset behavior keeps `useDedicatedScopeParam = false` so reset returns to default implicit scope handling.
+  - Highlight matching uses shared `buildHighlightRegex` behavior (normalization-aware), not a naive `join('|')` regex.
+  - Facet same-kind replacement/removal is string-based and currently regex-driven (with escaped operator kinds) rather than AST rewrite.
+  - View tab icons use symbolic glyphs for compact visual distinction.
+  - Changes 1-3 include pre-migration historical snippets (`scopeSelect`/`viewSelect`) and associated notes; implemented code uses `readUiState`/`applyUiState` helpers.
 
 ### Known Issues & Cross-Cutting Notes
 
@@ -53,6 +64,8 @@
 - CSS custom properties like `--pr-bg-secondary` are provided by global styles; keep fallback values in new archive rules for robustness.
 
 ### Plan
+
+Historical snippet note: this section preserves pre-batch-B examples where scope/view are still `<select>` controls.
 
 #### [MODIFY] `src/scripts/power-reader/archive/index.ts` — embedded `<style>` block (~lines 58–275)
 
@@ -131,6 +144,8 @@ Remove the inline `style=` attribute from the `.pr-archive-container` div in the
 
 ### Plan
 
+Historical snippet note: this section documents the transitional toolbar structure before Change 4/5 helper-based control migration.
+
 #### [MODIFY] `src/scripts/power-reader/archive/search/types.ts`
 
 Make `ArchiveSearchSortMode` the single exported alias wired to `ArchiveSortBy` (which remains the source of truth in `state.ts`):
@@ -172,6 +187,8 @@ export type ArchiveSearchSortMode = ArchiveSortBy;
 **Goal**: Add a visible `×` button inside the search input container to clear the query text.
 
 ### Plan
+
+Historical snippet note: this section preserves pre-batch-B examples where scope/view are still `<select>` controls.
 
 #### [MODIFY] `src/scripts/power-reader/archive/index.ts` — HTML template
 
@@ -481,8 +498,9 @@ resetBtn?.addEventListener('click', () => {
   sortSelect.value = 'date';
   viewSelect.value = 'card';
 
-  // Keep ArchiveState in sync with toolbar defaults before refresh
-  useDedicatedScopeParam = true;
+  // Keep ArchiveState in sync with toolbar defaults before refresh.
+  // Reset should return to implicit scope handling.
+  useDedicatedScopeParam = false;
   state.sortBy = 'date';
   state.viewMode = 'card';
 
@@ -1288,7 +1306,7 @@ const refreshView = async (budgetMs?: number) => {
 };
 ```
 
-#### [MODIFY] `src/scripts/power-reader/archive/index.ts` â€” CSS block
+#### [MODIFY] `src/scripts/power-reader/archive/index.ts` — CSS block
 
 ```css
 #archive-result-count.is-loading,
@@ -1322,6 +1340,7 @@ const refreshView = async (budgetMs?: number) => {
 #### [NEW] `src/scripts/power-reader/archive/search/highlight.ts`
 
 Create a new module for post-render highlighting:
+Note: this snippet is abridged; `buildHighlightRegex` is defined in the same module before `highlightTermsInContainer`.
 
 ```typescript
 import { parseStructuredQuery } from './parser';
@@ -1396,10 +1415,12 @@ export const highlightTermsInContainer = (
     return;
   }
 
-  // Build a regex that matches any of the terms (longest first to avoid partial matches)
-  const sorted = [...stableTerms].sort((a, b) => b.length - a.length);
-  const escaped = sorted.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const pattern = new RegExp(`(${escaped.join('|')})`, 'gi');
+  // Build a normalization-aware regex from shared helper.
+  const pattern = buildHighlightRegex(stableTerms);
+  if (!pattern) {
+    container.setAttribute('data-pr-highlighted-terms', signature);
+    return;
+  }
 
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
   const textNodes: Text[] = [];

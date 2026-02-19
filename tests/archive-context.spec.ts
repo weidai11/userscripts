@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
+import { expectArchiveViewSelected, selectArchiveView } from './helpers/archiveControls';
 
 test.describe('User Archive Context Type & View Modes', () => {
   let scriptContent: string;
@@ -72,7 +73,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
     // Switch to thread-full view to trigger context fetching
-    await page.locator('#archive-view').selectOption('thread-full');
+    await selectArchiveView(page, 'thread-full');
 
     // Verify parent context was fetched and rendered
     await expect(page.locator('.pr-comment[data-id="comment-parent"]')).toBeVisible();
@@ -145,7 +146,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
 
     // Switch to thread-full view
-    await page.locator('#archive-view').selectOption('thread-full');
+    await selectArchiveView(page, 'thread-full');
 
     // Verify server fetch occurred
     await expect.poll(async () => page.evaluate(() => (window as any).__TEST_FETCH_COUNT__)).toBeGreaterThan(0);
@@ -208,7 +209,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
 
     // Switch to thread-placeholder view
-    await page.locator('#archive-view').selectOption('thread-placeholder');
+    await selectArchiveView(page, 'thread-placeholder');
 
     // Verify NO server fetch occurred
     const fetchCount = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
@@ -269,7 +270,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
     // Verify card view is active
-    await expect(page.locator('#archive-view')).toHaveValue('card');
+    await expectArchiveViewSelected(page, 'card');
 
     // Verify parent context stub exists
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
@@ -327,7 +328,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
     // Switch to index view
-    await page.locator('#archive-view').selectOption('index');
+    await selectArchiveView(page, 'index');
 
     // Verify index row exists
     const indexRow = page.locator('.pr-archive-index-item[data-id="comment-test"]');
@@ -395,7 +396,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
     // Switch to card view
-    await page.locator('#archive-view').selectOption('card');
+    await selectArchiveView(page, 'card');
 
     // Get parent stub
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
@@ -476,7 +477,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
 
     // Switch to thread-full (triggers fetch)
-    await page.locator('#archive-view').selectOption('thread-full');
+    await selectArchiveView(page, 'thread-full');
 
     // Verify fetch occurred
     await expect.poll(async () => page.evaluate(() => (window as any).__TEST_FETCH_COUNT__)).toBeGreaterThan(0);
@@ -487,16 +488,16 @@ test.describe('User Archive Context Type & View Modes', () => {
     await expect(page.locator('.pr-comment[data-id="comment-parent"]')).toBeVisible();
 
     // Switch to card view
-    await page.locator('#archive-view').selectOption('card');
-    await expect(page.locator('#archive-view')).toHaveValue('card');
+    await selectArchiveView(page, 'card');
+    await expectArchiveViewSelected(page, 'card');
 
     // Verify context still exists (not re-fetched but persisted)
     const fetchCountAfterCard = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
     expect(fetchCountAfterCard).toBe(fetchCountAfterFirst); // No additional fetches
 
     // Switch back to thread-full
-    await page.locator('#archive-view').selectOption('thread-full');
-    await expect(page.locator('#archive-view')).toHaveValue('thread-full');
+    await selectArchiveView(page, 'thread-full');
+    await expectArchiveViewSelected(page, 'thread-full');
 
     // Verify still no additional fetches
     const fetchCountAfterReturn = await page.evaluate(() => (window as any).__TEST_FETCH_COUNT__);
@@ -506,7 +507,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await expect(page.locator('.pr-comment[data-id="comment-parent"]').first()).toBeVisible();
   });
 
-  test('[PR-UARCH-33] isThreadMode helper identifies thread variants', async ({ page }) => {
+  test('[PR-UARCH-33] isThreadMode helper and sort constraints apply across thread variants', async ({ page }) => {
     const userId = 'u-test-user';
     const username = 'TestUser';
 
@@ -527,25 +528,49 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-    // Verify thread modes disable Reply To sort option
-    await page.locator('#archive-view').selectOption('card');
-    await expect(page.locator('#archive-view')).toHaveValue('card');
-    
+    // Verify thread modes disable Reply To sort option and normalize selected sort.
+    await selectArchiveView(page, 'card');
+    await expectArchiveViewSelected(page, 'card');
+
     // Reply To should be enabled in card view
+    const sortSelect = page.locator('#archive-sort');
     const replyToOptionCard = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);
     expect(replyToOptionCard).toBe(false);
+    await sortSelect.selectOption('replyTo');
+    await expect(sortSelect).toHaveValue('replyTo');
+
+    // Relevance should be query-gated while no content query is present.
+    const relevanceOptionCard = page.locator('#archive-sort option[value="relevance"]');
+    const relevanceCardDisabled = await relevanceOptionCard.evaluate(el => (el as HTMLOptionElement).disabled);
+    expect(relevanceCardDisabled).toBe(true);
+    const relevanceCardTitle = await relevanceOptionCard.evaluate(el => (el as HTMLOptionElement).title);
+    expect(relevanceCardTitle).toContain('requires a search query');
+
+    await page.locator('#archive-search').fill('test');
+    await expect.poll(async () =>
+      relevanceOptionCard.evaluate(el => (el as HTMLOptionElement).disabled)
+    ).toBe(false);
 
     // Switch to thread-full
-    await page.locator('#archive-view').selectOption('thread-full');
-    await expect(page.locator('#archive-view')).toHaveValue('thread-full');
+    await selectArchiveView(page, 'thread-full');
+    await expectArchiveViewSelected(page, 'thread-full');
 
-    // Reply To should be disabled in thread view
+    // Reply To should be disabled in thread view and active sort should normalize to date.
     const replyToOptionThread = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);
     expect(replyToOptionThread).toBe(true);
+    const replyToTitleThread = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).title);
+    expect(replyToTitleThread).toContain('Not available in thread view');
+    await expect(sortSelect).toHaveValue('date');
+
+    const relevanceOptionThread = page.locator('#archive-sort option[value="relevance"]');
+    const relevanceThreadDisabled = await relevanceOptionThread.evaluate(el => (el as HTMLOptionElement).disabled);
+    expect(relevanceThreadDisabled).toBe(true);
+    const relevanceThreadTitle = await relevanceOptionThread.evaluate(el => (el as HTMLOptionElement).title);
+    expect(relevanceThreadTitle).toContain('Not available in thread view');
 
     // Switch to thread-placeholder
-    await page.locator('#archive-view').selectOption('thread-placeholder');
-    await expect(page.locator('#archive-view')).toHaveValue('thread-placeholder');
+    await selectArchiveView(page, 'thread-placeholder');
+    await expectArchiveViewSelected(page, 'thread-placeholder');
 
     // Reply To should still be disabled
     const replyToOptionPlaceholder = await page.locator('#archive-sort option[value="replyTo"]').evaluate(el => (el as HTMLOptionElement).disabled);

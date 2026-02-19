@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
+import { selectArchiveView } from './helpers/archiveControls';
 
 test.describe('Power Reader Archive Sync', () => {
     let scriptContent: string;
@@ -282,7 +283,7 @@ if (query.includes('GetCommentsByIds')) {
   await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
   // Switch to Thread View (triggers context fetch)
-  await page.locator('#archive-view').selectOption('thread-full');
+  await selectArchiveView(page, 'thread-full');
 
   // Wait for thread view to render with parent context
   await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
@@ -503,7 +504,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         await page.evaluate(() => { (window as any).__CTX_FETCH_COUNT__ = 0; });
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-context-parent"]')).toContainText('Cached parent full body');
         const firstRunFetches = await page.evaluate(() => (window as any).__CTX_FETCH_COUNT__);
         expect(firstRunFetches).toBeGreaterThan(0);
@@ -536,7 +537,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         await page.evaluate(() => { (window as any).__CTX_FETCH_COUNT__ = 0; });
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-context-parent"]')).toContainText('Cached parent full body');
         const secondRunFetches = await page.evaluate(() => (window as any).__CTX_FETCH_COUNT__);
         expect(secondRunFetches).toBe(0);
@@ -645,11 +646,11 @@ return { data: {} };
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-owned-parent"]')).toBeVisible();
 
         // Return to card view and ensure canonical full body still exists.
-        await page.locator('#archive-view').selectOption('card');
+        await selectArchiveView(page, 'card');
         await expect(page.locator('.pr-post[data-id="p-owned"]')).toContainText('Canonical full post body survives context merge');
     });
 

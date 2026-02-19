@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
+import {
+    expectArchiveScopeSelected,
+    expectArchiveViewSelected,
+    selectArchiveScope,
+    selectArchiveView
+} from './helpers/archiveControls';
 
 test.describe('Power Reader Archive Route', () => {
     let scriptContent: string;
@@ -91,7 +97,7 @@ test.describe('Power Reader Archive Route', () => {
         await expect(firstItemTitle).toHaveText('New Low Score Post');
 
         // Test View Mode Switching (To Index)
-        await page.locator('#archive-view').selectOption('index');
+        await selectArchiveView(page, 'index');
         await expect(page.locator('.pr-archive-index-item').first()).toBeVisible();
         await expect(page.locator('.pr-archive-index-item')).toHaveCount(2);
 
@@ -290,7 +296,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Verify Thread Structure - uses Power Reader's standard post/comment classes
         const rootPost = page.locator('.pr-post');
@@ -370,7 +376,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Verify both posts are rendered
         await expect(page.locator('.pr-post')).toHaveCount(2);
@@ -447,7 +453,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Verify both posts are rendered
         await expect(page.locator('.pr-post')).toHaveCount(2);
@@ -554,6 +560,81 @@ return { data: {} };
         await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
     });
 
+    test('search syntax help expands and example clicks execute queries [PR-UARCH-08]', async ({ page }) => {
+        const userId = 'u-help-user';
+        const userObj = { _id: userId, username: 'Help_User', displayName: 'Help User', slug: 'help-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: ${JSON.stringify(userObj)} } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return {
+                        data: {
+                            posts: {
+                                results: [
+                                    {
+                                        _id: 'p-help-1',
+                                        title: 'Alignment Tax Primer',
+                                        slug: 'alignment-tax-primer',
+                                        pageUrl: 'https://lesswrong.com/posts/p-help-1',
+                                        postedAt: '2025-01-02T12:00:00Z',
+                                        baseScore: 10,
+                                        voteCount: 5,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Alignment tax in practice</p>',
+                                        contents: { markdown: 'Alignment tax in practice' },
+                                        user: ${JSON.stringify(userObj)}
+                                    },
+                                    {
+                                        _id: 'p-help-2',
+                                        title: 'Unrelated Post',
+                                        slug: 'unrelated-post',
+                                        pageUrl: 'https://lesswrong.com/posts/p-help-2',
+                                        postedAt: '2025-01-01T12:00:00Z',
+                                        baseScore: 20,
+                                        voteCount: 7,
+                                        commentCount: 0,
+                                        htmlBody: '<p>General topic text</p>',
+                                        contents: { markdown: 'General topic text' },
+                                        user: ${JSON.stringify(userObj)}
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                if (query.includes('GetUserComments')) {
+                    return { data: { comments: { results: [] } } };
+                }
+                return { data: {} };
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Help_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const helpDetails = page.locator('#archive-search-help');
+        await expect(helpDetails).toBeVisible();
+        await expect(helpDetails).not.toHaveAttribute('open', '');
+
+        await page.locator('#archive-search-help > summary').click();
+        await expect(helpDetails).toHaveAttribute('open', '');
+
+        await page.locator('.pr-search-example[data-query=\'"alignment tax" -type:comment\']').click();
+
+        await expect(page.locator('#archive-search')).toHaveValue('"alignment tax" -type:comment');
+        await expect.poll(() =>
+            page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')
+        ).toBe('archive-search');
+        await expect(page.locator('.pr-item')).toHaveCount(1);
+        await expect(page.locator('.pr-item h2')).toHaveText('Alignment Tax Primer');
+    });
+
     test('search index refreshes after in-place canonical load-all merge [PR-UARCH-22]', async ({ page }) => {
         const userId = 'u-search-refresh-user';
         const userObj = { _id: userId, username: 'SearchRefresh_User', displayName: 'Search Refresh User', slug: 'search-refresh-user', karma: 100 };
@@ -652,7 +733,7 @@ return { data: {} };
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         const loadAllBtn = page.locator('.pr-post[data-id="p-load"] [data-action="load-all-comments"]');
         await expect(loadAllBtn).toBeVisible();
         await loadAllBtn.click();
@@ -665,6 +746,207 @@ return { data: {} };
             await expect(page.locator('.pr-comment[data-id="c-load-new"]')).toHaveCount(1);
             await expect(page.locator('.pr-comment[data-id="c-load-authored"]')).toHaveCount(0);
         }).toPass({ timeout: 5000 });
+    });
+
+    test('[PR-UARCH-46] archive search highlights matches and centers index snippets', async ({ page }) => {
+        const userId = 'u-highlight-user';
+        const username = 'Highlight_User';
+        const userObj = { _id: userId, username, displayName: 'Highlight User', slug: 'highlight-user', karma: 100 };
+        const matchBody = `BEGINNING_SENTINEL ${'x '.repeat(90)}alignment tax ${'y '.repeat(90)}`;
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-highlight-hit',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 12,
+            voteCount: 2,
+            htmlBody: '<p>${matchBody}</p>',
+            contents: { markdown: ${JSON.stringify(matchBody)} },
+            user: ${JSON.stringify(userObj)},
+            post: { _id: 'p-highlight', title: 'Highlight Post', pageUrl: 'https://lesswrong.com/posts/p-highlight', user: ${JSON.stringify(userObj)} },
+            parentComment: null,
+            postId: 'p-highlight',
+            parentCommentId: null
+          },
+          {
+            _id: 'c-highlight-miss',
+            postedAt: '2025-01-09T12:00:00Z',
+            baseScore: 1,
+            voteCount: 1,
+            htmlBody: '<p>No relevant terms in this comment.</p>',
+            contents: { markdown: 'No relevant terms in this comment.' },
+            user: ${JSON.stringify(userObj)},
+            post: { _id: 'p-highlight', title: 'Highlight Post', pageUrl: 'https://lesswrong.com/posts/p-highlight', user: ${JSON.stringify(userObj)} },
+            parentComment: null,
+            postId: 'p-highlight',
+            parentCommentId: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=alignment`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"]')).toHaveCount(1);
+        await expect(page.locator('.pr-comment[data-id="c-highlight-miss"]')).toHaveCount(0);
+        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
+        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveText(/alignment/i);
+
+        await selectArchiveView(page, 'index');
+
+        const hitRow = page.locator('.pr-archive-index-item[data-id="c-highlight-hit"]');
+        const hitSnippet = hitRow.locator('.pr-index-title');
+        await expect(hitRow).toBeVisible();
+        await expect(hitSnippet).toContainText('alignment tax');
+        await expect(hitSnippet).not.toContainText('BEGINNING_SENTINEL');
+        await expect(hitSnippet.locator('mark.pr-search-highlight')).toHaveCount(1);
+
+        await hitRow.click();
+        await expect(page.locator('.pr-index-expanded[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
+
+        await page.locator('.pr-index-collapse-btn[data-id="c-highlight-hit"]').click();
+        await expect(page.locator('.pr-archive-index-item[data-id="c-highlight-hit"] .pr-index-title mark.pr-search-highlight')).toHaveCount(1);
+    });
+
+    test('archive facets add, replace, and remove structured query fragments', async ({ page }) => {
+        const userId = 'u-facet-user';
+        const username = 'Facet_User';
+        const userObj = { _id: userId, username, displayName: 'Facet User', slug: 'facet-user', karma: 100 };
+        const authorA = { _id: 'u-author-a', username: 'AuthorA', displayName: 'Facet Author A', slug: 'author-a', karma: 10 };
+        const authorB = { _id: 'u-author-b', username: 'AuthorB', displayName: 'Facet Author B', slug: 'author-b', karma: 11 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-facet-a',
+            title: 'Facet Post A',
+            slug: 'facet-post-a',
+            pageUrl: 'https://lesswrong.com/posts/p-facet-a',
+            postedAt: '2025-02-10T12:00:00Z',
+            baseScore: 20,
+            voteCount: 5,
+            commentCount: 0,
+            htmlBody: '<p>Post by author A</p>',
+            contents: { markdown: 'Post by author A' },
+            user: ${JSON.stringify(authorA)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c-facet-a',
+            postedAt: '2025-01-15T12:00:00Z',
+            baseScore: 6,
+            voteCount: 1,
+            htmlBody: '<p>Comment by author A</p>',
+            contents: { markdown: 'Comment by author A' },
+            user: ${JSON.stringify(authorA)},
+            post: { _id: 'p-facet-a', title: 'Facet Post A', pageUrl: 'https://lesswrong.com/posts/p-facet-a', user: ${JSON.stringify(authorA)} },
+            parentComment: null,
+            postId: 'p-facet-a',
+            parentCommentId: null
+          },
+          {
+            _id: 'c-facet-b',
+            postedAt: '2024-03-01T12:00:00Z',
+            baseScore: 8,
+            voteCount: 2,
+            htmlBody: '<p>Comment by author B</p>',
+            contents: { markdown: 'Comment by author B' },
+            user: ${JSON.stringify(authorB)},
+            post: { _id: 'p-facet-b', title: 'Facet Post B', pageUrl: 'https://lesswrong.com/posts/p-facet-b', user: ${JSON.stringify(authorB)} },
+            parentComment: null,
+            postId: 'p-facet-b',
+            parentCommentId: null
+          }
+        ]
+      }
+    }
+  };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('#archive-facets')).toBeVisible();
+        const searchInput = page.locator('#archive-search');
+        await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' })).toBeVisible();
+        await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author B' })).toBeVisible();
+        const postsChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Posts' });
+
+        await postsChip.click();
+        await expect(searchInput).toHaveValue('type:post');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBe('type:post');
+        await expect(page.locator('#archive-status')).toContainText('1 search result');
+
+        await postsChip.click();
+        await expect(searchInput).toHaveValue('');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+        await expect(page.locator('#archive-status')).toContainText('3 search results');
+
+        await searchInput.fill('date:2024-01-01..2025-12-31');
+        await page.keyboard.press('Enter');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2024-01-01..2025-12-31');
+        await expect(page.locator('#archive-status')).toContainText('3 search results');
+
+        const year2025Chip = page.locator('#archive-facets .pr-facet-chip', { hasText: '2025' });
+        await year2025Chip.click();
+        await expect(searchInput).toHaveValue('date:2025-01-01..2025-12-31');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2025-01-01..2025-12-31');
+        await expect(page.locator('#archive-status')).toContainText('2 search results');
+
+        await searchInput.fill('author:facet-author-a');
+        await page.keyboard.press('Enter');
+        await expect(searchInput).toHaveValue('author:facet-author-a');
+        await expect(page.locator('#archive-status')).toContainText('2 search results');
+
+        const authorAChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' });
+        await expect(authorAChip).toHaveClass(/active/);
+        await authorAChip.click();
+        await expect(searchInput).toHaveValue('');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
     });
 
     test('invalid regex literals are excluded with warning [PR-UARCH-08]', async ({ page }) => {
@@ -739,6 +1021,7 @@ return { data: {} };
         }).toPass({ timeout: 5000 });
 
         await expect(page.locator('#archive-search-status')).toContainText('Invalid regex literal');
+        await expect(page.locator('#archive-search-status .pr-status-chip.pr-status-warning')).toContainText('Invalid regex literal');
     });
 
     test('structured field operators filter deterministically [PR-UARCH-08]', async ({ page }) => {
@@ -841,7 +1124,7 @@ return { data: {} };
         }).toPass({ timeout: 5000 });
     });
 
-    test('top status line reports search result count [PR-UARCH-39]', async ({ page }) => {
+    test('top status line and toolbar result count report search state [PR-UARCH-39]', async ({ page }) => {
         const userId = 'u-status-count-user';
         const userObj = { _id: userId, username: 'StatusCount_User', displayName: 'Status Count User', slug: 'status-count-user', karma: 100 };
 
@@ -900,13 +1183,116 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         const statusEl = page.locator('#archive-status');
+        const resultCountEl = page.locator('#archive-result-count');
         await expect(statusEl).toContainText('2 search results');
+        await expect(resultCountEl).toHaveText('2 items');
+
+        await page.evaluate(() => {
+            const resultCount = document.getElementById('archive-result-count');
+            const feed = document.getElementById('archive-feed');
+            (window as any).__TEST_LOADING_SEEN__ = false;
+            if (!resultCount || !feed) return;
+            const observer = new MutationObserver(() => {
+                if (resultCount.classList.contains('is-loading') || feed.classList.contains('is-loading')) {
+                    (window as any).__TEST_LOADING_SEEN__ = true;
+                }
+            });
+            observer.observe(resultCount, { attributes: true, attributeFilter: ['class'] });
+            observer.observe(feed, { attributes: true, attributeFilter: ['class'] });
+            (window as any).__TEST_LOADING_OBSERVER__ = observer;
+        });
 
         await page.locator('#archive-search').fill('first');
         await expect(statusEl).toContainText('1 search result');
+        await expect(resultCountEl).toContainText('1 result');
+        await expect(resultCountEl).toContainText('ms');
 
         await page.locator('#archive-search').fill('definitely-no-match-token');
         await expect(statusEl).toContainText('0 search results');
+        await expect(resultCountEl).toContainText('0 results');
+
+        await page.locator('#archive-search-clear').click();
+        await expect(resultCountEl).toHaveText('2 items');
+
+        await expect.poll(() => page.evaluate(() => Boolean((window as any).__TEST_LOADING_SEEN__))).toBe(true);
+        await expect.poll(() => page.evaluate(() => {
+            const resultCount = document.getElementById('archive-result-count');
+            const feed = document.getElementById('archive-feed');
+            return Boolean(resultCount && feed && !resultCount.classList.contains('is-loading') && !feed.classList.contains('is-loading'));
+        })).toBe(true);
+
+        await page.evaluate(() => {
+            const observer = (window as any).__TEST_LOADING_OBSERVER__ as MutationObserver | undefined;
+            observer?.disconnect();
+            delete (window as any).__TEST_LOADING_OBSERVER__;
+        });
+    });
+
+    test('directive-only queries keep toolbar count in items mode after canonicalization [PR-UARCH-39]', async ({ page }) => {
+        const userId = 'u-directive-count-user';
+        const userObj = { _id: userId, username: 'DirectiveCount_User', displayName: 'Directive Count User', slug: 'directive-count-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: ${JSON.stringify(userObj)} } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return {
+                        data: {
+                            posts: {
+                                results: [
+                                    {
+                                        _id: 'p-directive-1',
+                                        title: 'Directive First Post',
+                                        slug: 'directive-first-post',
+                                        pageUrl: 'https://lesswrong.com/posts/p-directive-1',
+                                        postedAt: '2025-01-05T12:00:00Z',
+                                        baseScore: 5,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Alpha body</p>',
+                                        contents: { markdown: 'Alpha body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    },
+                                    {
+                                        _id: 'p-directive-2',
+                                        title: 'Directive Second Post',
+                                        slug: 'directive-second-post',
+                                        pageUrl: 'https://lesswrong.com/posts/p-directive-2',
+                                        postedAt: '2025-01-04T12:00:00Z',
+                                        baseScore: 3,
+                                        voteCount: 1,
+                                        commentCount: 0,
+                                        htmlBody: '<p>Beta body</p>',
+                                        contents: { markdown: 'Beta body' },
+                                        user: ${JSON.stringify(userObj)}
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                if (query.includes('GetUserComments')) {
+                    return { data: { comments: { results: [] } } };
+                }
+                return { data: {} };
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader?view=archive&username=DirectiveCount_User', { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        const resultCountEl = page.locator('#archive-result-count');
+        await expect(resultCountEl).toHaveText('2 items');
+
+        await page.locator('#archive-search').fill('scope:all');
+        await expect(resultCountEl).toHaveText('2 items');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
     });
 
     test('URL restores structured query/sort/scope and canonicalizes in-query scope [PR-UARCH-08]', async ({ page }) => {
@@ -987,7 +1373,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         await expect(page.locator('#archive-sort')).toHaveValue('score-asc');
-        await expect(page.locator('#archive-scope')).toHaveValue('all');
+        await expectArchiveScopeSelected(page, 'all');
         await expect(page.locator('.pr-post[data-id="p-url-1"]')).toHaveCount(1);
         await expect(page.locator('.pr-post[data-id="p-url-2"]')).toHaveCount(1);
         await expect(page.locator('.pr-comment[data-id="c-url-1"]')).toHaveCount(0);
@@ -1062,11 +1448,11 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Load parent context into runtime maps.
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
 
         // Search for context-only hit.
-        await page.locator('#archive-scope').selectOption('all');
+        await selectArchiveScope(page, 'all');
         await page.locator('#archive-search').fill('author:"other scope user"');
 
         await expect(async () => {
@@ -1075,18 +1461,18 @@ return { data: {} };
         }).toPass({ timeout: 5000 });
 
         // Context hit should remain actionable in index expand path.
-        await page.locator('#archive-view').selectOption('index');
+        await selectArchiveView(page, 'index');
         const indexRow = page.locator('.pr-archive-index-item').first();
         await expect(indexRow).toContainText('Parent context comment by other user');
         await indexRow.click();
         await expect(page.locator('.pr-index-expanded .pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
 
         // And still render in thread mode without getting dropped.
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
     });
 
-    test('all sort modes work: date-asc, score-asc, replyTo [PR-UARCH-09]', async ({ page }) => {
+    test('all sort modes work: date-asc, score-asc, replyTo, relevance gating [PR-UARCH-09]', async ({ page }) => {
         const userId = 'u-sort-user';
         const username = `Sort_User_${Date.now()}`;
         const userObj = { _id: userId, username, displayName: 'Sort User', slug: 'sort-user', karma: 100 };
@@ -1175,6 +1561,28 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         const sortSelect = page.locator('#archive-sort');
+        const relevanceOption = page.locator('#archive-sort option[value="relevance"]');
+
+        const relevanceInitiallyDisabled = await relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled);
+        expect(relevanceInitiallyDisabled).toBe(true);
+        const relevanceInitialTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
+        expect(relevanceInitialTitle).toContain('requires a search query');
+
+        await page.locator('#archive-search').fill('high');
+        await expect.poll(async () =>
+            relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
+        ).toBe(false);
+        const relevanceEnabledTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
+        expect(relevanceEnabledTitle).toBe('');
+
+        await sortSelect.selectOption('relevance');
+        await expect(sortSelect).toHaveValue('relevance');
+
+        await page.locator('#archive-search').fill('');
+        await expect(sortSelect).toHaveValue('date');
+        await expect.poll(async () =>
+            relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
+        ).toBe(true);
 
         // Test date-asc (oldest first)
         await sortSelect.selectOption('date-asc');
@@ -1252,20 +1660,21 @@ return { data: {} };
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
-        const viewSelect = page.locator('#archive-view');
-
         // Test Card View (default)
-        await viewSelect.selectOption('card');
+        await selectArchiveView(page, 'card');
+        await expectArchiveViewSelected(page, 'card');
         await expect(page.locator('.pr-item')).toBeVisible();
         await expect(page.locator('.pr-archive-index-item')).toHaveCount(0);
 
         // Test Index View
-        await viewSelect.selectOption('index');
+        await selectArchiveView(page, 'index');
+        await expectArchiveViewSelected(page, 'index');
         await expect(page.locator('.pr-archive-index-item')).toBeVisible();
         await expect(page.locator('.pr-archive-index-item')).toHaveCount(1);
 
         // Test Thread View - now uses Power Reader's standard post/comment classes
-        await viewSelect.selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
+        await expectArchiveViewSelected(page, 'thread-full');
         await expect(page.locator('.pr-post')).toBeVisible();
     });
 
@@ -1444,7 +1853,6 @@ return { data: {} };
         // Event listeners hold a reference to ReaderState, so after a rerender
         // (which mutates the state in place), handlers should still work.
         const username = 'rerender-test';
-        const userId = 'u-rerender';
 
         await setupMockEnvironment(page, {
             mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
@@ -1511,7 +1919,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Wait for thread view to render
         await expect(page.locator('.pr-post')).toBeVisible();
@@ -1601,7 +2009,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Wait for thread view to render
         await expect(page.locator('.pr-comment[data-id="c-vote-test"]')).toBeVisible();
@@ -1685,7 +2093,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Select karma sort (high to low)
         await page.locator('#archive-sort').selectOption('score');
@@ -1719,8 +2127,6 @@ return { data: {} };
 
     test('[PR-UARCH-25] context comments stay out of canonical items but render nested parent context in card view', async ({ page }) => {
         const userId = 'u-context-test';
-        const userObj = { _id: userId, username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
         await setupMockEnvironment(page, {
             mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
@@ -1788,14 +2194,14 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Step 1: Switch to Thread View - this loads parent context
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Wait for thread view to render with context
         await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
         await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
 
         // Step 2: Switch to Card View - context parent should render above child (nested)
-        await page.locator('#archive-view').selectOption('card');
+        await selectArchiveView(page, 'card');
 
         // Wait for card view to render
         await expect(page.locator('.pr-archive-item')).toHaveCount(1);
@@ -1806,7 +2212,7 @@ return { data: {} };
         await expect(parentInCard.locator('.pr-replies .pr-comment[data-id="c-child"]')).toHaveCount(1);
 
         // Step 3: Switch to Index View - context should also NOT appear here
-        await page.locator('#archive-view').selectOption('index');
+        await selectArchiveView(page, 'index');
 
         // Wait for index view to render
         await expect(page.locator('.pr-archive-index-item')).toBeVisible();
@@ -1930,7 +2336,7 @@ return { data: {} };
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
         // Switch to Thread View (has post action buttons and link previews)
-        await page.locator('#archive-view').selectOption('thread-full');
+        await selectArchiveView(page, 'thread-full');
 
         // Wait for initial render
         await expect(page.locator('.pr-post')).toHaveCount(1);
@@ -1956,5 +2362,258 @@ return { data: {} };
 
         // If we get here without errors, link previews and post action buttons are working
         // The main assertion is that no errors occur (which would happen if hooks weren't reinitialized)
+    });
+
+    test('[PR-UARCH-42] clear button clears query and keeps scope/sort URL state in sync', async ({ page }) => {
+        const userId = 'u-clear-search';
+        const username = 'ClearSearch_User';
+        const userObj = { _id: userId, username, displayName: 'Clear Search User', slug: 'clear-search-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-match',
+            title: 'Optimizer Notes',
+            slug: 'optimizer-notes',
+            pageUrl: 'https://lesswrong.com/posts/p-match',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 20,
+            voteCount: 10,
+            commentCount: 0,
+            htmlBody: '<p>Contains optimizer details</p>',
+            contents: { markdown: 'Contains optimizer details' },
+            user: ${JSON.stringify(userObj)}
+          },
+          {
+            _id: 'p-other',
+            title: 'Unrelated Title',
+            slug: 'unrelated-title',
+            pageUrl: 'https://lesswrong.com/posts/p-other',
+            postedAt: '2025-01-09T12:00:00Z',
+            baseScore: 5,
+            voteCount: 1,
+            commentCount: 0,
+            htmlBody: '<p>No matching keyword here</p>',
+            contents: { markdown: 'No matching keyword here' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=optimizer&sort=date`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('#archive-search')).toHaveValue('optimizer');
+        await expect(page.locator('#archive-search-clear')).toBeVisible();
+        await expect(page.locator('.pr-item')).toHaveCount(1);
+
+        await page.locator('#archive-search-clear').click();
+
+        await expect(page.locator('#archive-search')).toHaveValue('');
+        await expect.poll(async () => page.url()).not.toContain('q=');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('sort')).toBe('date');
+        await expect(page.locator('.pr-item')).toHaveCount(2);
+    });
+
+    test('[PR-UARCH-43] keyboard shortcuts focus search and escape clears then blurs', async ({ page }) => {
+        const userId = 'u-keyboard-search';
+        const username = 'KeyboardSearch_User';
+        const userObj = { _id: userId, username, displayName: 'Keyboard Search User', slug: 'keyboard-search-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-keyboard',
+            title: 'Keyboard Shortcut Post',
+            slug: 'keyboard-shortcut-post',
+            pageUrl: 'https://lesswrong.com/posts/p-keyboard',
+            postedAt: '2025-01-08T12:00:00Z',
+            baseScore: 15,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Keyboard shortcut content</p>',
+            contents: { markdown: 'Keyboard shortcut content' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await page.locator('#archive-status').click();
+        await page.keyboard.press('/');
+        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
+
+        const searchInput = page.locator('#archive-search');
+        await searchInput.fill('foo');
+        await page.keyboard.press('/');
+        await expect(searchInput).toHaveValue('foo/');
+
+        await page.keyboard.press('Escape');
+        await expect(searchInput).toHaveValue('');
+        await expect.poll(async () => page.url()).not.toContain('q=');
+        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
+
+        await page.keyboard.press('Escape');
+        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).not.toBe('archive-search');
+    });
+
+    test('[PR-UARCH-44] reset restores query-driven scope directives after manual scope selection', async ({ page }) => {
+        const userId = 'u-reset-scope';
+        const username = 'ResetScope_User';
+        const userObj = { _id: userId, username, displayName: 'Reset Scope User', slug: 'reset-scope-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-reset',
+            title: 'Reset Scope Post',
+            slug: 'reset-scope-post',
+            pageUrl: 'https://lesswrong.com/posts/p-reset',
+            postedAt: '2025-01-07T12:00:00Z',
+            baseScore: 11,
+            voteCount: 2,
+            commentCount: 0,
+            htmlBody: '<p>Reset scope body</p>',
+            contents: { markdown: 'Reset scope body' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await selectArchiveScope(page, 'all');
+        await expectArchiveScopeSelected(page, 'all');
+
+        await page.locator('#archive-reset-filters').click();
+        await expectArchiveScopeSelected(page, 'authored');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBeNull();
+
+        await page.locator('#archive-search').fill('scope:all');
+
+        await expectArchiveScopeSelected(page, 'all');
+        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
+    });
+
+    test('[PR-UARCH-45] scope/view controls support ArrowUp and ArrowDown keyboard navigation', async ({ page }) => {
+        const userId = 'u-keyboard-arrows';
+        const username = 'KeyboardArrow_User';
+        const userObj = { _id: userId, username, displayName: 'Keyboard Arrow User', slug: 'keyboard-arrow-user', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-arrows',
+            title: 'Arrow Keys Post',
+            slug: 'arrow-keys-post',
+            pageUrl: 'https://lesswrong.com/posts/p-arrows',
+            postedAt: '2025-01-06T12:00:00Z',
+            baseScore: 9,
+            voteCount: 1,
+            commentCount: 0,
+            htmlBody: '<p>Arrow key body</p>',
+            contents: { markdown: 'Arrow key body' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await page.locator('#archive-scope [data-value="authored"]').focus();
+        await page.keyboard.press('ArrowDown');
+        await expectArchiveScopeSelected(page, 'all');
+        await page.keyboard.press('ArrowUp');
+        await expectArchiveScopeSelected(page, 'authored');
+
+        await page.locator('#archive-view [data-value="card"]').focus();
+        await page.keyboard.press('ArrowDown');
+        await expectArchiveViewSelected(page, 'index');
+        await page.keyboard.press('ArrowUp');
+        await expectArchiveViewSelected(page, 'card');
     });
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.683
+// @version    1.2.684
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2673,7 +2673,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.683"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.684"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6268,7 +6268,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6414,7 +6414,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -8997,557 +8997,6 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     networkResults.forEach((c) => mergedById.set(c._id, c));
     return Array.from(mergedById.values());
   };
-  let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
-  const updateRenderLimit = (limit) => {
-    currentRenderLimit = limit;
-  };
-  const resetRenderLimit = () => {
-    currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
-  };
-  const incrementRenderLimit = (delta) => {
-    currentRenderLimit += delta;
-  };
-  const ensureContextForItems = async (items, state2) => {
-    const missingIds = new Set();
-    const commentPostIdMap = new Map();
-    for (const item of items) {
-      if ("title" in item) continue;
-      const comment = item;
-      const itemPostId = comment.postId;
-      const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
-      if (immediateParentId && !state2.commentById.has(immediateParentId)) {
-        missingIds.add(immediateParentId);
-        if (!commentPostIdMap.has(immediateParentId)) {
-          commentPostIdMap.set(immediateParentId, itemPostId);
-        }
-      }
-      let current = comment.parentComment;
-      let depth = 0;
-      while (current && depth < 5) {
-        const currentId = typeof current._id === "string" ? current._id : null;
-        if (currentId && !state2.commentById.has(currentId)) {
-          missingIds.add(currentId);
-          if (!commentPostIdMap.has(currentId)) {
-            commentPostIdMap.set(currentId, itemPostId);
-          }
-        }
-        if (current.parentComment) {
-          current = current.parentComment;
-        } else {
-          break;
-        }
-        depth++;
-      }
-    }
-    if (missingIds.size > 0) {
-      Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
-      const fetched = await fetchCommentsByIds(Array.from(missingIds), state2.archiveUsername || void 0);
-      getUIHost().mergeComments(fetched, true, commentPostIdMap);
-      ensurePlaceholderContext(items, state2);
-    }
-  };
-  const ensurePlaceholderContext = (items, state2) => {
-    const stubs = [];
-    const seen = new Set();
-    for (const item of items) {
-      if ("title" in item) continue;
-      const comment = item;
-      let current = comment.parentComment;
-      while (current?._id) {
-        if (!state2.commentById.has(current._id) && !seen.has(current._id)) {
-          seen.add(current._id);
-          stubs.push(parentRefToStub(current, comment));
-        }
-        current = current.parentComment;
-      }
-    }
-    if (stubs.length > 0) {
-      getUIHost().mergeComments(stubs, true);
-    }
-  };
-  const renderArchiveFeed = async (container, items, viewMode, state2, sortBy) => {
-    if (items.length === 0) {
-      container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
-      return;
-    }
-    const visibleItems = items.slice(0, currentRenderLimit);
-    const loadMoreBtn = document.getElementById("archive-load-more");
-    if (loadMoreBtn) {
-      loadMoreBtn.style.display = items.length > currentRenderLimit ? "block" : "none";
-      if (items.length > currentRenderLimit && loadMoreBtn.querySelector("button")) {
-        loadMoreBtn.querySelector("button").textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
-      }
-    }
-    if (viewMode === "index") {
-      container.innerHTML = visibleItems.map((item) => renderIndexItem(item)).join("");
-    } else if (isThreadMode(viewMode)) {
-      if (viewMode === "thread-full") {
-        await ensureContextForItems(visibleItems, state2);
-      } else {
-        ensurePlaceholderContext(visibleItems, state2);
-      }
-      renderThreadView(container, visibleItems, state2, sortBy);
-    } else {
-      container.innerHTML = visibleItems.map((item) => renderCardItem(item, state2)).join("");
-    }
-  };
-  const renderThreadView = (container, items, state2, sortBy) => {
-    const visibleCommentIds = new Set();
-    const inclusionCommentIds = new Set();
-    items.forEach((item) => {
-      if (!("title" in item)) {
-        visibleCommentIds.add(item._id);
-        inclusionCommentIds.add(item._id);
-        const comment = item;
-        let currentId = comment.parentCommentId || comment.parentComment?._id || null;
-        let depth = 0;
-        while (currentId && depth < 10) {
-          if (state2.commentById.has(currentId)) {
-            inclusionCommentIds.add(currentId);
-            const parent = state2.commentById.get(currentId);
-            currentId = parent.parentCommentId || parent.parentComment?._id || null;
-          } else {
-            break;
-          }
-          depth++;
-        }
-      }
-    });
-    const postGroups = new Map();
-    const visiblePostIds = new Set();
-    items.forEach((item) => {
-      if ("title" in item) {
-        visiblePostIds.add(item._id);
-      }
-    });
-    inclusionCommentIds.forEach((commentId) => {
-      const comment = state2.commentById.get(commentId);
-      if (!comment) return;
-      const postId = comment.postId;
-      visiblePostIds.add(postId);
-    });
-    visiblePostIds.forEach((postId) => {
-      const comments = [];
-      let maxDate = new Date(0);
-      let maxScore = Number.NEGATIVE_INFINITY;
-      inclusionCommentIds.forEach((commentId) => {
-        const comment = state2.commentById.get(commentId);
-        if (comment && comment.postId === postId) {
-          comments.push(comment);
-          const commentDate = new Date(comment.postedAt);
-          if (commentDate > maxDate) maxDate = commentDate;
-          if (typeof comment.baseScore === "number" && comment.baseScore > maxScore) {
-            maxScore = comment.baseScore;
-          }
-        }
-      });
-      const post = state2.postById.get(postId);
-      if (post) {
-        const postDate = new Date(post.postedAt);
-        if (postDate > maxDate) maxDate = postDate;
-        if (typeof post.baseScore === "number" && post.baseScore > maxScore) {
-          maxScore = post.baseScore;
-        }
-      }
-      postGroups.set(postId, {
-        postId,
-        comments,
-        maxDate,
-maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
-      });
-    });
-    const sortedGroups = Array.from(postGroups.values());
-    switch (sortBy) {
-      case "date-asc":
-      case "replyTo":
-case "relevance":
-        sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
-        break;
-      case "score":
-        sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
-        break;
-      case "score-asc":
-        sortedGroups.sort((a, b) => a.maxScore - b.maxScore);
-        break;
-      case "date":
-      default:
-        sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
-        break;
-    }
-    container.innerHTML = "";
-    let html2 = "";
-    sortedGroups.forEach((group) => {
-      const post = state2.postById.get(group.postId);
-      const postComments = group.comments;
-      if (!post && postComments.length === 0) return;
-      const postGroup = {
-        postId: group.postId,
-        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
-        comments: postComments,
-        fullPost: post
-      };
-      html2 += renderPostGroup(postGroup, state2);
-    });
-    container.innerHTML = html2;
-  };
-  const parentRefToStub = (ref, sourceComment) => ({
-    _id: ref._id,
-    postedAt: ref.postedAt || "",
-    parentCommentId: ref.parentCommentId || "",
-    user: ref.user ? { ...ref.user, slug: "", karma: 0, htmlBio: "" } : null,
-    postId: sourceComment.postId,
-    post: sourceComment.post ?? null,
-    htmlBody: "",
-    baseScore: typeof ref.baseScore === "number" ? ref.baseScore : 0,
-    voteCount: 0,
-    pageUrl: ref.pageUrl || "",
-    author: ref.user?.username || "",
-    rejected: false,
-    topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
-    parentComment: null,
-    extendedScore: null,
-    afExtendedScore: ref.afExtendedScore ?? null,
-    currentUserVote: null,
-    currentUserExtendedVote: null,
-    contents: { markdown: null },
-    descendentCount: 0,
-    directChildrenCount: 0,
-    contextType: "stub"
-  });
-  const renderCardItem = (item, state2) => {
-    const isPost2 = "title" in item;
-    if (isPost2) {
-      const post = item;
-      const headerHtml = renderPostHeader(post, { isFullPost: true, state: state2 });
-      const bodyHtml = post.htmlBody ? renderPostBody(post, false) : "";
-      return `
-      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
-        ${headerHtml}
-        ${bodyHtml}
-      </div>
-    `;
-    }
-    const comment = item;
-    const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
-    const parentFromState = immediateParentId ? state2.commentById.get(immediateParentId) : null;
-    const isContextParentFromState = !!parentFromState && !!parentFromState.contextType;
-    const parentComment = isContextParentFromState ? parentFromState : comment.parentComment ? parentRefToStub(comment.parentComment, comment) : null;
-    if (!parentComment || parentComment._id === comment._id) {
-      return `<div class="pr-archive-item">${renderComment(comment, state2)}</div>`;
-    }
-    const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
-    return `<div class="pr-archive-item">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
-  };
-  const renderIndexItem = (item) => {
-    const isPost2 = "title" in item;
-    const title = isPost2 ? item.title : (item.htmlBody || "").replace(/<[^>]+>/g, "").slice(0, 100) + "...";
-    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName(item)}`;
-    const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
-    return `
-        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
-            <div class="pr-index-score" style="color: ${item.baseScore > 0 ? "var(--pr-highlight)" : "inherit"}">
-                ${item.baseScore || 0}
-            </div>
-            <div class="pr-index-title">
-                ${escapeHtml(title)}
-            </div>
-            <div class="pr-index-meta">
-                ${context} • ${date}
-            </div>
-        </div>
-    `;
-  };
-  const getInterlocutorName = (item) => {
-    if ("title" in item) return " (Original Post)";
-    const c = item;
-    if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
-    if (c.post?.user?.displayName) return c.post.user.displayName;
-    return "Unknown";
-  };
-  class ArchiveUIHost {
-    archiveState;
-    readerState;
-    feedContainer = null;
-    renderCallback = null;
-    searchStateRevision = 0;
-    canonicalStateRevision = 0;
-    constructor(archiveState, feedContainer, renderCallback) {
-      this.archiveState = archiveState;
-      this.feedContainer = feedContainer;
-      this.renderCallback = renderCallback || null;
-      this.readerState = this.syncReaderState();
-    }
-    syncReaderState() {
-      const state2 = createInitialState();
-      state2.isArchiveMode = true;
-      state2.archiveUsername = this.archiveState.username;
-      const currentUser = window.LessWrong?.params?.currentUser;
-      state2.currentUsername = currentUser?.username || null;
-      state2.currentUserId = currentUser?._id || null;
-      this.archiveState.items.forEach((item) => {
-        if ("title" in item) {
-          state2.posts.push(item);
-          state2.postById.set(item._id, item);
-        } else {
-          state2.comments.push(item);
-          state2.commentById.set(item._id, item);
-        }
-      });
-      rebuildIndexes(state2);
-      return state2;
-    }
-    getReaderState() {
-      return this.readerState;
-    }
-    getSearchStateRevision() {
-      return this.searchStateRevision;
-    }
-    getCanonicalStateRevision() {
-      return this.canonicalStateRevision;
-    }
-    bumpSearchStateRevision() {
-      this.searchStateRevision += 1;
-    }
-    bumpCanonicalStateRevision() {
-      this.canonicalStateRevision += 1;
-    }
-setContainer(container) {
-      this.feedContainer = container;
-    }
-syncItemToCanonical(item) {
-      const id = item._id;
-      const exists = this.archiveState.itemById.has(id);
-      this.archiveState.itemById.set(id, item);
-      if (exists) {
-        const existingIndex = this.archiveState.items.findIndex((i) => i._id === id);
-        if (existingIndex >= 0) {
-          this.archiveState.items[existingIndex] = item;
-        }
-      } else {
-        this.archiveState.items.push(item);
-      }
-      this.bumpCanonicalStateRevision();
-    }
-sortCanonicalItems() {
-      this.archiveState.items.sort((a, b) => {
-        return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
-      });
-    }
-    upsertReaderComment(comment) {
-      const idx = this.readerState.comments.findIndex((c) => c._id === comment._id);
-      if (idx >= 0) {
-        this.readerState.comments[idx] = comment;
-      } else {
-        this.readerState.comments.push(comment);
-      }
-      this.readerState.commentById.set(comment._id, comment);
-    }
-    shouldReplaceExistingComment(existing, incoming, markAsContext) {
-      if (!markAsContext) return true;
-      const existingType = existing.contextType;
-      const incomingType = incoming.contextType;
-      const existingIsStub = existingType === "stub" || existingType === "missing";
-      const incomingIsStub = incomingType === "stub" || incomingType === "missing";
-      const existingHasBody = typeof existing.htmlBody === "string" && existing.htmlBody.trim().length > 0;
-      const incomingHasBody = typeof incoming.htmlBody === "string" && incoming.htmlBody.trim().length > 0;
-      if (existingIsStub && !incomingIsStub) return true;
-      if (!existingHasBody && incomingHasBody) return true;
-      if (incomingType === "fetched" && existingType !== "fetched") return true;
-      return false;
-    }
-    mergeComment(existing, incoming, markAsContext) {
-      const merged = { ...existing, ...incoming };
-      if (existing.forceVisible && !merged.forceVisible) {
-        merged.forceVisible = true;
-      }
-      if (existing.justRevealed && !merged.justRevealed) {
-        merged.justRevealed = true;
-      }
-      if (markAsContext) {
-        const existingType = existing.contextType;
-        const incomingType = incoming.contextType;
-        if (incomingType === "stub" && existingType && existingType !== "stub") {
-          merged.contextType = existingType;
-        } else if (!incomingType) {
-          merged.contextType = existingType || "fetched";
-        }
-      } else {
-        delete merged.contextType;
-      }
-      return merged;
-    }
-    persistContextualData(comments = [], posts = []) {
-      const username = this.archiveState.username;
-      if (!username) return;
-      const contextualComments = comments.filter((comment) => {
-        const type = comment.contextType;
-        if (type === "stub" || type === "missing") return false;
-        return !this.archiveState.itemById.has(comment._id);
-      });
-      const contextualPosts = posts.filter((post) => !this.archiveState.itemById.has(post._id));
-      if (contextualComments.length === 0 && contextualPosts.length === 0) return;
-      void saveContextualItems(username, contextualComments, contextualPosts).catch((e) => {
-        Logger.warn("Failed to persist contextual archive data.", e);
-      });
-    }
-    rerenderAll() {
-      if (!this.feedContainer) return;
-      const existingContext = this.readerState.comments.filter((c) => !this.archiveState.itemById.has(c._id));
-      const existingPosts = this.readerState.posts.filter((p) => !this.archiveState.itemById.has(p._id));
-      this.readerState.comments.length = 0;
-      this.readerState.posts.length = 0;
-      this.readerState.commentById.clear();
-      this.readerState.postById.clear();
-      this.readerState.childrenByParentId.clear();
-      this.archiveState.items.forEach((item) => {
-        if ("title" in item) {
-          this.readerState.posts.push(item);
-          this.readerState.postById.set(item._id, item);
-        } else {
-          this.readerState.comments.push(item);
-          this.readerState.commentById.set(item._id, item);
-        }
-      });
-      existingContext.forEach((c) => {
-        if (!this.readerState.commentById.has(c._id)) {
-          this.readerState.comments.push(c);
-          this.readerState.commentById.set(c._id, c);
-        }
-      });
-      existingPosts.forEach((p) => {
-        if (!this.readerState.postById.has(p._id)) {
-          this.readerState.posts.push(p);
-          this.readerState.postById.set(p._id, p);
-        }
-      });
-      rebuildIndexes(this.readerState);
-      this.bumpSearchStateRevision();
-      if (this.renderCallback) {
-        const maybePromise = this.renderCallback();
-        if (maybePromise instanceof Promise) {
-          void maybePromise.catch((error) => {
-            Logger.error("ArchiveUIHost: render callback failed", error);
-          });
-        }
-      } else if (this.feedContainer) {
-        void renderArchiveFeed(
-          this.feedContainer,
-          this.archiveState.items,
-          this.archiveState.viewMode,
-          this.readerState,
-          this.archiveState.sortBy
-        ).catch((error) => {
-          Logger.error("ArchiveUIHost: renderArchiveFeed failed", error);
-        });
-      }
-    }
-    rerenderPostGroup(postId, anchorCommentId) {
-      const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
-      if (!postContainer) {
-        Logger.warn(`ArchiveUIHost: Container for post ${postId} not found`);
-        return;
-      }
-      let beforeTop = null;
-      if (anchorCommentId) {
-        const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-        if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
-      }
-      const post = this.readerState.postById.get(postId);
-      const postComments = this.readerState.comments.filter((c) => c.postId === postId);
-      const group = {
-        postId,
-        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
-        comments: postComments,
-        fullPost: post
-      };
-      postContainer.outerHTML = renderPostGroup(group, this.readerState);
-      setupLinkPreviews(this.readerState.comments);
-      refreshPostActionButtons(postId);
-      if (anchorCommentId && beforeTop !== null) {
-        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-        if (newAnchor) {
-          const afterTop = newAnchor.getBoundingClientRect().top;
-          const delta = afterTop - beforeTop;
-          const oldScrollY = window.scrollY;
-          window.scrollTo(0, Math.max(0, oldScrollY + delta));
-        }
-      }
-    }
-    mergeComments(newComments, markAsContext = true, postIdMap) {
-      let changed = 0;
-      let canonicalTouched = false;
-      const contextPosts = new Map();
-      const contextCommentsToPersist = [];
-      for (const incoming of newComments) {
-        if (postIdMap && postIdMap.has(incoming._id)) {
-          incoming.postId = postIdMap.get(incoming._id);
-        }
-        if (markAsContext && !incoming.contextType) {
-          incoming.contextType = "fetched";
-        }
-        if (incoming.post?._id) {
-          const rootPost = incoming.post;
-          const isCanonicalRootPost = this.archiveState.itemById.has(rootPost._id);
-          if (!markAsContext || !isCanonicalRootPost) {
-            this.upsertPost(rootPost, false);
-          }
-          if (!isCanonicalRootPost) {
-            contextPosts.set(rootPost._id, rootPost);
-          }
-        }
-        const existing = this.readerState.commentById.get(incoming._id);
-        if (!existing) {
-          this.upsertReaderComment(incoming);
-          changed++;
-        } else if (this.shouldReplaceExistingComment(existing, incoming, markAsContext)) {
-          const merged = this.mergeComment(existing, incoming, markAsContext);
-          this.upsertReaderComment(merged);
-          changed++;
-        }
-        if (!markAsContext) {
-          const canonical = this.readerState.commentById.get(incoming._id) || incoming;
-          this.syncItemToCanonical(canonical);
-          canonicalTouched = true;
-        } else if (incoming.contextType !== "stub" && incoming.contextType !== "missing") {
-          const contextual = this.readerState.commentById.get(incoming._id) || incoming;
-          contextCommentsToPersist.push(contextual);
-        }
-      }
-      if (canonicalTouched) {
-        this.sortCanonicalItems();
-      }
-      if (changed > 0) {
-        rebuildIndexes(this.readerState);
-      }
-      if (changed > 0 || canonicalTouched) {
-        this.bumpSearchStateRevision();
-      }
-      if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
-        this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
-      }
-      return changed;
-    }
-    upsertPost(post, persistContext = true) {
-      const isCanonicalPost = this.archiveState.itemById.has(post._id);
-      if (!this.readerState.postById.has(post._id)) {
-        this.readerState.posts.push(post);
-      } else {
-        const idx = this.readerState.posts.findIndex((p) => p._id === post._id);
-        if (idx >= 0) this.readerState.posts[idx] = post;
-      }
-      this.readerState.postById.set(post._id, post);
-      if (isCanonicalPost) {
-        this.syncItemToCanonical(post);
-        this.sortCanonicalItems();
-      } else {
-        if (!post.contextType) post.contextType = "fetched";
-        if (persistContext) {
-          this.persistContextualData([], [post]);
-        }
-      }
-      this.bumpSearchStateRevision();
-    }
-  }
   const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";
   const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;
   const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";
@@ -10016,6 +9465,693 @@ sortCanonicalItems() {
       warnings
     };
   };
+  const MAX_HIGHLIGHT_TERMS = 20;
+  const MIN_HIGHLIGHT_TERM_LEN = 3;
+  const TOKEN_SEPARATOR_UNICODE_PATTERN = "[^\\p{L}\\p{N}]+";
+  const TOKEN_SEPARATOR_ASCII_PATTERN = "[^A-Za-z0-9]+";
+  const APOSTROPHE_FLEX_PATTERN = "['’]*";
+  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const termToPatternSource = (term, separatorPattern) => {
+    const tokens = term.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return null;
+    const tokenPatterns = tokens.map(
+      (token) => Array.from(token).map((char) => escapeRegex(char)).join(APOSTROPHE_FLEX_PATTERN)
+    );
+    return tokenPatterns.join(separatorPattern);
+  };
+  const buildCombinedPatternSource = (terms, separatorPattern) => {
+    const sources = terms.map((term) => termToPatternSource(term, separatorPattern)).filter((source) => Boolean(source)).sort((a, b) => b.length - a.length);
+    if (sources.length === 0) return null;
+    return `(${sources.join("|")})`;
+  };
+  const buildHighlightRegex = (terms) => {
+    const unicodePattern = buildCombinedPatternSource(terms, TOKEN_SEPARATOR_UNICODE_PATTERN);
+    if (unicodePattern) {
+      try {
+        return new RegExp(unicodePattern, "giu");
+      } catch {
+      }
+    }
+    const asciiPattern = buildCombinedPatternSource(terms, TOKEN_SEPARATOR_ASCII_PATTERN);
+    if (!asciiPattern) return null;
+    return new RegExp(asciiPattern, "gi");
+  };
+  const extractHighlightTerms = (query) => {
+    const parsed = parseStructuredQuery(query);
+    const terms = [];
+    for (const clause of parsed.clauses) {
+      if (clause.negated) continue;
+      if (clause.kind === "term" || clause.kind === "phrase") {
+        terms.push(clause.valueNorm);
+      }
+    }
+    return Array.from(new Set(terms)).filter((term) => term.length >= MIN_HIGHLIGHT_TERM_LEN).slice(0, MAX_HIGHLIGHT_TERMS);
+  };
+  const highlightTermsInContainer = (container, terms) => {
+    const stableTerms = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b));
+    const signature = stableTerms.join("");
+    const previousSignature = container.getAttribute("data-pr-highlighted-terms");
+    if (previousSignature === signature) return;
+    if (previousSignature !== null) {
+      container.querySelectorAll("mark.pr-search-highlight").forEach((mark) => {
+        mark.replaceWith(document.createTextNode(mark.textContent || ""));
+      });
+      container.normalize();
+    }
+    if (stableTerms.length === 0) {
+      container.setAttribute("data-pr-highlighted-terms", signature);
+      return;
+    }
+    const pattern = buildHighlightRegex(stableTerms);
+    if (!pattern) {
+      container.setAttribute("data-pr-highlighted-terms", signature);
+      return;
+    }
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    while (walker.nextNode()) {
+      textNodes.push(walker.currentNode);
+    }
+    for (const textNode of textNodes) {
+      const parent = textNode.parentElement;
+      if (!parent) continue;
+      if (parent.closest("mark, code, pre, script, style, a")) continue;
+      const text2 = textNode.textContent || "";
+      const parts = text2.split(pattern);
+      if (parts.length <= 1) continue;
+      const fragment = document.createDocumentFragment();
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (!part) continue;
+        if (i % 2 === 1) {
+          const mark = document.createElement("mark");
+          mark.className = "pr-search-highlight";
+          mark.textContent = part;
+          fragment.appendChild(mark);
+        } else {
+          fragment.appendChild(document.createTextNode(part));
+        }
+      }
+      parent.replaceChild(fragment, textNode);
+    }
+    container.setAttribute("data-pr-highlighted-terms", signature);
+  };
+  let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
+  const INDEX_SNIPPET_MAX_LEN = 120;
+  const updateRenderLimit = (limit) => {
+    currentRenderLimit = limit;
+  };
+  const resetRenderLimit = () => {
+    currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
+  };
+  const incrementRenderLimit = (delta) => {
+    currentRenderLimit += delta;
+  };
+  const ensureContextForItems = async (items, state2) => {
+    const missingIds = new Set();
+    const commentPostIdMap = new Map();
+    for (const item of items) {
+      if ("title" in item) continue;
+      const comment = item;
+      const itemPostId = comment.postId;
+      const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
+      if (immediateParentId && !state2.commentById.has(immediateParentId)) {
+        missingIds.add(immediateParentId);
+        if (!commentPostIdMap.has(immediateParentId)) {
+          commentPostIdMap.set(immediateParentId, itemPostId);
+        }
+      }
+      let current = comment.parentComment;
+      let depth = 0;
+      while (current && depth < 5) {
+        const currentId = typeof current._id === "string" ? current._id : null;
+        if (currentId && !state2.commentById.has(currentId)) {
+          missingIds.add(currentId);
+          if (!commentPostIdMap.has(currentId)) {
+            commentPostIdMap.set(currentId, itemPostId);
+          }
+        }
+        if (current.parentComment) {
+          current = current.parentComment;
+        } else {
+          break;
+        }
+        depth++;
+      }
+    }
+    if (missingIds.size > 0) {
+      Logger.info(`Thread View: Fetching ${missingIds.size} missing context comments...`);
+      const fetched = await fetchCommentsByIds(Array.from(missingIds), state2.archiveUsername || void 0);
+      getUIHost().mergeComments(fetched, true, commentPostIdMap);
+      ensurePlaceholderContext(items, state2);
+    }
+  };
+  const ensurePlaceholderContext = (items, state2) => {
+    const stubs = [];
+    const seen = new Set();
+    for (const item of items) {
+      if ("title" in item) continue;
+      const comment = item;
+      let current = comment.parentComment;
+      while (current?._id) {
+        if (!state2.commentById.has(current._id) && !seen.has(current._id)) {
+          seen.add(current._id);
+          stubs.push(parentRefToStub(current, comment));
+        }
+        current = current.parentComment;
+      }
+    }
+    if (stubs.length > 0) {
+      getUIHost().mergeComments(stubs, true);
+    }
+  };
+  const renderArchiveFeed = async (container, items, viewMode, state2, sortBy, options = {}) => {
+    if (items.length === 0) {
+      container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
+      return;
+    }
+    const visibleItems = items.slice(0, currentRenderLimit);
+    const loadMoreBtn = document.getElementById("archive-load-more");
+    if (loadMoreBtn) {
+      loadMoreBtn.style.display = items.length > currentRenderLimit ? "block" : "none";
+      if (items.length > currentRenderLimit && loadMoreBtn.querySelector("button")) {
+        loadMoreBtn.querySelector("button").textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
+      }
+    }
+    if (viewMode === "index") {
+      const snippetTerms = options.snippetTerms ?? [];
+      const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
+      container.innerHTML = visibleItems.map((item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern })).join("");
+    } else if (isThreadMode(viewMode)) {
+      if (viewMode === "thread-full") {
+        await ensureContextForItems(visibleItems, state2);
+      } else {
+        ensurePlaceholderContext(visibleItems, state2);
+      }
+      renderThreadView(container, visibleItems, state2, sortBy);
+    } else {
+      container.innerHTML = visibleItems.map((item) => renderCardItem(item, state2)).join("");
+    }
+  };
+  const renderThreadView = (container, items, state2, sortBy) => {
+    const visibleCommentIds = new Set();
+    const inclusionCommentIds = new Set();
+    items.forEach((item) => {
+      if (!("title" in item)) {
+        visibleCommentIds.add(item._id);
+        inclusionCommentIds.add(item._id);
+        const comment = item;
+        let currentId = comment.parentCommentId || comment.parentComment?._id || null;
+        let depth = 0;
+        while (currentId && depth < 10) {
+          if (state2.commentById.has(currentId)) {
+            inclusionCommentIds.add(currentId);
+            const parent = state2.commentById.get(currentId);
+            currentId = parent.parentCommentId || parent.parentComment?._id || null;
+          } else {
+            break;
+          }
+          depth++;
+        }
+      }
+    });
+    const postGroups = new Map();
+    const visiblePostIds = new Set();
+    items.forEach((item) => {
+      if ("title" in item) {
+        visiblePostIds.add(item._id);
+      }
+    });
+    inclusionCommentIds.forEach((commentId) => {
+      const comment = state2.commentById.get(commentId);
+      if (!comment) return;
+      const postId = comment.postId;
+      visiblePostIds.add(postId);
+    });
+    visiblePostIds.forEach((postId) => {
+      const comments = [];
+      let maxDate = new Date(0);
+      let maxScore = Number.NEGATIVE_INFINITY;
+      inclusionCommentIds.forEach((commentId) => {
+        const comment = state2.commentById.get(commentId);
+        if (comment && comment.postId === postId) {
+          comments.push(comment);
+          const commentDate = new Date(comment.postedAt);
+          if (commentDate > maxDate) maxDate = commentDate;
+          if (typeof comment.baseScore === "number" && comment.baseScore > maxScore) {
+            maxScore = comment.baseScore;
+          }
+        }
+      });
+      const post = state2.postById.get(postId);
+      if (post) {
+        const postDate = new Date(post.postedAt);
+        if (postDate > maxDate) maxDate = postDate;
+        if (typeof post.baseScore === "number" && post.baseScore > maxScore) {
+          maxScore = post.baseScore;
+        }
+      }
+      postGroups.set(postId, {
+        postId,
+        comments,
+        maxDate,
+maxScore: maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore
+      });
+    });
+    const sortedGroups = Array.from(postGroups.values());
+    switch (sortBy) {
+      case "date-asc":
+      case "replyTo":
+case "relevance":
+        sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
+        break;
+      case "score":
+        sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
+        break;
+      case "score-asc":
+        sortedGroups.sort((a, b) => a.maxScore - b.maxScore);
+        break;
+      case "date":
+      default:
+        sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
+        break;
+    }
+    container.innerHTML = "";
+    let html2 = "";
+    sortedGroups.forEach((group) => {
+      const post = state2.postById.get(group.postId);
+      const postComments = group.comments;
+      if (!post && postComments.length === 0) return;
+      const postGroup = {
+        postId: group.postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      html2 += renderPostGroup(postGroup, state2);
+    });
+    container.innerHTML = html2;
+  };
+  const parentRefToStub = (ref, sourceComment) => ({
+    _id: ref._id,
+    postedAt: ref.postedAt || "",
+    parentCommentId: ref.parentCommentId || "",
+    user: ref.user ? { ...ref.user, slug: "", karma: 0, htmlBio: "" } : null,
+    postId: sourceComment.postId,
+    post: sourceComment.post ?? null,
+    htmlBody: "",
+    baseScore: typeof ref.baseScore === "number" ? ref.baseScore : 0,
+    voteCount: 0,
+    pageUrl: ref.pageUrl || "",
+    author: ref.user?.username || "",
+    rejected: false,
+    topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
+    parentComment: null,
+    extendedScore: null,
+    afExtendedScore: ref.afExtendedScore ?? null,
+    currentUserVote: null,
+    currentUserExtendedVote: null,
+    contents: { markdown: null },
+    descendentCount: 0,
+    directChildrenCount: 0,
+    contextType: "stub"
+  });
+  const renderCardItem = (item, state2) => {
+    const isPost2 = "title" in item;
+    if (isPost2) {
+      const post = item;
+      const headerHtml = renderPostHeader(post, { isFullPost: true, state: state2 });
+      const bodyHtml = post.htmlBody ? renderPostBody(post, false) : "";
+      return `
+      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
+        ${headerHtml}
+        ${bodyHtml}
+      </div>
+    `;
+    }
+    const comment = item;
+    const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
+    const parentFromState = immediateParentId ? state2.commentById.get(immediateParentId) : null;
+    const isContextParentFromState = !!parentFromState && !!parentFromState.contextType;
+    const parentComment = isContextParentFromState ? parentFromState : comment.parentComment ? parentRefToStub(comment.parentComment, comment) : null;
+    if (!parentComment || parentComment._id === comment._id) {
+      return `<div class="pr-archive-item">${renderComment(comment, state2)}</div>`;
+    }
+    const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
+    return `<div class="pr-archive-item">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
+  };
+  const stripHtmlTags = (value) => value.replace(/<[^>]+>/g, "");
+  const extractSnippet = (text2, maxLen, snippetTerms, snippetPattern) => {
+    if (!text2) return "";
+    let bestMatchIndex = Number.POSITIVE_INFINITY;
+    let bestMatchLength = 0;
+    const matchPattern = snippetPattern === void 0 ? buildHighlightRegex(snippetTerms) : snippetPattern;
+    if (matchPattern) {
+      matchPattern.lastIndex = 0;
+      const firstMatch = matchPattern.exec(text2);
+      if (firstMatch && typeof firstMatch.index === "number") {
+        bestMatchIndex = firstMatch.index;
+        bestMatchLength = firstMatch[0]?.length ?? 0;
+      }
+    }
+    if (bestMatchIndex !== Number.POSITIVE_INFINITY) {
+      const contextRadius = Math.max(0, Math.floor((maxLen - bestMatchLength) / 2));
+      let start = Math.max(0, bestMatchIndex - contextRadius);
+      let end = Math.min(text2.length, bestMatchIndex + bestMatchLength + contextRadius);
+      const targetLen = Math.min(maxLen, text2.length);
+      const currentLen = end - start;
+      if (currentLen < targetLen) {
+        const deficit = targetLen - currentLen;
+        if (start === 0) {
+          end = Math.min(text2.length, end + deficit);
+        } else if (end === text2.length) {
+          start = Math.max(0, start - deficit);
+        }
+      }
+      const prefix = start > 0 ? "..." : "";
+      const suffix = end < text2.length ? "..." : "";
+      return `${prefix}${text2.slice(start, end)}${suffix}`;
+    }
+    return text2.slice(0, maxLen) + (text2.length > maxLen ? "..." : "");
+  };
+  const renderIndexItem = (item, options = {}) => {
+    const snippetTerms = options.snippetTerms ?? [];
+    const snippetPattern = options.snippetPattern;
+    const isPost2 = "title" in item;
+    let title;
+    if (isPost2) {
+      title = item.title;
+    } else {
+      const bodyText = stripHtmlTags(item.htmlBody || "");
+      title = extractSnippet(bodyText, INDEX_SNIPPET_MAX_LEN, snippetTerms, snippetPattern);
+    }
+    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName(item)}`;
+    const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
+    return `
+        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
+            <div class="pr-index-score" style="color: ${item.baseScore > 0 ? "var(--pr-highlight)" : "inherit"}">
+                ${item.baseScore || 0}
+            </div>
+            <div class="pr-index-title">
+                ${escapeHtml(title)}
+            </div>
+            <div class="pr-index-meta">
+                ${context} • ${date}
+            </div>
+        </div>
+    `;
+  };
+  const getInterlocutorName = (item) => {
+    if ("title" in item) return " (Original Post)";
+    const c = item;
+    if (c.parentComment?.user?.displayName) return c.parentComment.user.displayName;
+    if (c.post?.user?.displayName) return c.post.user.displayName;
+    return "Unknown";
+  };
+  class ArchiveUIHost {
+    archiveState;
+    readerState;
+    feedContainer = null;
+    renderCallback = null;
+    searchStateRevision = 0;
+    canonicalStateRevision = 0;
+    constructor(archiveState, feedContainer, renderCallback) {
+      this.archiveState = archiveState;
+      this.feedContainer = feedContainer;
+      this.renderCallback = renderCallback || null;
+      this.readerState = this.syncReaderState();
+    }
+    syncReaderState() {
+      const state2 = createInitialState();
+      state2.isArchiveMode = true;
+      state2.archiveUsername = this.archiveState.username;
+      const currentUser = window.LessWrong?.params?.currentUser;
+      state2.currentUsername = currentUser?.username || null;
+      state2.currentUserId = currentUser?._id || null;
+      this.archiveState.items.forEach((item) => {
+        if ("title" in item) {
+          state2.posts.push(item);
+          state2.postById.set(item._id, item);
+        } else {
+          state2.comments.push(item);
+          state2.commentById.set(item._id, item);
+        }
+      });
+      rebuildIndexes(state2);
+      return state2;
+    }
+    getReaderState() {
+      return this.readerState;
+    }
+    getSearchStateRevision() {
+      return this.searchStateRevision;
+    }
+    getCanonicalStateRevision() {
+      return this.canonicalStateRevision;
+    }
+    bumpSearchStateRevision() {
+      this.searchStateRevision += 1;
+    }
+    bumpCanonicalStateRevision() {
+      this.canonicalStateRevision += 1;
+    }
+setContainer(container) {
+      this.feedContainer = container;
+    }
+syncItemToCanonical(item) {
+      const id = item._id;
+      const exists = this.archiveState.itemById.has(id);
+      this.archiveState.itemById.set(id, item);
+      if (exists) {
+        const existingIndex = this.archiveState.items.findIndex((i) => i._id === id);
+        if (existingIndex >= 0) {
+          this.archiveState.items[existingIndex] = item;
+        }
+      } else {
+        this.archiveState.items.push(item);
+      }
+      this.bumpCanonicalStateRevision();
+    }
+sortCanonicalItems() {
+      this.archiveState.items.sort((a, b) => {
+        return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
+      });
+    }
+    upsertReaderComment(comment) {
+      const idx = this.readerState.comments.findIndex((c) => c._id === comment._id);
+      if (idx >= 0) {
+        this.readerState.comments[idx] = comment;
+      } else {
+        this.readerState.comments.push(comment);
+      }
+      this.readerState.commentById.set(comment._id, comment);
+    }
+    shouldReplaceExistingComment(existing, incoming, markAsContext) {
+      if (!markAsContext) return true;
+      const existingType = existing.contextType;
+      const incomingType = incoming.contextType;
+      const existingIsStub = existingType === "stub" || existingType === "missing";
+      const incomingIsStub = incomingType === "stub" || incomingType === "missing";
+      const existingHasBody = typeof existing.htmlBody === "string" && existing.htmlBody.trim().length > 0;
+      const incomingHasBody = typeof incoming.htmlBody === "string" && incoming.htmlBody.trim().length > 0;
+      if (existingIsStub && !incomingIsStub) return true;
+      if (!existingHasBody && incomingHasBody) return true;
+      if (incomingType === "fetched" && existingType !== "fetched") return true;
+      return false;
+    }
+    mergeComment(existing, incoming, markAsContext) {
+      const merged = { ...existing, ...incoming };
+      if (existing.forceVisible && !merged.forceVisible) {
+        merged.forceVisible = true;
+      }
+      if (existing.justRevealed && !merged.justRevealed) {
+        merged.justRevealed = true;
+      }
+      if (markAsContext) {
+        const existingType = existing.contextType;
+        const incomingType = incoming.contextType;
+        if (incomingType === "stub" && existingType && existingType !== "stub") {
+          merged.contextType = existingType;
+        } else if (!incomingType) {
+          merged.contextType = existingType || "fetched";
+        }
+      } else {
+        delete merged.contextType;
+      }
+      return merged;
+    }
+    persistContextualData(comments = [], posts = []) {
+      const username = this.archiveState.username;
+      if (!username) return;
+      const contextualComments = comments.filter((comment) => {
+        const type = comment.contextType;
+        if (type === "stub" || type === "missing") return false;
+        return !this.archiveState.itemById.has(comment._id);
+      });
+      const contextualPosts = posts.filter((post) => !this.archiveState.itemById.has(post._id));
+      if (contextualComments.length === 0 && contextualPosts.length === 0) return;
+      void saveContextualItems(username, contextualComments, contextualPosts).catch((e) => {
+        Logger.warn("Failed to persist contextual archive data.", e);
+      });
+    }
+    rerenderAll() {
+      if (!this.feedContainer) return;
+      const existingContext = this.readerState.comments.filter((c) => !this.archiveState.itemById.has(c._id));
+      const existingPosts = this.readerState.posts.filter((p) => !this.archiveState.itemById.has(p._id));
+      this.readerState.comments.length = 0;
+      this.readerState.posts.length = 0;
+      this.readerState.commentById.clear();
+      this.readerState.postById.clear();
+      this.readerState.childrenByParentId.clear();
+      this.archiveState.items.forEach((item) => {
+        if ("title" in item) {
+          this.readerState.posts.push(item);
+          this.readerState.postById.set(item._id, item);
+        } else {
+          this.readerState.comments.push(item);
+          this.readerState.commentById.set(item._id, item);
+        }
+      });
+      existingContext.forEach((c) => {
+        if (!this.readerState.commentById.has(c._id)) {
+          this.readerState.comments.push(c);
+          this.readerState.commentById.set(c._id, c);
+        }
+      });
+      existingPosts.forEach((p) => {
+        if (!this.readerState.postById.has(p._id)) {
+          this.readerState.posts.push(p);
+          this.readerState.postById.set(p._id, p);
+        }
+      });
+      rebuildIndexes(this.readerState);
+      this.bumpSearchStateRevision();
+      if (this.renderCallback) {
+        const maybePromise = this.renderCallback();
+        if (maybePromise instanceof Promise) {
+          void maybePromise.catch((error) => {
+            Logger.error("ArchiveUIHost: render callback failed", error);
+          });
+        }
+      } else if (this.feedContainer) {
+        void renderArchiveFeed(
+          this.feedContainer,
+          this.archiveState.items,
+          this.archiveState.viewMode,
+          this.readerState,
+          this.archiveState.sortBy
+        ).catch((error) => {
+          Logger.error("ArchiveUIHost: renderArchiveFeed failed", error);
+        });
+      }
+    }
+    rerenderPostGroup(postId, anchorCommentId) {
+      const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+      if (!postContainer) {
+        Logger.warn(`ArchiveUIHost: Container for post ${postId} not found`);
+        return;
+      }
+      let beforeTop = null;
+      if (anchorCommentId) {
+        const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
+      }
+      const post = this.readerState.postById.get(postId);
+      const postComments = this.readerState.comments.filter((c) => c.postId === postId);
+      const group = {
+        postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      postContainer.outerHTML = renderPostGroup(group, this.readerState);
+      setupLinkPreviews(this.readerState.comments);
+      refreshPostActionButtons(postId);
+      if (anchorCommentId && beforeTop !== null) {
+        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+        if (newAnchor) {
+          const afterTop = newAnchor.getBoundingClientRect().top;
+          const delta = afterTop - beforeTop;
+          const oldScrollY = window.scrollY;
+          window.scrollTo(0, Math.max(0, oldScrollY + delta));
+        }
+      }
+    }
+    mergeComments(newComments, markAsContext = true, postIdMap) {
+      let changed = 0;
+      let canonicalTouched = false;
+      const contextPosts = new Map();
+      const contextCommentsToPersist = [];
+      for (const incoming of newComments) {
+        if (postIdMap && postIdMap.has(incoming._id)) {
+          incoming.postId = postIdMap.get(incoming._id);
+        }
+        if (markAsContext && !incoming.contextType) {
+          incoming.contextType = "fetched";
+        }
+        if (incoming.post?._id) {
+          const rootPost = incoming.post;
+          const isCanonicalRootPost = this.archiveState.itemById.has(rootPost._id);
+          if (!markAsContext || !isCanonicalRootPost) {
+            this.upsertPost(rootPost, false);
+          }
+          if (!isCanonicalRootPost) {
+            contextPosts.set(rootPost._id, rootPost);
+          }
+        }
+        const existing = this.readerState.commentById.get(incoming._id);
+        if (!existing) {
+          this.upsertReaderComment(incoming);
+          changed++;
+        } else if (this.shouldReplaceExistingComment(existing, incoming, markAsContext)) {
+          const merged = this.mergeComment(existing, incoming, markAsContext);
+          this.upsertReaderComment(merged);
+          changed++;
+        }
+        if (!markAsContext) {
+          const canonical = this.readerState.commentById.get(incoming._id) || incoming;
+          this.syncItemToCanonical(canonical);
+          canonicalTouched = true;
+        } else if (incoming.contextType !== "stub" && incoming.contextType !== "missing") {
+          const contextual = this.readerState.commentById.get(incoming._id) || incoming;
+          contextCommentsToPersist.push(contextual);
+        }
+      }
+      if (canonicalTouched) {
+        this.sortCanonicalItems();
+      }
+      if (changed > 0) {
+        rebuildIndexes(this.readerState);
+      }
+      if (changed > 0 || canonicalTouched) {
+        this.bumpSearchStateRevision();
+      }
+      if (markAsContext && (contextCommentsToPersist.length > 0 || contextPosts.size > 0)) {
+        this.persistContextualData(contextCommentsToPersist, Array.from(contextPosts.values()));
+      }
+      return changed;
+    }
+    upsertPost(post, persistContext = true) {
+      const isCanonicalPost = this.archiveState.itemById.has(post._id);
+      if (!this.readerState.postById.has(post._id)) {
+        this.readerState.posts.push(post);
+      } else {
+        const idx = this.readerState.posts.findIndex((p) => p._id === post._id);
+        if (idx >= 0) this.readerState.posts[idx] = post;
+      }
+      this.readerState.postById.set(post._id, post);
+      if (isCanonicalPost) {
+        this.syncItemToCanonical(post);
+        this.sortCanonicalItems();
+      } else {
+        if (!post.contextType) post.contextType = "fetched";
+        if (persistContext) {
+          this.persistContextualData([], [post]);
+        }
+      }
+      this.bumpSearchStateRevision();
+    }
+  }
   const buildExecutionPlan = (clauses) => {
     const stageA = [];
     const stageB = [];
@@ -10153,15 +10289,16 @@ sortCanonicalItems() {
     });
     return compact;
   };
-  const appendPosting = (index, token, ordinal) => {
+  const appendPostingBatch = (index, token, ordinals) => {
+    if (ordinals.length === 0) return;
     const postings = index.get(token);
     if (!postings) {
-      index.set(token, Uint32Array.of(ordinal));
+      index.set(token, Uint32Array.from(ordinals));
       return;
     }
-    const next = new Uint32Array(postings.length + 1);
+    const next = new Uint32Array(postings.length + ordinals.length);
     next.set(postings);
-    next[postings.length] = ordinal;
+    next.set(ordinals, postings.length);
     index.set(token, next);
   };
   const buildIndexes = (docs) => {
@@ -10213,6 +10350,9 @@ sortCanonicalItems() {
   };
   const appendItemsToCorpusIndex = (index, source, upserts) => {
     if (upserts.length === 0) return;
+    const tokenBatch = new Map();
+    const authorBatch = new Map();
+    const replyToBatch = new Map();
     for (const item of upserts) {
       if (index.docOrdinalsById.has(item._id)) continue;
       const doc = buildArchiveSearchDoc(item, source);
@@ -10224,20 +10364,23 @@ sortCanonicalItems() {
       for (const token of tokenizeForIndex(doc.titleNorm)) {
         if (seenContentTokens.has(token)) continue;
         seenContentTokens.add(token);
-        appendPosting(index.tokenIndex, token, ordinal);
+        addPosting(tokenBatch, token, ordinal);
       }
       for (const token of tokenizeForIndex(doc.bodyNorm)) {
         if (seenContentTokens.has(token)) continue;
         seenContentTokens.add(token);
-        appendPosting(index.tokenIndex, token, ordinal);
+        addPosting(tokenBatch, token, ordinal);
       }
       for (const token of tokenizeForIndex(doc.authorNameNorm)) {
-        appendPosting(index.authorIndex, token, ordinal);
+        addPosting(authorBatch, token, ordinal);
       }
       for (const token of tokenizeForIndex(doc.replyToNorm)) {
-        appendPosting(index.replyToIndex, token, ordinal);
+        addPosting(replyToBatch, token, ordinal);
       }
     }
+    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));
+    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));
+    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));
   };
   const DEFAULT_BUDGET_MS = 150;
   const createEmptySignals = () => ({
@@ -10457,22 +10600,33 @@ sortCanonicalItems() {
       candidateOrdinals = allOrdinalsSet(docCount);
     }
     for (const clause of deferredStageAClauses) {
+      if (budgetExceeded()) {
+        partialResults = true;
+        break;
+      }
       const filtered = new Set();
-      candidateOrdinals.forEach((ordinal) => {
+      let clauseComplete = true;
+      for (const ordinal of candidateOrdinals.values()) {
+        if (budgetExceeded()) {
+          partialResults = true;
+          clauseComplete = false;
+          break;
+        }
         const doc = corpus.docs[ordinal];
         if (matchesClause(doc, clause)) {
           filtered.add(ordinal);
         }
-      });
+      }
+      if (!clauseComplete) break;
       candidateOrdinals = filtered;
       if (candidateOrdinals.size === 0) break;
     }
     if (hasPositiveContent) {
       const filtered = new Set();
-      candidateOrdinals.forEach((ordinal) => {
+      for (const ordinal of candidateOrdinals.values()) {
         if (budgetExceeded()) {
           partialResults = true;
-          return;
+          break;
         }
         const doc = corpus.docs[ordinal];
         stageBScanned++;
@@ -10499,7 +10653,7 @@ sortCanonicalItems() {
           }
           filtered.add(ordinal);
         }
-      });
+      }
       candidateOrdinals = filtered;
     } else if (!stageASeeded && plan.stageB.length > 0) {
       const filtered = new Set();
@@ -10534,15 +10688,15 @@ sortCanonicalItems() {
     }
     if (plan.negations.length > 0) {
       const filtered = new Set();
-      candidateOrdinals.forEach((ordinal) => {
+      for (const ordinal of candidateOrdinals.values()) {
         if (budgetExceeded()) {
           partialResults = true;
-          return;
+          break;
         }
         const doc = corpus.docs[ordinal];
         const excluded = plan.negations.some((clause) => matchesClause(doc, clause));
         if (!excluded) filtered.add(ordinal);
-      });
+      }
       candidateOrdinals = filtered;
     }
     const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);
@@ -10636,7 +10790,8 @@ sortCanonicalItems() {
           items: [],
           canonicalQuery: parsed.executableQuery,
           resolvedScope,
-          diagnostics: diagnostics2
+          diagnostics: diagnostics2,
+          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
         };
       }
       const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];
@@ -10679,6 +10834,16 @@ sortCanonicalItems() {
       const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));
       const ids = resolved.map((entry) => entry.doc.id);
       const items = resolved.map((entry) => entry.item);
+      let debugExplain;
+      if (request.debugExplain) {
+        const relevanceSignalsById = {};
+        for (const id of ids) {
+          const signals = mergedSignals.get(id);
+          if (!signals) continue;
+          relevanceSignalsById[id] = { ...signals };
+        }
+        debugExplain = { relevanceSignalsById };
+      }
       const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";
       const diagnostics = {
         warnings: mergedWarnings,
@@ -10702,7 +10867,8 @@ sortCanonicalItems() {
         items,
         canonicalQuery: parsed.executableQuery,
         resolvedScope,
-        diagnostics
+        diagnostics,
+        ...debugExplain ? { debugExplain } : {}
       };
     }
   }
@@ -10975,6 +11141,8 @@ sortCanonicalItems() {
     contextIndexSync = null;
     authoredSyncToken = 0;
     contextSyncToken = 0;
+    authoredRevisionToken = 0;
+    requestSequence = 0;
     constructor(options = {}) {
       const useWorker = options.useWorker === true;
       if (options.workerClient) {
@@ -10988,7 +11156,9 @@ sortCanonicalItems() {
       this.workerClient = null;
     }
     setAuthoredItems(items, revisionToken = 0) {
+      if (hasSameItemRefs(this.authoredItems, items) && this.authoredRevisionToken === revisionToken) return;
       this.authoredItems = items;
+      this.authoredRevisionToken = revisionToken;
       this.runtime.setAuthoredItems(items, revisionToken);
       this.rebuildItemsById();
       this.docCount = this.authoredItems.length + this.contextItems.length;
@@ -11031,6 +11201,7 @@ sortCanonicalItems() {
       this.contextIndexSync = syncPromise;
     }
     async runSearch(request) {
+      const requestSequence = ++this.requestSequence;
       this.docCount = this.authoredItems.length + this.contextItems.length;
       if (!this.workerEnabled || !this.workerClient) {
         if (!this.fallbackMode) {
@@ -11043,6 +11214,9 @@ sortCanonicalItems() {
       if (this.contextIndexSync) syncTasks.push(this.contextIndexSync);
       if (syncTasks.length > 0) {
         await Promise.all(syncTasks);
+        if (requestSequence !== this.requestSequence) {
+          return this.createCancelledResult(request);
+        }
         if (!this.workerEnabled || !this.workerClient) {
           return this.runtime.runSearch(request);
         }
@@ -11061,6 +11235,7 @@ sortCanonicalItems() {
           sortMode: request.sortMode,
           scopeParam: request.scopeParam,
           budgetMs: request.budgetMs,
+          debugExplain: request.debugExplain,
           expectedIndexVersion: this.indexVersion
         });
         if (response.indexVersion < this.indexVersion) {
@@ -11077,13 +11252,24 @@ sortCanonicalItems() {
         }
         const droppedIds = response.ids.length - ids.length;
         const total = Math.max(ids.length, response.total - droppedIds);
+        let debugExplain;
+        if (request.debugExplain && response.debugExplain) {
+          const relevanceSignalsById = {};
+          for (const id of ids) {
+            const signals = response.debugExplain.relevanceSignalsById[id];
+            if (!signals) continue;
+            relevanceSignalsById[id] = { ...signals };
+          }
+          debugExplain = { relevanceSignalsById };
+        }
         return {
           ids,
           total,
           items,
           canonicalQuery: response.canonicalQuery,
           resolvedScope: response.resolvedScope,
-          diagnostics: response.diagnostics
+          diagnostics: response.diagnostics,
+          ...debugExplain ? { debugExplain } : {}
         };
       } catch (error) {
         if (error instanceof SearchQueryCancelledError) {
@@ -11139,7 +11325,8 @@ sortCanonicalItems() {
           stageBScanned: 0,
           totalCandidatesBeforeLimit: 0,
           explain: ["cancelled-superseded"]
-        }
+        },
+        ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
       };
     }
   }
@@ -11259,7 +11446,7 @@ sortCanonicalItems() {
     const next = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", next);
   };
-  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern);\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        sorted.sort((a, b) => {\n          const aSignals = relevanceSignalsById.get(a.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const bSignals = relevanceSignalsById.get(b.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.of(ordinal));\n      return;\n    }\n    const next = new Uint32Array(postings.length + 1);\n    next.set(postings);\n    next[postings.length] = ordinal;\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        appendPosting(index.tokenIndex, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        appendPosting(index.tokenIndex, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        appendPosting(index.authorIndex, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        appendPosting(index.replyToIndex, token, ordinal);\n      }\n    }\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const allOrdinalsSet = (docCount) => {\n    const output = /* @__PURE__ */ new Set();\n    for (let i = 0; i < docCount; i++) output.add(i);\n    return output;\n  };\n  const intersectSets = (a, b) => {\n    const [small, large] = a.size < b.size ? [a, b] : [b, a];\n    const out = /* @__PURE__ */ new Set();\n    small.forEach((value) => {\n      if (large.has(value)) out.add(value);\n    });\n    return out;\n  };\n  const postingsToSet = (postings) => {\n    const out = /* @__PURE__ */ new Set();\n    for (let i = 0; i < postings.length; i++) out.add(postings[i]);\n    return out;\n  };\n  const maybeIntersectWithCandidate = (candidate, current) => {\n    if (!candidate) return current;\n    return intersectSets(candidate, current);\n  };\n  const getTokenPostingIntersection = (index, tokens, docCount) => {\n    if (tokens.length === 0) return allOrdinalsSet(docCount);\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return /* @__PURE__ */ new Set();\n      const postingSet = postingsToSet(postings);\n      result = result ? intersectSets(result, postingSet) : postingSet;\n      if (result.size === 0) return result;\n    }\n    return result || /* @__PURE__ */ new Set();\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = /* @__PURE__ */ new Set();\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (budgetExceeded()) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                matched.add(ordinal);\n              }\n            }\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            const postings = corpus.tokenIndex.get(clause.valueNorm);\n            matched = postings ? postingsToSet(postings) : /* @__PURE__ */ new Set();\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n              matched.add(ordinal);\n            });\n          }\n          matched.forEach((ordinal) => {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.tokenHits += 1;\n          });\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.authorHit = true;\n          });\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.replyToHit = true;\n          });\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n            if (budgetExceeded()) {\n              partialResults = true;\n              break;\n            }\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              matched.add(ordinal);\n            }\n          }\n          break;\n        }\n      }\n      candidateOrdinals = maybeIntersectWithCandidate(candidateOrdinals, matched);\n      if (candidateOrdinals.size === 0) {\n        break;\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    if (!candidateOrdinals) {\n      candidateOrdinals = allOrdinalsSet(docCount);\n    }\n    for (const clause of deferredStageAClauses) {\n      const filtered = /* @__PURE__ */ new Set();\n      candidateOrdinals.forEach((ordinal) => {\n        const doc = corpus.docs[ordinal];\n        if (matchesClause(doc, clause)) {\n          filtered.add(ordinal);\n        }\n      });\n      candidateOrdinals = filtered;\n      if (candidateOrdinals.size === 0) break;\n    }\n    if (hasPositiveContent) {\n      const filtered = /* @__PURE__ */ new Set();\n      candidateOrdinals.forEach((ordinal) => {\n        if (budgetExceeded()) {\n          partialResults = true;\n          return;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      });\n      candidateOrdinals = filtered;\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      }\n      candidateOrdinals = filtered;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      candidateOrdinals.forEach((ordinal) => {\n        if (budgetExceeded()) {\n          partialResults = true;\n          return;\n        }\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.add(ordinal);\n      });\n      candidateOrdinals = filtered;\n    }\n    const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    const finalCandidateOrdinals = candidateOrdinals;\n    relevanceSignalsByOrdinal.forEach((signals, ordinal) => {\n      if (!finalCandidateOrdinals.has(ordinal)) return;\n      const doc = corpus.docs[ordinal];\n      relevanceSignalsById.set(doc.id, signals);\n    });\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: candidateOrdinals.size,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    const base = source === "authored" ? authoredItems : contextItems;\n    const byId = /* @__PURE__ */ new Map();\n    for (const item of base) byId.set(item._id, item);\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    setCorpusItems(source, Array.from(byId.values()));\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    fullBatch.items.push(...message.items);\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
+  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern);\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        sorted.sort((a, b) => {\n          const aSignals = relevanceSignalsById.get(a.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const bSignals = relevanceSignalsById.get(b.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPostingBatch = (index, token, ordinals) => {\n    if (ordinals.length === 0) return;\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.from(ordinals));\n      return;\n    }\n    const next = new Uint32Array(postings.length + ordinals.length);\n    next.set(postings);\n    next.set(ordinals, postings.length);\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    const tokenBatch = /* @__PURE__ */ new Map();\n    const authorBatch = /* @__PURE__ */ new Map();\n    const replyToBatch = /* @__PURE__ */ new Map();\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToBatch, token, ordinal);\n      }\n    }\n    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));\n    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));\n    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const allOrdinalsSet = (docCount) => {\n    const output = /* @__PURE__ */ new Set();\n    for (let i = 0; i < docCount; i++) output.add(i);\n    return output;\n  };\n  const intersectSets = (a, b) => {\n    const [small, large] = a.size < b.size ? [a, b] : [b, a];\n    const out = /* @__PURE__ */ new Set();\n    small.forEach((value) => {\n      if (large.has(value)) out.add(value);\n    });\n    return out;\n  };\n  const postingsToSet = (postings) => {\n    const out = /* @__PURE__ */ new Set();\n    for (let i = 0; i < postings.length; i++) out.add(postings[i]);\n    return out;\n  };\n  const maybeIntersectWithCandidate = (candidate, current) => {\n    if (!candidate) return current;\n    return intersectSets(candidate, current);\n  };\n  const getTokenPostingIntersection = (index, tokens, docCount) => {\n    if (tokens.length === 0) return allOrdinalsSet(docCount);\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return /* @__PURE__ */ new Set();\n      const postingSet = postingsToSet(postings);\n      result = result ? intersectSets(result, postingSet) : postingSet;\n      if (result.size === 0) return result;\n    }\n    return result || /* @__PURE__ */ new Set();\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = /* @__PURE__ */ new Set();\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (budgetExceeded()) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                matched.add(ordinal);\n              }\n            }\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            const postings = corpus.tokenIndex.get(clause.valueNorm);\n            matched = postings ? postingsToSet(postings) : /* @__PURE__ */ new Set();\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n              matched.add(ordinal);\n            });\n          }\n          matched.forEach((ordinal) => {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.tokenHits += 1;\n          });\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.authorHit = true;\n          });\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.replyToHit = true;\n          });\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n            if (budgetExceeded()) {\n              partialResults = true;\n              break;\n            }\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              matched.add(ordinal);\n            }\n          }\n          break;\n        }\n      }\n      candidateOrdinals = maybeIntersectWithCandidate(candidateOrdinals, matched);\n      if (candidateOrdinals.size === 0) {\n        break;\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    if (!candidateOrdinals) {\n      candidateOrdinals = allOrdinalsSet(docCount);\n    }\n    for (const clause of deferredStageAClauses) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        break;\n      }\n      const filtered = /* @__PURE__ */ new Set();\n      let clauseComplete = true;\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          clauseComplete = false;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        if (matchesClause(doc, clause)) {\n          filtered.add(ordinal);\n        }\n      }\n      if (!clauseComplete) break;\n      candidateOrdinals = filtered;\n      if (candidateOrdinals.size === 0) break;\n    }\n    if (hasPositiveContent) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      }\n      candidateOrdinals = filtered;\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      }\n      candidateOrdinals = filtered;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.add(ordinal);\n      }\n      candidateOrdinals = filtered;\n    }\n    const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    const finalCandidateOrdinals = candidateOrdinals;\n    relevanceSignalsByOrdinal.forEach((signals, ordinal) => {\n      if (!finalCandidateOrdinals.has(ordinal)) return;\n      const doc = corpus.docs[ordinal];\n      relevanceSignalsById.set(doc.id, signals);\n    });\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: candidateOrdinals.size,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2,\n          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      let debugExplain;\n      if (request.debugExplain) {\n        const relevanceSignalsById = {};\n        for (const id of ids) {\n          const signals = mergedSignals.get(id);\n          if (!signals) continue;\n          relevanceSignalsById[id] = { ...signals };\n        }\n        debugExplain = { relevanceSignalsById };\n      }\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics,\n        ...debugExplain ? { debugExplain } : {}\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    const base = source === "authored" ? authoredItems : contextItems;\n    const byId = /* @__PURE__ */ new Map();\n    for (const item of base) byId.set(item._id, item);\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    setCorpusItems(source, Array.from(byId.values()));\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    for (const item of message.items) {\n      fullBatch.items.push(item);\n    }\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs,\n      debugExplain: message.debugExplain\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics,\n      ...result.debugExplain ? { debugExplain: result.debugExplain } : {}\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
   const blob = typeof self !== "undefined" && self.Blob && new Blob(["(self.URL || self.webkitURL).revokeObjectURL(self.location.href);", jsContent], { type: "text/javascript;charset=utf-8" });
   function WorkerWrapper(options) {
     let objURL;
@@ -11283,12 +11470,135 @@ sortCanonicalItems() {
     }
   }
   const createSearchWorkerClient = () => new SearchWorkerClient(new WorkerWrapper());
+  const FACET_BUDGET_MS = 30;
+  const escapeQueryQuotedValue = (value) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const getYearFromTimestamp = (ms) => {
+    if (!Number.isFinite(ms)) return null;
+    const year = new Date(ms).getUTCFullYear();
+    return Number.isFinite(year) ? year : null;
+  };
+  const getYearFromPostedAt = (postedAt) => {
+    const timestamp = Date.parse(postedAt);
+    if (!Number.isFinite(timestamp)) return null;
+    return getYearFromTimestamp(timestamp);
+  };
+  const getExactYearFromDateClause = (clause) => {
+    if (clause.op !== "range") return null;
+    if (!clause.includeMin || !clause.includeMax) return null;
+    if (clause.minMs === void 0 || clause.maxMs === void 0) return null;
+    const minDate = new Date(clause.minMs);
+    const maxDate = new Date(clause.maxMs);
+    const minYear = getYearFromTimestamp(clause.minMs);
+    const maxYear = getYearFromTimestamp(clause.maxMs);
+    if (minYear === null || maxYear === null || minYear !== maxYear) return null;
+    const isUtcYearStart = minDate.getUTCMonth() === 0 && minDate.getUTCDate() === 1 && minDate.getUTCHours() === 0 && minDate.getUTCMinutes() === 0 && minDate.getUTCSeconds() === 0 && minDate.getUTCMilliseconds() === 0;
+    const isUtcYearEnd = maxDate.getUTCMonth() === 11 && maxDate.getUTCDate() === 31 && maxDate.getUTCHours() === 23 && maxDate.getUTCMinutes() === 59 && maxDate.getUTCSeconds() === 59 && maxDate.getUTCMilliseconds() === 999;
+    return isUtcYearStart && isUtcYearEnd ? minYear : null;
+  };
+  const detectActiveFacets = (query) => {
+    const parsed = parseStructuredQuery(query);
+    const types = new Set();
+    const authors = new Set();
+    const dateYears = new Set();
+    for (const clause of parsed.clauses) {
+      if (clause.negated) continue;
+      if (clause.kind === "type") {
+        types.add(clause.itemType);
+        continue;
+      }
+      if (clause.kind === "author") {
+        authors.add(clause.valueNorm);
+        continue;
+      }
+      if (clause.kind === "date") {
+        const year = getExactYearFromDateClause(clause);
+        if (year !== null) {
+          dateYears.add(year);
+        }
+      }
+    }
+    return { types, authors, dateYears };
+  };
+  const computeFacets = (items, currentQuery) => {
+    const startMs = Date.now();
+    const groups = [];
+    let postCount = 0;
+    let commentCount = 0;
+    const authorCounts = new Map();
+    const yearCounts = new Map();
+    for (let i = 0; i < items.length; i++) {
+      if (i % 100 === 0 && Date.now() - startMs > FACET_BUDGET_MS) {
+        return { groups, delayed: true, computeMs: Date.now() - startMs };
+      }
+      const item = items[i];
+      const isPost2 = "title" in item;
+      if (isPost2) {
+        postCount++;
+      } else {
+        commentCount++;
+      }
+      const displayName = item.user?.displayName || "";
+      if (displayName) {
+        const key = normalizeForSearch(displayName);
+        const existing = authorCounts.get(key);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          authorCounts.set(key, { display: displayName, count: 1 });
+        }
+      }
+      const year = getYearFromPostedAt(item.postedAt);
+      if (year !== null) {
+        yearCounts.set(year, (yearCounts.get(year) || 0) + 1);
+      }
+    }
+    const active = detectActiveFacets(currentQuery);
+    groups.push({
+      label: "Type",
+      items: [
+        { value: "Posts", queryFragment: "type:post", count: postCount, active: active.types.has("post") },
+        { value: "Comments", queryFragment: "type:comment", count: commentCount, active: active.types.has("comment") }
+      ].filter((item) => item.count > 0)
+    });
+    const topAuthors = Array.from(authorCounts.entries()).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
+    if (topAuthors.length > 0) {
+      groups.push({
+        label: "Author",
+        items: topAuthors.map(([normName, { display, count }]) => {
+          const needsQuote = /[\s":]/u.test(display);
+          return {
+            value: display,
+            queryFragment: needsQuote ? `author:"${escapeQueryQuotedValue(display)}"` : `author:${display}`,
+            count,
+            active: active.authors.has(normName)
+          };
+        })
+      });
+    }
+    const sortedYears = Array.from(yearCounts.entries()).sort((a, b) => b[0] - a[0]);
+    if (sortedYears.length > 1) {
+      groups.push({
+        label: "Year",
+        items: sortedYears.map(([year, count]) => ({
+          value: String(year),
+          queryFragment: `date:${year}-01-01..${year}-12-31`,
+          count,
+          active: active.dateYears.has(year)
+        }))
+      });
+    }
+    return {
+      groups,
+      delayed: false,
+      computeMs: Date.now() - startMs
+    };
+  };
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
   const MAX_AUTO_RETRIES = 50;
   const INITIAL_BACKOFF_MS = 2e3;
   const PAGE_SIZE = 1e4;
   const SEARCH_DEBOUNCE_MS = 180;
-  const ARCHIVE_SEARCH_HELP_TEXT = 'Search tips: terms, "phrases", /regex/i, author:, replyto:, type:post|comment, score:>10, date:2025-01-01..2025-01-31, scope:all';
+  const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
   const initArchive = async (username) => {
     Logger.info(`Initializing User Archive for: ${username}`);
     try {
@@ -11304,29 +11614,257 @@ sortCanonicalItems() {
         const style = document.createElement("style");
         style.id = "pr-archive-styles";
         style.textContent = `
+        .pr-input {
+            padding: 8px 12px;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            background: var(--pr-bg-primary, #fff);
+            color: var(--pr-text-primary, #000);
+            font-size: 0.95em;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            box-sizing: border-box;
+        }
+        .pr-input:focus {
+            border-color: #0078ff;
+            box-shadow: 0 0 0 2px rgba(0, 120, 255, 0.15);
+        }
+        .pr-input::placeholder {
+            color: var(--pr-text-tertiary, #999);
+        }
+        .pr-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 16px;
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-primary, #000);
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .pr-button:hover {
+            background: var(--pr-bg-hover, #e0e0e0);
+        }
+        .pr-button:active {
+            background: var(--pr-bg-active, #d0d0d0);
+        }
+        .pr-button.primary {
+            background: #0078ff;
+            color: #fff;
+            border-color: #0078ff;
+        }
+        .pr-button.primary:hover {
+            background: #0056cc;
+        }
+        .pr-archive-container {
+            padding: 10px;
+            background: var(--pr-bg-secondary, #f9f9f9);
+            border-radius: 8px;
+        }
         .pr-archive-toolbar {
             display: flex;
-            gap: 10px;
+            flex-direction: column;
+            gap: 8px;
             margin: 10px 0;
+        }
+        .pr-archive-toolbar-primary {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .pr-archive-toolbar-secondary {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        .pr-toolbar-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
             flex-wrap: wrap;
         }
-        .pr-archive-toolbar select {
+        .pr-toolbar-info {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-left: auto;
+            font-size: 0.85em;
+            color: var(--pr-text-secondary, #666);
+        }
+        .pr-result-count {
+            white-space: nowrap;
+            min-width: 90px;
+        }
+        .pr-toolbar-reset {
+            background: none;
+            border: none;
+            color: var(--pr-text-tertiary, #999);
+            cursor: pointer;
+            font-size: 0.85em;
+            text-decoration: underline;
+            padding: 2px 4px;
+            display: none;
+        }
+        .pr-toolbar-reset:hover {
+            color: var(--pr-text-primary, #000);
+        }
+        .pr-search-container {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 260px;
+        }
+        .pr-search-container .pr-input {
+            width: 100%;
+            padding-right: 30px;
+        }
+        .pr-search-clear {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--pr-text-tertiary, #999);
+            font-size: 1.2em;
+            cursor: pointer;
+            padding: 0 4px;
+            line-height: 1;
+            transition: color 0.2s;
+            display: none;
+        }
+        .pr-search-clear:hover {
+            color: var(--pr-text-primary, #000);
+        }
+        .pr-search-highlight {
+            background: rgba(255, 235, 59, 0.4);
+            border-radius: 2px;
+            padding: 0 1px;
+        }
+        .pr-debug-explain {
+            margin-top: 6px;
+            padding-top: 4px;
+            border-top: 1px dashed var(--pr-border-subtle, #ddd);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.72em;
+            color: var(--pr-text-tertiary, #999);
+            line-height: 1.35;
+        }
+        .pr-toolbar-controls select {
             padding: 8px;
             border-radius: 4px;
-            border: 1px solid var(--pr-border-color);
-            background: var(--pr-bg-secondary);
-            color: var(--pr-text-primary);
+            border: 1px solid var(--pr-border-color, #ddd);
+            background: var(--pr-bg-secondary, #f9f9f9);
+            color: var(--pr-text-primary, #000);
+            box-sizing: border-box;
+        }
+        .pr-segmented-control {
+            display: inline-flex;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .pr-seg-btn {
+            padding: 6px 14px;
+            border: none;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .pr-seg-btn + .pr-seg-btn {
+            border-left: 1px solid var(--pr-border-color, #ddd);
+        }
+        .pr-seg-btn:hover:not(.active) {
+            background: var(--pr-bg-hover, #f0f0f0);
+        }
+        .pr-seg-btn.active {
+            background: #0078ff;
+            color: #fff;
+        }
+        .pr-seg-btn:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: -2px;
+        }
+        .pr-view-tabs {
+            display: inline-flex;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .pr-view-tab {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 4px 12px;
+            border: none;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            cursor: pointer;
+            font-size: 0.75em;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .pr-view-tab + .pr-view-tab {
+            border-left: 1px solid var(--pr-border-color, #ddd);
+        }
+        .pr-view-tab:hover:not(.active) {
+            background: var(--pr-bg-hover, #f0f0f0);
+        }
+        .pr-view-tab.active {
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-primary, #000);
+            font-weight: 600;
+        }
+        .pr-view-tab:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: -2px;
+        }
+        .pr-view-icon {
+            font-size: 1.2em;
+        }
+        .pr-view-label {
+            font-size: 0.85em;
+        }
+        @media (max-width: 800px) {
+            .pr-view-label { display: none; }
+            .pr-view-tab { padding: 6px 10px; }
         }
         .pr-archive-search-status {
             margin-top: 8px;
             font-size: 0.9em;
             color: var(--pr-text-secondary);
         }
-        .pr-archive-search-status.warning {
-            color: #f6c453;
+        .pr-status-chip {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            margin-right: 6px;
+            margin-bottom: 4px;
+            vertical-align: middle;
         }
-        .pr-archive-search-status.error {
-            color: #ff6b6b;
+        .pr-status-info {
+            background: var(--pr-bg-secondary, #f0f0f0);
+            color: var(--pr-text-secondary, #666);
+        }
+        .pr-status-warning {
+            background: rgba(246, 196, 83, 0.15);
+            color: #b8860b;
+        }
+        .pr-status-error {
+            background: rgba(255, 107, 107, 0.15);
+            color: #d32f2f;
         }
         .pr-search-retry-btn {
             margin-left: 8px;
@@ -11340,6 +11878,78 @@ sortCanonicalItems() {
         }
         .pr-search-retry-btn:hover {
             background: var(--pr-bg-hover, #333);
+        }
+        .pr-search-help {
+            margin-top: 8px;
+        }
+        .pr-archive-facets {
+            margin-top: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+        .pr-facet-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .pr-facet-label {
+            font-size: 0.8em;
+            color: var(--pr-text-tertiary, #999);
+            margin-right: 2px;
+        }
+        .pr-facet-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 10px;
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 14px;
+            font-size: 0.8em;
+            cursor: pointer;
+            background: transparent;
+            color: var(--pr-text-secondary, #666);
+            transition: background 0.2s, border-color 0.2s;
+        }
+        .pr-facet-chip:hover {
+            background: var(--pr-bg-hover, #f0f0f0);
+            border-color: #aaa;
+        }
+        .pr-facet-chip.active {
+            background: rgba(0, 120, 255, 0.1);
+            border-color: #0078ff;
+            color: #0078ff;
+        }
+        .pr-facet-count {
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        .pr-facet-delayed {
+            font-size: 0.8em;
+            color: var(--pr-text-tertiary, #999);
+            font-style: italic;
+        }
+        .pr-search-example {
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            border-radius: 3px;
+            padding: 2px 4px;
+            font: inherit;
+            color: inherit;
+        }
+        .pr-search-example:hover {
+            background: var(--pr-bg-hover, #e0e0e0);
+        }
+        .pr-search-example:focus-visible {
+            outline: 2px solid #0078ff;
+            outline-offset: 1px;
+        }
+        #archive-result-count.is-loading,
+        #archive-feed.is-loading {
+            opacity: 0.6;
+            transition: opacity 120ms ease;
         }
         .pr-archive-index-item {
             display: flex;
@@ -11514,34 +12124,108 @@ sortCanonicalItems() {
       }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
-    <div class="pr-archive-container" style="padding: 10px; background: var(--pr-bg-secondary); border-radius: 8px;">
+    <div class="pr-archive-container">
         <div class="pr-archive-toolbar">
-            <input type="text" id="archive-search" placeholder='Search terms, "phrases", /regex/, author:, replyto:, type:, score:, date:, scope:' class="pr-input" style="flex: 2; min-width: 260px;">
-            <select id="archive-scope">
-                <option value="authored">Scope: Authored</option>
-                <option value="all">Scope: Authored + Context</option>
-            </select>
-            <select id="archive-sort">
-                <option value="relevance">Relevance</option>
-                <option value="date">Date (Newest)</option>
-                <option value="date-asc">Date (Oldest)</option>
-                <option value="score">Karma (High-Low)</option>
-                <option value="score-asc">Karma (Low-High)</option>
-                <option value="replyTo">Reply To (Name)</option>
-            </select>
-             <select id="archive-view">
-                <option value="card">Card View</option>
-                <option value="index">Index View</option>
-                <option value="thread-full">Thread View (Full Context)</option>
-                <option value="thread-placeholder">Thread View (Placeholder)</option>
-            </select>
-            <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
+            <div class="pr-archive-toolbar-primary">
+                <div class="pr-search-container">
+                    <input type="text" id="archive-search" placeholder='Search by keyword, "phrase", or operator...' class="pr-input">
+                    <button id="archive-search-clear" class="pr-search-clear" type="button" aria-label="Clear search">&times;</button>
+                </div>
+                <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
+            </div>
+            <div class="pr-archive-toolbar-secondary">
+                <div class="pr-toolbar-controls">
+                    <div id="archive-scope" class="pr-segmented-control" role="radiogroup" aria-label="Search scope">
+                        <button type="button" data-value="authored" class="pr-seg-btn active" role="radio" aria-checked="true" tabindex="0">Authored</button>
+                        <button type="button" data-value="all" class="pr-seg-btn" role="radio" aria-checked="false" tabindex="-1">All</button>
+                    </div>
+                    <select id="archive-sort">
+                        <option value="date">Date (Newest)</option>
+                        <option value="date-asc">Date (Oldest)</option>
+                        <option value="score">Karma (High-Low)</option>
+                        <option value="score-asc">Karma (Low-High)</option>
+                        <option value="replyTo">Reply To (Name)</option>
+                        <option value="relevance">Relevance</option>
+                    </select>
+                    <div id="archive-view" class="pr-view-tabs" role="tablist" aria-label="View mode">
+                        <button type="button" data-value="card" class="pr-view-tab active" role="tab"
+                                aria-selected="true" tabindex="0" aria-label="Card view" title="Card View">
+                            <span class="pr-view-icon">☰</span>
+                            <span class="pr-view-label">Card</span>
+                        </button>
+                        <button type="button" data-value="index" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Index view" title="Index View">
+                            <span class="pr-view-icon">≡</span>
+                            <span class="pr-view-label">Index</span>
+                        </button>
+                        <button type="button" data-value="thread-full" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Thread view full context" title="Thread View (Full Context)">
+                            <span class="pr-view-icon">⊞</span>
+                            <span class="pr-view-label">Thread</span>
+                        </button>
+                        <button type="button" data-value="thread-placeholder" class="pr-view-tab" role="tab"
+                                aria-selected="false" tabindex="-1" aria-label="Thread view compact context" title="Thread View (Placeholder Context)">
+                            <span class="pr-view-icon">⊟</span>
+                            <span class="pr-view-label">Compact</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="pr-toolbar-info">
+                    <span id="archive-result-count" class="pr-result-count"></span>
+                    <button id="archive-reset-filters" class="pr-toolbar-reset" type="button">Reset</button>
+                </div>
+            </div>
         </div>
-        <div id="archive-search-status" class="pr-archive-search-status">${ARCHIVE_SEARCH_HELP_TEXT}</div>
+        <div id="archive-search-status" class="pr-archive-search-status">Ready</div>
+        <details class="pr-help pr-search-help" id="archive-search-help">
+            <summary>Search syntax reference</summary>
+            <div class="pr-help-content">
+                <div class="pr-help-columns">
+                    <div class="pr-help-section">
+                        <h4>Text Search</h4>
+                        <ul>
+                            <li><code>word</code> - plain keyword</li>
+                            <li><code>"exact phrase"</code> - phrase match</li>
+                            <li><code>/regex/i</code> - regex literal</li>
+                            <li><code>*</code> - match all items</li>
+                            <li><code>-term</code> - exclude results matching <code>term</code></li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Field Operators</h4>
+                        <ul>
+                            <li><code>author:name</code> - filter by author</li>
+                            <li><code>replyto:name</code> - filter by parent author</li>
+                            <li><code>type:post</code> or <code>type:comment</code></li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Range Operators</h4>
+                        <ul>
+                            <li><code>score:&gt;10</code> - karma above 10</li>
+                            <li><code>score:5..20</code> - karma 5 to 20</li>
+                            <li><code>date:2025-01-01</code> - exact date</li>
+                            <li><code>date:2025-01..2025-06</code> - date range</li>
+                            <li><code>date:&gt;2025-01-01</code> - after date</li>
+                        </ul>
+                    </div>
+                    <div class="pr-help-section">
+                        <h4>Examples</h4>
+                        <ul>
+                            <li><button type="button" class="pr-search-example" data-query='author:"Eliezer" score:>50'><code>author:"Eliezer" score:&gt;50</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='type:post date:2025-01..2025-06'><code>type:post date:2025-01..2025-06</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='"alignment tax" -type:comment'><code>"alignment tax" -type:comment</code></button></li>
+                            <li><button type="button" class="pr-search-example" data-query='* -type:post'><code>* -type:post</code></button> (all comments)</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </details>
+        <div id="archive-facets" class="pr-archive-facets" style="display: none;"></div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -11559,12 +12243,17 @@ sortCanonicalItems() {
       const feedEl = document.getElementById("archive-feed");
       const loadMoreBtn = document.getElementById("archive-load-more");
       const searchInput = document.getElementById("archive-search");
-      const scopeSelect = document.getElementById("archive-scope");
+      const clearBtn = document.getElementById("archive-search-clear");
+      const scopeContainer = document.getElementById("archive-scope");
       const sortSelect = document.getElementById("archive-sort");
-      const viewSelect = document.getElementById("archive-view");
+      const viewContainer = document.getElementById("archive-view");
+      const resultCountEl = document.getElementById("archive-result-count");
+      const resetBtn = document.getElementById("archive-reset-filters");
       const resyncBtn = document.getElementById("archive-resync");
       const errorContainer = document.getElementById("archive-error-container");
       const searchStatusEl = document.getElementById("archive-search-status");
+      const searchHelpEl = document.getElementById("archive-search-help");
+      const facetsEl = document.getElementById("archive-facets");
       if (searchInput) {
         searchInput.title = [
           "Archive search examples:",
@@ -11595,6 +12284,18 @@ sortCanonicalItems() {
         statusSearchResultCount = count;
         renderTopStatusLine();
       };
+      const setSearchLoading = (isLoading) => {
+        resultCountEl?.classList.toggle("is-loading", isLoading);
+        feedEl?.classList.toggle("is-loading", isLoading);
+      };
+      const updateResultCount = (total, tookMs, canonicalQuery) => {
+        if (!resultCountEl) return;
+        if (canonicalQuery.trim().length === 0) {
+          resultCountEl.textContent = `${total.toLocaleString()} items`;
+          return;
+        }
+        resultCountEl.textContent = `${total.toLocaleString()} result${total === 1 ? "" : "s"} - ${tookMs.toFixed(1)}ms`;
+      };
       renderTopStatusLine();
       let activeItems = state2.items;
       const workerPreference = window.__PR_ARCHIVE_SEARCH_USE_WORKER;
@@ -11612,23 +12313,286 @@ sortCanonicalItems() {
         workerClient
       });
       const urlState = parseArchiveUrlState();
+      const isDebugExplainEnabled = () => new URLSearchParams(window.location.search).get("debug") === "1";
       let persistedContextItems = [];
       let useDedicatedScopeParam = urlState.scopeFromUrl;
       let searchDispatchTimer = null;
       let activeQueryRequestId = 0;
       let activeItemById = new Map();
+      let activeDebugRelevanceSignalsById = null;
       let authoredIndexItemsRef = null;
       let authoredIndexCanonicalRevision = -1;
       let authoredItemsVersion = 0;
       let contextSearchItemsCache = null;
       const LARGE_DATASET_THRESHOLD = window.__PR_ARCHIVE_LARGE_THRESHOLD || 1e4;
       let pendingRenderCount = null;
-      searchInput.value = urlState.query;
-      sortSelect.value = urlState.sort;
-      if (!sortSelect.value) sortSelect.value = "date";
-      scopeSelect.value = urlState.scope;
-      if (!scopeSelect.value) scopeSelect.value = "authored";
-      state2.sortBy = sortSelect.value;
+      const DEFAULT_SCOPE = "authored";
+      const DEFAULT_SORT = "date";
+      const DEFAULT_VIEW = "card";
+      let scopeFallbackValue = DEFAULT_SCOPE;
+      let viewFallbackValue = DEFAULT_VIEW;
+      let viewModeRefreshTimer = null;
+      let pendingSortResetMessage = null;
+      const getScopeButtons = () => scopeContainer ? Array.from(scopeContainer.querySelectorAll(".pr-seg-btn")) : [];
+      const getScopeValue = () => {
+        if (!scopeContainer) return scopeFallbackValue;
+        const active = scopeContainer.querySelector(".pr-seg-btn.active");
+        return active?.dataset.value || scopeFallbackValue;
+      };
+      const setScopeValue = (value) => {
+        scopeFallbackValue = value;
+        for (const button of getScopeButtons()) {
+          const isActive = button.dataset.value === value;
+          button.classList.toggle("active", isActive);
+          button.setAttribute("aria-checked", String(isActive));
+          button.tabIndex = isActive ? 0 : -1;
+        }
+      };
+      const getViewTabs = () => viewContainer ? Array.from(viewContainer.querySelectorAll(".pr-view-tab")) : [];
+      const getViewValue = () => {
+        if (!viewContainer) return viewFallbackValue;
+        const active = viewContainer.querySelector(".pr-view-tab.active");
+        return active?.dataset.value || viewFallbackValue;
+      };
+      const setViewValue = (value) => {
+        viewFallbackValue = value;
+        for (const tab of getViewTabs()) {
+          const isActive = tab.dataset.value === value;
+          tab.classList.toggle("active", isActive);
+          tab.setAttribute("aria-selected", String(isActive));
+          tab.tabIndex = isActive ? 0 : -1;
+        }
+      };
+      const updateClearButton = () => {
+        if (!clearBtn) return;
+        clearBtn.style.display = searchInput.value.length > 0 ? "inline-flex" : "none";
+      };
+      const deriveHasContentQuery = (query) => {
+        const parsed = parseStructuredQuery(query);
+        return parsed.clauses.some(isPositiveContentWithoutWildcard);
+      };
+      const updateSortOptions = (hasContentQuery, viewMode) => {
+        const replyToOption = sortSelect.querySelector('option[value="replyTo"]');
+        const relevanceOption = sortSelect.querySelector('option[value="relevance"]');
+        const threadMode = isThreadMode(viewMode);
+        if (replyToOption) {
+          replyToOption.disabled = threadMode;
+          replyToOption.title = threadMode ? "Not available in thread view" : "";
+        }
+        const relevanceDisabled = threadMode || !hasContentQuery;
+        if (relevanceOption) {
+          relevanceOption.disabled = relevanceDisabled;
+          relevanceOption.title = threadMode ? "Not available in thread view" : !hasContentQuery ? "Relevance sorting requires a search query" : "";
+        }
+        const selectedSort = sortSelect.value;
+        if (threadMode && selectedSort === "replyTo") {
+          sortSelect.value = DEFAULT_SORT;
+          state2.sortBy = DEFAULT_SORT;
+          pendingSortResetMessage = "Sort reset to Date: Reply To is not available in thread view";
+        }
+        if (relevanceDisabled && selectedSort === "relevance") {
+          sortSelect.value = DEFAULT_SORT;
+          state2.sortBy = DEFAULT_SORT;
+          pendingSortResetMessage = threadMode ? "Sort reset to Date: Relevance is not available in thread view" : "Sort reset to Date: Relevance requires a search query";
+        }
+      };
+      const readUiState = () => ({
+        query: searchInput.value,
+        scope: getScopeValue(),
+        sort: sortSelect.value,
+        view: getViewValue()
+      });
+      const getHighlightTermsFromQuery = (query) => extractHighlightTerms(query.trim());
+      const getRenderOptionsForQuery = (query) => ({
+        snippetTerms: getHighlightTermsFromQuery(query)
+      });
+      const getCurrentRenderOptions = () => getRenderOptionsForQuery(searchInput.value);
+      const normalizeQueryWhitespace = (value) => value.replace(/\s+/g, " ").trim();
+      const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const getFragmentKind = (fragment) => {
+        const match = fragment.match(/^([a-z][a-z0-9_-]*):/i);
+        return match ? match[1].toLowerCase() : null;
+      };
+      const removeQueryFragment = (input, fragment) => {
+        const escaped = escapeRegExp(fragment);
+        let removed = false;
+        const pattern = new RegExp(`(^|\\s)${escaped}(?=\\s|$)`, "gi");
+        input.value = normalizeQueryWhitespace(input.value.replace(pattern, () => {
+          removed = true;
+          return " ";
+        }));
+        return removed;
+      };
+      const removeQueryFragmentsByKind = (input, kind) => {
+        let removed = false;
+        const kindPattern = new RegExp(
+          `(^|\\s)-?${escapeRegExp(kind)}:(?:"(?:[^"\\\\]|\\\\.)*"|\\S+)(?=\\s|$)`,
+          "gi"
+        );
+        input.value = normalizeQueryWhitespace(input.value.replace(kindPattern, () => {
+          removed = true;
+          return " ";
+        }));
+        return removed;
+      };
+      const appendOrReplaceQueryFragment = (input, fragment) => {
+        const kind = getFragmentKind(fragment);
+        if (kind) {
+          removeQueryFragmentsByKind(input, kind);
+        }
+        input.value = normalizeQueryWhitespace(input.value ? `${input.value} ${fragment}` : fragment);
+      };
+      const createFacetDelayedMessageEl = () => {
+        const delayedEl = document.createElement("span");
+        delayedEl.className = "pr-facet-delayed";
+        delayedEl.textContent = "Facets delayed - refine query";
+        return delayedEl;
+      };
+      const clearFacetUi = () => {
+        if (!facetsEl) return;
+        facetsEl.replaceChildren();
+        facetsEl.style.display = "none";
+      };
+      const renderFacets = (items, query) => {
+        if (!facetsEl) return;
+        const facetResult = computeFacets(items, query);
+        const hasFacetItems = facetResult.groups.some((group) => group.items.length > 0);
+        if (!hasFacetItems && !facetResult.delayed) {
+          clearFacetUi();
+          return;
+        }
+        const fragment = document.createDocumentFragment();
+        for (const group of facetResult.groups) {
+          if (group.items.length === 0) continue;
+          const groupEl = document.createElement("div");
+          groupEl.className = "pr-facet-group";
+          const labelEl = document.createElement("span");
+          labelEl.className = "pr-facet-label";
+          labelEl.textContent = `${group.label}:`;
+          groupEl.appendChild(labelEl);
+          for (const item of group.items) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = `pr-facet-chip${item.active ? " active" : ""}`;
+            chip.dataset.fragment = item.queryFragment;
+            chip.title = `${item.value} (${item.count})`;
+            const valueText = document.createTextNode(item.value);
+            const countEl = document.createElement("span");
+            countEl.className = "pr-facet-count";
+            countEl.textContent = `(${item.count})`;
+            chip.append(valueText, countEl);
+            groupEl.appendChild(chip);
+          }
+          fragment.appendChild(groupEl);
+        }
+        if (facetResult.delayed) {
+          fragment.appendChild(createFacetDelayedMessageEl());
+        }
+        facetsEl.replaceChildren(fragment);
+        facetsEl.style.display = "";
+      };
+      const isNonDefaultState = () => {
+        const current = readUiState();
+        return current.query.length > 0 || current.scope !== DEFAULT_SCOPE || current.sort !== DEFAULT_SORT || current.view !== DEFAULT_VIEW;
+      };
+      const updateResetButton = () => {
+        if (!resetBtn) return;
+        resetBtn.style.display = isNonDefaultState() ? "inline-block" : "none";
+      };
+      const applyUiState = (next, options = {}) => {
+        if (next.query !== void 0) searchInput.value = next.query;
+        if (next.scope !== void 0) setScopeValue(next.scope);
+        if (next.sort !== void 0) {
+          sortSelect.value = next.sort;
+          state2.sortBy = next.sort;
+        }
+        if (next.view !== void 0) {
+          setViewValue(next.view);
+          state2.viewMode = next.view;
+          updateSortOptions(deriveHasContentQuery(searchInput.value), next.view);
+        }
+        if (!options.silent) {
+          updateClearButton();
+          updateResetButton();
+        }
+      };
+      const writeCurrentToolbarUrlState = (query) => {
+        const current = readUiState();
+        writeArchiveUrlState({
+          query,
+          scope: current.scope,
+          sort: current.sort
+        });
+      };
+      const initialSort = sortSelect.querySelector(`option[value="${urlState.sort}"]`) ? urlState.sort : DEFAULT_SORT;
+      applyUiState({
+        query: urlState.query,
+        scope: urlState.scope,
+        sort: initialSort,
+        view: state2.viewMode
+      }, { silent: true });
+      setScopeValue(getScopeValue());
+      setViewValue(getViewValue());
+      updateClearButton();
+      updateResetButton();
+      updateResultCount(state2.items.length, 0, "");
+      const applySearchHighlight = () => {
+        if (!feedEl) return;
+        const terms = getHighlightTermsFromQuery(searchInput.value);
+        const termsKey = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b)).join("");
+        const highlightTargets = feedEl.querySelectorAll(".pr-comment-body, .pr-post-body, .pr-index-title");
+        if (highlightTargets.length > 1200) return;
+        highlightTargets.forEach((el) => {
+          const node = el;
+          if (node.getAttribute("data-pr-highlighted-terms") === termsKey) return;
+          highlightTermsInContainer(node, terms);
+        });
+      };
+      const computeDebugRelevanceScore = (signals) => signals.tokenHits * 10 + signals.phraseHits * 15 + (signals.authorHit ? 8 : 0) + (signals.replyToHit ? 6 : 0);
+      const escapeSelectorAttrValue = (value) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const clearDebugExplainAnnotations = () => {
+        if (!feedEl) return;
+        const existing = feedEl.querySelectorAll(".pr-debug-explain");
+        existing.forEach((node) => node.remove());
+      };
+      const applyDebugExplainAnnotations = () => {
+        clearDebugExplainAnnotations();
+        if (!feedEl) return;
+        if (!isDebugExplainEnabled()) return;
+        if (!activeDebugRelevanceSignalsById) return;
+        const appendExplain = (target, signals) => {
+          const explainEl = document.createElement("div");
+          explainEl.className = "pr-debug-explain";
+          if (!signals) {
+            explainEl.textContent = "debug: relevance=no-signal";
+          } else {
+            explainEl.textContent = [
+              `debug: relevance=${computeDebugRelevanceScore(signals)}`,
+              `token=${signals.tokenHits}`,
+              `phrase=${signals.phraseHits}`,
+              `author=${signals.authorHit ? 1 : 0}`,
+              `replyTo=${signals.replyToHit ? 1 : 0}`
+            ].join(" ");
+          }
+          target.appendChild(explainEl);
+        };
+        if (getViewValue() === "card") {
+          const cardRows = Array.from(feedEl.children).filter(
+            (node) => node instanceof HTMLElement && node.classList.contains("pr-archive-item")
+          );
+          const visibleCount = Math.min(cardRows.length, activeItems.length);
+          for (let i = 0; i < visibleCount; i++) {
+            const item = activeItems[i];
+            appendExplain(cardRows[i], activeDebugRelevanceSignalsById[item._id]);
+          }
+          return;
+        }
+        for (const item of activeItems) {
+          const target = feedEl.querySelector(`[data-id="${escapeSelectorAttrValue(item._id)}"]`);
+          if (!target) continue;
+          appendExplain(target, activeDebugRelevanceSignalsById[item._id]);
+        }
+      };
       const runPostRenderHooks = () => {
         setupLinkPreviews(uiHost.getReaderState().comments);
         const posts = feedEl.querySelectorAll(".pr-post");
@@ -11636,6 +12600,8 @@ sortCanonicalItems() {
           const pid = p.getAttribute("data-id") || p.getAttribute("data-post-id");
           if (pid) refreshPostActionButtons(pid);
         });
+        applySearchHighlight();
+        applyDebugExplainAnnotations();
       };
       const syncAuthoredSearchIndex = () => {
         const canonicalRevision = uiHost.getCanonicalStateRevision();
@@ -11676,38 +12642,50 @@ sortCanonicalItems() {
       };
       const updateSearchStatus = (diagnostics, resolvedScope, contextItemCount, sortMode) => {
         if (!searchStatusEl) return;
-        const messages = [];
+        searchStatusEl.textContent = "";
+        searchStatusEl.classList.remove("warning", "error");
+        const addChip = (text2, type = "info") => {
+          const chip = document.createElement("span");
+          chip.className = `pr-status-chip pr-status-${type}`;
+          chip.textContent = text2;
+          searchStatusEl.appendChild(chip);
+        };
+        let hasMessages = false;
         if (resolvedScope === "all") {
-          messages.push(`Searching authored + cached context (${contextItemCount} items)`);
+          addChip(`Scope: authored + ${contextItemCount} context items`, "info");
+          hasMessages = true;
           if (contextItemCount === 0) {
-            messages.push("Context cache may be incomplete");
+            addChip("Context cache may be incomplete", "warning");
+            hasMessages = true;
           }
           if (sortMode === "replyTo") {
-            messages.push("replyTo ordering is computed over mixed authored/context semantics");
+            addChip("replyTo ordering uses mixed authored/context semantics", "info");
+            hasMessages = true;
           }
         }
         if (diagnostics.partialResults) {
-          messages.push(`Partial results (${diagnostics.tookMs}ms budget hit)`);
-        }
-        if (diagnostics.warnings.length > 0) {
-          messages.push(diagnostics.warnings[0].message);
-        }
-        searchStatusEl.textContent = "";
-        searchStatusEl.appendChild(document.createTextNode(messages.join(" | ") || ARCHIVE_SEARCH_HELP_TEXT));
-        if (diagnostics.partialResults) {
+          addChip(`Partial results (${diagnostics.tookMs}ms budget hit)`, "warning");
+          hasMessages = true;
           const retryBtn = document.createElement("button");
           retryBtn.className = "pr-search-retry-btn";
           retryBtn.textContent = "Run without time limit";
           retryBtn.addEventListener("click", () => {
-            refreshView(0);
+            void refreshView(0);
           });
           searchStatusEl.appendChild(retryBtn);
         }
-        searchStatusEl.classList.remove("warning", "error");
-        if (diagnostics.parseState === "invalid") {
-          searchStatusEl.classList.add("error");
-        } else if (diagnostics.parseState === "warning" || diagnostics.degradedMode || diagnostics.partialResults) {
-          searchStatusEl.classList.add("warning");
+        for (const warning of diagnostics.warnings) {
+          const type = warning.type === "negation-only" || warning.type === "invalid-query" ? "error" : "warning";
+          addChip(warning.message, type);
+          hasMessages = true;
+        }
+        if (pendingSortResetMessage) {
+          addChip(pendingSortResetMessage, "info");
+          pendingSortResetMessage = null;
+          hasMessages = true;
+        }
+        if (!hasMessages) {
+          searchStatusEl.textContent = "Ready";
         }
       };
       const ensureSearchResultContextLoaded = (items) => {
@@ -11737,50 +12715,67 @@ sortCanonicalItems() {
       };
       const refreshView = async (budgetMs) => {
         const requestId = ++activeQueryRequestId;
+        const currentUi = readUiState();
+        const debugExplain = isDebugExplainEnabled();
+        const hasContentQuery = deriveHasContentQuery(currentUi.query);
+        updateSortOptions(hasContentQuery, currentUi.view);
         const sortMode = sortSelect.value;
-        syncAuthoredSearchIndex();
-        const contextItems = collectContextSearchItems();
-        searchManager.setContextItems(contextItems);
-        const scopeParam = useDedicatedScopeParam ? scopeSelect.value : void 0;
-        const result = await searchManager.runSearch({
-          query: searchInput.value,
-          scopeParam,
-          sortMode,
-          limit: state2.items.length + contextItems.length + 5,
-          ...budgetMs !== void 0 ? { budgetMs } : {}
-        });
-        if (requestId !== activeQueryRequestId) {
-          return;
-        }
-        activeItems = result.items;
-        activeItemById = new Map(activeItems.map((item) => [item._id, item]));
-        ensureSearchResultContextLoaded(activeItems);
-        if (!useDedicatedScopeParam && result.resolvedScope !== "authored") {
-          useDedicatedScopeParam = true;
-        }
-        scopeSelect.value = result.resolvedScope;
-        writeArchiveUrlState({
-          query: result.canonicalQuery,
-          scope: result.resolvedScope,
-          sort: sortMode
-        });
-        setStatusSearchResultCount(result.total);
-        updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
-        const totalItems = activeItems.length;
-        if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
-          showRenderCountDialog(totalItems, async (count) => {
-            pendingRenderCount = count;
-            updateRenderLimit(count);
-            await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
-            runPostRenderHooks();
+        setSearchLoading(true);
+        try {
+          syncAuthoredSearchIndex();
+          const contextItems = collectContextSearchItems();
+          searchManager.setContextItems(contextItems);
+          const scopeParam = useDedicatedScopeParam ? currentUi.scope : void 0;
+          const result = await searchManager.runSearch({
+            query: currentUi.query,
+            scopeParam,
+            sortMode,
+            limit: state2.items.length + contextItems.length + 5,
+            debugExplain,
+            ...budgetMs !== void 0 ? { budgetMs } : {}
           });
-          return;
+          if (requestId !== activeQueryRequestId) {
+            return;
+          }
+          activeItems = result.items;
+          activeItemById = new Map(activeItems.map((item) => [item._id, item]));
+          activeDebugRelevanceSignalsById = debugExplain ? result.debugExplain?.relevanceSignalsById || {} : null;
+          ensureSearchResultContextLoaded(activeItems);
+          if (!useDedicatedScopeParam && result.resolvedScope !== "authored") {
+            useDedicatedScopeParam = true;
+          }
+          setScopeValue(result.resolvedScope);
+          writeArchiveUrlState({
+            query: result.canonicalQuery,
+            scope: result.resolvedScope,
+            sort: sortMode
+          });
+          setStatusSearchResultCount(result.total);
+          updateResultCount(result.total, result.diagnostics.tookMs, result.canonicalQuery);
+          updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
+          renderFacets(result.items, result.canonicalQuery);
+          updateResetButton();
+          const renderOptions = getRenderOptionsForQuery(currentUi.query);
+          const totalItems = activeItems.length;
+          if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
+            showRenderCountDialog(totalItems, async (count) => {
+              pendingRenderCount = count;
+              updateRenderLimit(count);
+              await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, renderOptions);
+              runPostRenderHooks();
+            });
+            return;
+          }
+          if (pendingRenderCount !== null) {
+            updateRenderLimit(pendingRenderCount);
+          }
+          await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, renderOptions);
+          runPostRenderHooks();
+        } finally {
+          if (requestId === activeQueryRequestId) {
+            setSearchLoading(false);
+          }
         }
-        if (pendingRenderCount !== null) {
-          updateRenderLimit(pendingRenderCount);
-        }
-        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
-        runPostRenderHooks();
       };
       const uiHost = new ArchiveUIHost(state2, feedEl, refreshView);
       setUIHost(uiHost);
@@ -11840,7 +12835,40 @@ sortCanonicalItems() {
         }, SEARCH_DEBOUNCE_MS);
       };
       searchInput?.addEventListener("input", () => {
+        updateClearButton();
+        updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+        updateResetButton();
         scheduleSearchRefresh();
+      });
+      clearBtn?.addEventListener("click", () => {
+        if (searchInput.value.length === 0) return;
+        searchInput.value = "";
+        updateClearButton();
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+          searchDispatchTimer = null;
+        }
+        updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+        updateResetButton();
+        writeCurrentToolbarUrlState("");
+        void refreshView();
+        searchInput.focus();
+      });
+      searchHelpEl?.addEventListener("click", (event) => {
+        const target = event.target.closest(".pr-search-example");
+        if (!target) return;
+        const query = target.dataset.query;
+        if (!query) return;
+        searchInput.value = query;
+        updateClearButton();
+        updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+        updateResetButton();
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+          searchDispatchTimer = null;
+        }
+        void refreshView();
+        searchInput.focus();
       });
       searchInput?.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
@@ -11849,38 +12877,224 @@ sortCanonicalItems() {
             searchDispatchTimer = null;
           }
           void refreshView();
+          return;
+        }
+        if (event.key === "Escape") {
+          if (searchInput.value.length > 0) {
+            event.preventDefault();
+            searchInput.value = "";
+            updateClearButton();
+            if (searchDispatchTimer) {
+              window.clearTimeout(searchDispatchTimer);
+              searchDispatchTimer = null;
+            }
+            updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+            updateResetButton();
+            writeCurrentToolbarUrlState("");
+            void refreshView();
+            return;
+          }
+          searchInput.blur();
         }
       });
-      scopeSelect?.addEventListener("change", () => {
+      facetsEl?.addEventListener("click", (event) => {
+        const chip = event.target.closest(".pr-facet-chip");
+        if (!chip) return;
+        const fragment = chip.dataset.fragment;
+        if (!fragment) return;
+        if (chip.classList.contains("active")) {
+          const removed = removeQueryFragment(searchInput, fragment);
+          if (!removed) {
+            const kind = getFragmentKind(fragment);
+            if (kind) {
+              removeQueryFragmentsByKind(searchInput, kind);
+            }
+          }
+        } else {
+          appendOrReplaceQueryFragment(searchInput, fragment);
+        }
+        updateClearButton();
+        updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
+        updateResetButton();
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+          searchDispatchTimer = null;
+        }
+        void refreshView();
+        searchInput.focus();
+      });
+      const isInTextInput = (target) => {
+        if (!(target instanceof HTMLElement)) return false;
+        const tagName = target.tagName.toLowerCase();
+        return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
+      };
+      const isElementVisible = (element) => {
+        if (!element || !element.isConnected) return false;
+        const style = window.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden") return false;
+        return element.getClientRects().length > 0;
+      };
+      const isArchiveUiActive = () => searchInput.isConnected && isElementVisible(root) && isElementVisible(document.querySelector(".pr-archive-container"));
+      const shortcutWindow = window;
+      const previousArchiveShortcutHandler = shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
+      if (previousArchiveShortcutHandler) {
+        document.removeEventListener("keydown", previousArchiveShortcutHandler);
+      }
+      const handleArchiveGlobalKeydown = (event) => {
+        if (event.defaultPrevented) return;
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if (!isArchiveUiActive()) {
+          document.removeEventListener("keydown", handleArchiveGlobalKeydown);
+          if (shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ === handleArchiveGlobalKeydown) {
+            delete shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
+          }
+          return;
+        }
+        if (event.key === "/" && !isInTextInput(event.target)) {
+          event.preventDefault();
+          searchInput.focus();
+          searchInput.select();
+        }
+      };
+      shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ = handleArchiveGlobalKeydown;
+      document.addEventListener("keydown", handleArchiveGlobalKeydown);
+      resetBtn?.addEventListener("click", () => {
+        if (searchDispatchTimer) {
+          window.clearTimeout(searchDispatchTimer);
+          searchDispatchTimer = null;
+        }
+        if (viewModeRefreshTimer) {
+          window.clearTimeout(viewModeRefreshTimer);
+          viewModeRefreshTimer = null;
+        }
+        applyUiState({
+          query: "",
+          scope: DEFAULT_SCOPE,
+          sort: DEFAULT_SORT,
+          view: DEFAULT_VIEW
+        });
+        useDedicatedScopeParam = false;
+        writeArchiveUrlState({
+          query: "",
+          scope: DEFAULT_SCOPE,
+          sort: DEFAULT_SORT
+        });
+        void refreshView();
+      });
+      scopeContainer?.addEventListener("click", (event) => {
+        const button = event.target.closest(".pr-seg-btn");
+        if (!button) return;
+        const nextValue = button.dataset.value;
+        if (!nextValue || nextValue === getScopeValue()) return;
+        setScopeValue(nextValue);
         useDedicatedScopeParam = true;
+        updateResetButton();
+        void refreshView();
+      });
+      scopeContainer?.addEventListener("keydown", (event) => {
+        const currentButton = event.target.closest(".pr-seg-btn");
+        if (!currentButton) return;
+        const buttons = getScopeButtons();
+        const currentIndex = buttons.indexOf(currentButton);
+        if (currentIndex < 0 || buttons.length === 0) return;
+        let nextIndex = null;
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % buttons.length;
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = buttons.length - 1;
+        if (nextIndex === null) return;
+        event.preventDefault();
+        const nextButton = buttons[nextIndex];
+        const nextValue = nextButton.dataset.value;
+        if (!nextValue) return;
+        nextButton.focus();
+        if (nextValue === getScopeValue()) return;
+        setScopeValue(nextValue);
+        useDedicatedScopeParam = true;
+        updateResetButton();
         void refreshView();
       });
       sortSelect?.addEventListener("change", () => {
         state2.sortBy = sortSelect.value;
+        updateResetButton();
         void refreshView();
       });
-      viewSelect?.addEventListener("change", () => {
-        state2.viewMode = viewSelect.value;
-        const replyToOption = sortSelect.querySelector('option[value="replyTo"]');
-        const relevanceOption = sortSelect.querySelector('option[value="relevance"]');
-        if (replyToOption) {
-          if (isThreadMode(state2.viewMode)) {
-            replyToOption.disabled = true;
-            if (relevanceOption) relevanceOption.disabled = true;
-            if (state2.sortBy === "replyTo" || state2.sortBy === "relevance") {
-              state2.sortBy = "date";
-              sortSelect.value = "date";
-            }
-          } else {
-            replyToOption.disabled = false;
-            if (relevanceOption) relevanceOption.disabled = false;
-          }
+      const scheduleViewRefresh = (source) => {
+        if (viewModeRefreshTimer) {
+          window.clearTimeout(viewModeRefreshTimer);
+          viewModeRefreshTimer = null;
         }
-        void refreshView();
+        if (source === "pointer") {
+          void refreshView();
+          return;
+        }
+        viewModeRefreshTimer = window.setTimeout(() => {
+          viewModeRefreshTimer = null;
+          void refreshView();
+        }, VIEW_MODE_KEYBOARD_DEBOUNCE_MS);
+      };
+      const applyViewModeChange = (nextView, source) => {
+        if (nextView === getViewValue() && state2.viewMode === nextView) return;
+        state2.viewMode = nextView;
+        setViewValue(nextView);
+        updateSortOptions(deriveHasContentQuery(searchInput.value), nextView);
+        updateResetButton();
+        scheduleViewRefresh(source);
+      };
+      const activateViewTab = (index, source = "keyboard") => {
+        const tabs = getViewTabs();
+        if (tabs.length === 0) return;
+        const normalizedIndex = (index + tabs.length) % tabs.length;
+        const targetTab = tabs[normalizedIndex];
+        const nextView = targetTab.dataset.value;
+        if (!nextView) return;
+        targetTab.focus();
+        applyViewModeChange(nextView, source);
+      };
+      viewContainer?.addEventListener("click", (event) => {
+        const tab = event.target.closest(".pr-view-tab");
+        if (!tab) return;
+        const nextView = tab.dataset.value;
+        if (!nextView) return;
+        applyViewModeChange(nextView, "pointer");
+      });
+      viewContainer?.addEventListener("keydown", (event) => {
+        const currentTab = event.target.closest(".pr-view-tab");
+        if (!currentTab) return;
+        const tabs = getViewTabs();
+        const currentIndex = tabs.indexOf(currentTab);
+        if (currentIndex < 0) return;
+        switch (event.key) {
+          case "ArrowRight":
+          case "ArrowDown":
+            event.preventDefault();
+            activateViewTab(currentIndex + 1, "keyboard");
+            break;
+          case "ArrowLeft":
+          case "ArrowUp":
+            event.preventDefault();
+            activateViewTab(currentIndex - 1, "keyboard");
+            break;
+          case "Home":
+            event.preventDefault();
+            activateViewTab(0, "keyboard");
+            break;
+          case "End":
+            event.preventDefault();
+            activateViewTab(tabs.length - 1, "keyboard");
+            break;
+          case "Enter":
+          case " ":
+            event.preventDefault();
+            activateViewTab(currentIndex, "keyboard");
+            break;
+          default:
+            break;
+        }
       });
       loadMoreBtn?.querySelector("button")?.addEventListener("click", async () => {
         incrementRenderLimit(PAGE_SIZE);
-        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy);
+        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, getCurrentRenderOptions());
         runPostRenderHooks();
       });
       feedEl?.addEventListener("click", (e) => {
@@ -11910,10 +13124,11 @@ sortCanonicalItems() {
           const expanded = collapseTarget.closest(".pr-index-expanded");
           if (expanded) {
             const tmp = document.createElement("div");
-            tmp.innerHTML = renderIndexItem(item);
+            tmp.innerHTML = renderIndexItem(item, getCurrentRenderOptions());
             const collapsedRow = tmp.firstElementChild;
             if (collapsedRow) {
               expanded.replaceWith(collapsedRow);
+              runPostRenderHooks();
             }
           }
           return;
@@ -11983,6 +13198,10 @@ sortCanonicalItems() {
         }
         isSyncInProgress = true;
         pendingRetryCount = 0;
+        if (forceFull) {
+          pendingRenderCount = null;
+          resetRenderLimit();
+        }
         const cached2 = await loadArchiveData(username);
         const setStatus = (msg, isError2 = false, isSyncing = false) => {
           setStatusBaseMessage(msg, isError2, isSyncing);
@@ -12088,7 +13307,7 @@ sortCanonicalItems() {
         const cachedContext = await loadAllContextualItems(username);
         persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
         contextSearchItemsCache = null;
-        if (persistedContextItems.length > 0 && (scopeSelect.value === "all" || searchInput.value.trim().length > 0)) {
+        if (persistedContextItems.length > 0 && (getScopeValue() === "all" || searchInput.value.trim().length > 0)) {
           await refreshView();
         }
       } catch (e) {
@@ -12220,7 +13439,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.683"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

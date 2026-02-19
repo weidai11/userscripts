@@ -2,14 +2,16 @@ import { isPositiveContentClause } from './ast';
 import { tokenizeForIndex } from './normalize';
 import { parseStructuredQuery } from './parser';
 import { buildExecutionPlan } from './planner';
-import { sortSearchDocs, type RelevanceSignals } from './ranker';
+import { sortSearchDocs } from './ranker';
 import { appendItemsToCorpusIndex, buildCorpusIndex } from './searchIndex';
 import type {
   ArchiveItem,
   ArchiveSearchDoc,
   ArchiveSearchScope,
+  RelevanceSignals,
   SearchClause,
   SearchCorpusIndex,
+  SearchDebugExplainPayload,
   SearchDiagnostics,
   SearchRunRequest,
   SearchRunResult
@@ -295,26 +297,38 @@ const executeAgainstCorpus = (
     candidateOrdinals = allOrdinalsSet(docCount);
   }
 
-  // Apply deferred Stage A clauses as post-filters on the candidate set
-  // to guarantee filter correctness even when the budget is exceeded.
+  // Apply deferred Stage A clauses as post-filters on the candidate set.
+  // If budget is exceeded mid-clause, stop and keep the previous candidate
+  // set to avoid locking the thread on large scans.
   for (const clause of deferredStageAClauses) {
+    if (budgetExceeded()) {
+      partialResults = true;
+      break;
+    }
     const filtered = new Set<number>();
-    candidateOrdinals.forEach(ordinal => {
+    let clauseComplete = true;
+    for (const ordinal of candidateOrdinals.values()) {
+      if (budgetExceeded()) {
+        partialResults = true;
+        clauseComplete = false;
+        break;
+      }
       const doc = corpus.docs[ordinal];
       if (matchesClause(doc, clause)) {
         filtered.add(ordinal);
       }
-    });
+    }
+    if (!clauseComplete) break;
     candidateOrdinals = filtered;
     if (candidateOrdinals.size === 0) break;
   }
 
   if (hasPositiveContent) {
     const filtered = new Set<number>();
-    candidateOrdinals.forEach(ordinal => {
+    for (const ordinal of candidateOrdinals.values()) {
       if (budgetExceeded()) {
         partialResults = true;
-        return;
+        break;
       }
       const doc = corpus.docs[ordinal];
       stageBScanned++;
@@ -344,7 +358,7 @@ const executeAgainstCorpus = (
         }
         filtered.add(ordinal);
       }
-    });
+    }
     candidateOrdinals = filtered;
   } else if (!stageASeeded && plan.stageB.length > 0) {
     // Phrase-only/regex-only paths still need stage-B matching against full corpus.
@@ -382,15 +396,15 @@ const executeAgainstCorpus = (
 
   if (plan.negations.length > 0) {
     const filtered = new Set<number>();
-    candidateOrdinals.forEach(ordinal => {
+    for (const ordinal of candidateOrdinals.values()) {
       if (budgetExceeded()) {
         partialResults = true;
-        return;
+        break;
       }
       const doc = corpus.docs[ordinal];
       const excluded = plan.negations.some(clause => matchesClause(doc, clause));
       if (!excluded) filtered.add(ordinal);
-    });
+    }
     candidateOrdinals = filtered;
   }
 
@@ -499,7 +513,8 @@ export class ArchiveSearchRuntime {
         items: [],
         canonicalQuery: parsed.executableQuery,
         resolvedScope,
-        diagnostics
+        diagnostics,
+        ...(request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {})
       };
     }
 
@@ -559,6 +574,16 @@ export class ArchiveSearchRuntime {
 
     const ids = resolved.map(entry => entry.doc.id);
     const items = resolved.map(entry => entry.item);
+    let debugExplain: SearchDebugExplainPayload | undefined;
+    if (request.debugExplain) {
+      const relevanceSignalsById: Record<string, RelevanceSignals> = {};
+      for (const id of ids) {
+        const signals = mergedSignals.get(id);
+        if (!signals) continue;
+        relevanceSignalsById[id] = { ...signals };
+      }
+      debugExplain = { relevanceSignalsById };
+    }
 
     const parseState = mergedWarnings.some(w => w.type === 'negation-only' || w.type === 'invalid-query')
       ? 'invalid'
@@ -589,7 +614,8 @@ export class ArchiveSearchRuntime {
       items,
       canonicalQuery: parsed.executableQuery,
       resolvedScope,
-      diagnostics
+      diagnostics,
+      ...(debugExplain ? { debugExplain } : {})
     };
   }
 }
