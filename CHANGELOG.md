@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.684] - 2026-02-19
+
+### Changed
+- **ESLint Upgrade**: Upgraded `eslint` and `@eslint/js` to **v10.0.0**.
+- **Tooling Migration**: Migrated `typescript-eslint` and all related plugins to **v8.56.0** for ESLint 10 compatibility.
+- **Security Audit**: Switched the `prebuild` audit level back to `high` and resolved the High-severity `minimatch` ReDoS vulnerability using `package.json` overrides.
+
+### Fixed
+- **Lint Compatibility**: Fixed `preserve-caught-error` violations in `tests/helpers/setup.ts` and suppressed noisy `no-useless-assignment` warnings in positioning logic.
+
 ## [1.2.683] - 2026-02-19
 
 ### Changed
