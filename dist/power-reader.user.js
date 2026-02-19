@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.684
+// @version    1.2.686
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1300,6 +1300,14 @@ dirty.indexOf("<") === -1) {
     box-sizing: border-box;
   }
 
+  /* Temporarily bypass content-visibility for precise DOM measurements and smooth scrolling */
+  .pr-force-layout,
+  .pr-force-layout .pr-comment,
+  .pr-force-layout .pr-post {
+      content-visibility: visible !important;
+      contain-intrinsic-size: auto !important;
+  }
+
   /* Resize handles */
   .pr-resize-handle {
     position: fixed;
@@ -1529,6 +1537,8 @@ dirty.indexOf("<") === -1) {
     border: 1px solid #ddd;
     border-radius: 4px;
     background: #fafafa;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .pr-post-header {
@@ -1686,6 +1696,8 @@ dirty.indexOf("<") === -1) {
     border-radius: 4px;
     background: #fff;
     position: relative; /* Context for absolute positioning */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .pr-comment.pr-missing-parent {
@@ -2576,6 +2588,36 @@ dirty.indexOf("<") === -1) {
     background: white;
     border-top: 1px solid #eee;
   }
+
+  /* Compact post header for top-level comments in archive card view only */
+  .pr-archive-top-level-comment > .pr-post-header {
+    padding: 4px 8px;
+    gap: 6px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header h2 {
+    font-size: 1em;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-post-meta {
+    font-size: 80%;
+    gap: 4px !important;
+    min-height: 18px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-author-controls {
+    margin: 0 2px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-post-actions {
+    gap: 1px;
+    margin-right: 2px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .text-btn {
+    font-size: 11px !important;
+    padding: 0 1px;
+  }
 `;
   const createInitialState = () => ({
     currentUsername: null,
@@ -2673,7 +2715,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.684"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.686"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2723,14 +2765,14 @@ dirty.indexOf("<") === -1) {
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
-  function makeRequest(url, data) {
+  function makeRequest(url, data, timeout = 3e4) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method: "POST",
         url,
         headers: { "Content-Type": "application/json" },
         data,
-        timeout: 3e4,
+        timeout,
         onload: (response) => resolve(response),
         onerror: (err) => reject(err),
         ontimeout: () => reject(new Error("Request timed out"))
@@ -2744,7 +2786,7 @@ dirty.indexOf("<") === -1) {
     const delays = [1e3, 2e3];
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const response = await makeRequest(url, data);
+        const response = await makeRequest(url, data, options.timeout);
         if (response.status === 429 || response.status >= 500) {
           if (attempt < maxAttempts - 1) {
             await sleep(delays[attempt]);
@@ -2883,6 +2925,9 @@ dirty.indexOf("<") === -1) {
       _id
       postedAt
       baseScore
+      htmlBody
+      contents { markdown }
+      voteCount
       afExtendedScore
       pageUrl
       parentCommentId
@@ -3129,13 +3174,13 @@ dirty.indexOf("<") === -1) {
   );
   const GET_USER_POSTS = (
 `
-  query GetUserPosts($userId: String!, $limit: Int, $before: String) {
+  query GetUserPosts($userId: String!, $limit: Int, $after: String) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "newest"
-          before: $before
+          sortedBy: "oldest"
+          after: $after
         }
       },
       limit: $limit
@@ -3150,13 +3195,13 @@ dirty.indexOf("<") === -1) {
   );
   const GET_USER_COMMENTS = (
 `
-  query GetUserComments($userId: String!, $limit: Int, $before: String) {
+  query GetUserComments($userId: String!, $limit: Int, $after: String) {
     comments(
       selector: {
         allRecentComments: {
           userId: $userId
-          before: $before
-          sortBy: "newest"
+          after: $after
+          sortBy: "oldest"
         }
       },
       limit: $limit
@@ -3317,6 +3362,12 @@ dirty.indexOf("<") === -1) {
     prefs[author] = newValue;
     setAuthorPreferences(prefs);
     return newValue;
+  }
+  function getReadTrackingInputs(isArchiveMode) {
+    if (isArchiveMode) {
+      return { readState: {}, cutoff: void 0 };
+    }
+    return { readState: getReadState(), cutoff: getLoadFrom() || void 0 };
   }
   function clearAllStorage() {
     GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
@@ -3793,6 +3844,130 @@ hoverDelay: 300,
       rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
     }
   }
+  const smartScrollTo = (el, isPost2) => {
+    const postContainer = el.closest(".pr-post");
+    if (!postContainer) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const postHeader = postContainer.querySelector(".pr-post-header");
+    const stickyHeader2 = document.getElementById("pr-sticky-header");
+    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
+    const headerHeight = postHeader ? postHeader.offsetHeight : stickyHeight || 60;
+    if (isPost2) {
+      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.pageYOffset : postContainer.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({
+        top: headerTop,
+        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    } else {
+      const elementTop = el.getBoundingClientRect().top + window.pageYOffset;
+      window.scrollTo({
+        top: elementTop - headerHeight - 10,
+behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    }
+  };
+  const refreshPostActionButtons = (target) => {
+    let posts;
+    if (target instanceof HTMLElement) {
+      posts = [target];
+    } else {
+      const selector = target ? `.pr-post[data-id="${target}"]` : ".pr-post";
+      posts = document.querySelectorAll(selector);
+    }
+    const updateNextPostButton = (header, postEl) => {
+      if (!header) return;
+      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
+      if (!nBtn) return;
+      let nextPost = postEl ? postEl.nextElementSibling : null;
+      while (nextPost && !nextPost.classList.contains("pr-post")) {
+        nextPost = nextPost.nextElementSibling;
+      }
+      if (!nextPost) {
+        nBtn.classList.add("disabled");
+        nBtn.title = "No more posts in current feed";
+      } else {
+        nBtn.classList.remove("disabled");
+        nBtn.title = "Scroll to next post";
+      }
+    };
+    posts.forEach((postNode) => {
+      const post = postNode;
+      const container = post.querySelector(".pr-post-body-container");
+      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
+      if (container && eBtn) {
+        const isFullPost = container.classList.contains("pr-post-body");
+        if (container.classList.contains("truncated")) {
+          if (container.classList.contains("collapsed") || container.style.display === "none") {
+            eBtn.classList.remove("disabled");
+            eBtn.title = "Expand post body";
+          } else {
+            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
+            if (!isActuallyTruncated) {
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post fits within viewport without truncation";
+            } else {
+              eBtn.classList.remove("disabled");
+              eBtn.title = "Expand post body";
+            }
+          }
+        } else if (isFullPost) {
+          if (container.classList.contains("collapsed")) {
+            eBtn.title = "Expand post body";
+          } else {
+            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
+            if (isSmallContent) {
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post body is small and doesn't need toggle";
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+            } else {
+              eBtn.title = "Collapse post body";
+            }
+          }
+          if (!eBtn.title.includes("small")) {
+            eBtn.classList.remove("disabled");
+          }
+        }
+      }
+      const header = post.querySelector(".pr-post-header");
+      updateNextPostButton(header, post);
+    });
+    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
+    if (stickyHeader2) {
+      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
+      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
+      updateNextPostButton(stickyHeader2, stickyPostEl);
+    }
+  };
+  const forceLayoutCounts = new WeakMap();
+  async function withForcedLayout(element, callback) {
+    const container = element.closest(".pr-post-group") || element;
+    const count = (forceLayoutCounts.get(container) || 0) + 1;
+    forceLayoutCounts.set(container, count);
+    if (count === 1) container.classList.add("pr-force-layout");
+    void container.offsetHeight;
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    try {
+      if (!container.isConnected) {
+        return await callback();
+      }
+      return await callback();
+    } finally {
+      setTimeout(() => {
+        const prevCount = forceLayoutCounts.get(container) || 0;
+        if (prevCount <= 1) {
+          forceLayoutCounts.delete(container);
+          container.classList.remove("pr-force-layout");
+        } else {
+          forceLayoutCounts.set(container, prevCount - 1);
+        }
+      }, 500);
+    }
+  }
   const HOVER_DELAY = 300;
   const state = {
     activePreview: null,
@@ -3893,7 +4068,7 @@ hoverDelay: 300,
   function setupHoverPreview(trigger, fetchContent, options) {
     if (trigger.dataset.previewAttached) return;
     trigger.dataset.previewAttached = "1";
-    trigger.addEventListener("mouseenter", (e) => {
+    trigger.addEventListener("mouseenter", async (e) => {
       trackMousePos(e);
       Logger.debug("Preview mouseenter: trigger=", trigger.tagName, trigger.className, "dataset=", JSON.stringify(trigger.dataset));
       if (!isIntentionalHover()) {
@@ -3901,19 +4076,23 @@ hoverDelay: 300,
       }
       Logger.debug("setupHoverPreview: clearing pending timeout", state.hoverTimeout);
       if (options.targetGetter) {
-        const result = options.targetGetter();
+        const result = await options.targetGetter();
         if (result) {
           const targets = Array.isArray(result) ? result : [result];
           if (targets.length > 0) {
-            console.info(`[setupHoverPreview] Adding pr-parent-hover to ${targets.length} targets`);
-            targets.forEach((t) => t.classList.add("pr-parent-hover"));
+            targets.forEach((t) => {
+              t.classList.add("pr-parent-hover");
+            });
             const removeHighlight = () => {
-              console.info(`[setupHoverPreview] Removing pr-parent-hover from ${targets.length} targets`);
               targets.forEach((t) => t.classList.remove("pr-parent-hover"));
               trigger.removeEventListener("mouseleave", removeHighlight);
             };
             trigger.addEventListener("mouseleave", removeHighlight);
           }
+          const containers = new Set(targets.map((t) => t.closest(".pr-post-group") || t));
+          const forcePromises = Array.from(containers).map((c) => withForcedLayout(c, () => {
+          }));
+          await Promise.all(forcePromises);
           const allFullyVisible = targets.every((t) => {
             const isSticky = !!t.closest(".pr-sticky-header");
             if (isSticky) return false;
@@ -5033,10 +5212,11 @@ isFullPost
     return doc.body.innerHTML;
   };
   const getContextType = (comment) => comment.contextType;
-  const renderMissingParentPlaceholder = (comment, repliesHtml = "") => {
+  const renderMissingParentPlaceholder = (comment, repliesHtml = "", state2) => {
     const postId = comment.postId || "";
+    const readClass = state2?.isArchiveMode ? "" : "read";
     return `
-    <div class="pr-comment pr-item read pr-missing-parent"
+    <div class="pr-comment pr-item ${readClass} pr-missing-parent"
          data-id="${comment._id}"
          data-post-id="${postId}"
          data-parent-id=""
@@ -5048,12 +5228,11 @@ isFullPost
     const childrenIndex = childrenByParentId ?? state2.childrenByParentId;
     const replies = childrenIndex.get(comment._id) ?? [];
     const visibleReplies = replies.filter((r) => idSet.has(r._id));
-    const cutoff = getLoadFrom();
+    const { readState, cutoff } = getReadTrackingInputs(state2.isArchiveMode);
     const isImplicitlyRead = (item) => {
       return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
     };
     if (visibleReplies.length > 0) {
-      const readState = getReadState();
       visibleReplies.forEach((r) => {
         const isItemRead = !state2.isArchiveMode && (readState[r._id] === 1 || isImplicitlyRead(r));
         r.treeKarma = calculateTreeKarma(
@@ -5124,12 +5303,12 @@ isFullPost
   };
   const renderComment = (comment, state2, repliesHtml = "") => {
     const ct = getContextType(comment);
-    if (ct === "missing") return renderMissingParentPlaceholder(comment, repliesHtml);
+    if (ct === "missing") return renderMissingParentPlaceholder(comment, repliesHtml, state2);
     if (ct === "stub") return renderContextPlaceholder(comment, state2, repliesHtml);
-    const readState = getReadState();
+    const { readState } = getReadTrackingInputs(state2.isArchiveMode);
     const isLocallyRead = !state2.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
-    const commentIsRead = ct === "fetched" || isLocallyRead;
-    const unreadDescendantCount = getUnreadDescendantCount(comment._id, state2, readState);
+    const commentIsRead = !state2.isArchiveMode && (ct === "fetched" || isLocallyRead);
+    const unreadDescendantCount = state2.isArchiveMode ? Infinity : getUnreadDescendantCount(comment._id, state2, readState);
     const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !comment.forceVisible;
     if (showAsPlaceholder) {
       return `
@@ -5303,20 +5482,20 @@ isFullPost
   const renderPostGroup = (group, state2) => {
     const commentsWithPlaceholders = withMissingParentPlaceholders(group.comments, state2);
     const visibleChildrenByParentId = buildChildrenIndex(commentsWithPlaceholders);
-    const readState = getReadState();
+    const { readState, cutoff } = getReadTrackingInputs(state2.isArchiveMode);
     const commentSet = new Set(commentsWithPlaceholders.map((c) => c._id));
     const rootComments = commentsWithPlaceholders.filter(
       (c) => !c.parentCommentId || !commentSet.has(c.parentCommentId)
     );
-    const cutoff = getLoadFrom();
     const isImplicitlyRead = (item) => {
       return !!(cutoff && cutoff !== "__LOAD_RECENT__" && cutoff.includes("T") && item.postedAt && item.postedAt < cutoff);
     };
     rootComments.forEach((c) => {
+      const isItemRead = !state2.isArchiveMode && (readState[c._id] === 1 || isImplicitlyRead(c));
       c.treeKarma = calculateTreeKarma(
         c._id,
         c.baseScore || 0,
-        readState[c._id] === 1 || isImplicitlyRead(c),
+        isItemRead,
         visibleChildrenByParentId.get(c._id) || [],
         readState,
         visibleChildrenByParentId,
@@ -5353,7 +5532,7 @@ baseScore: 0,
     if (!group.fullPost) {
       Logger.warn(`renderPostGroup: fullPost missing for ${group.postId}, using fallback`);
     }
-    const isReadPost = isRead(group.postId, readState, postToRender.postedAt);
+    const isReadPost = !state2.isArchiveMode && isRead(group.postId, readState, postToRender.postedAt);
     const existingEl = document.querySelector(`.pr-post[data-id="${group.postId}"]`);
     const currentlyTruncated = existingEl ? existingEl.querySelector(".pr-post-body-container")?.classList.contains("truncated") : true;
     const headerHtml = renderPostHeader(postToRender, {
@@ -5375,8 +5554,106 @@ baseScore: 0,
     </div>
   `;
   };
-  const setupLinkPreviews = (comments) => {
-    const postHeaders = document.querySelectorAll(".pr-post-header");
+  const setupLinkPreviewsDelegated = (container, comments) => {
+    if (container.__PR_PREVIEWS_DELEGATED__) return;
+    container.__PR_PREVIEWS_DELEGATED__ = true;
+    container.addEventListener("mouseover", (e) => {
+      const target = e.target;
+      if (!target || target.dataset.previewAttached) return;
+      const postHeader = target.closest(".pr-post-header h2");
+      if (postHeader) {
+        const headerDiv = postHeader.closest(".pr-post-header");
+        const postId = headerDiv?.getAttribute("data-post-id");
+        if (postId) {
+          setupHoverPreview(postHeader, createPostPreviewFetcher(postId), {
+            type: "post",
+            targetGetter: () => {
+              const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
+              if (!post) return null;
+              const body = post.querySelector(".pr-post-body-container");
+              const collapsed = post.querySelector(".pr-post-body-container.collapsed");
+              if (!body || collapsed) return null;
+              return [post];
+            }
+          });
+        }
+        return;
+      }
+      const authorLink = target.closest(".pr-author");
+      if (authorLink) {
+        const userId = authorLink.getAttribute("data-author-id");
+        if (userId) {
+          setupHoverPreview(authorLink, createAuthorPreviewFetcher(userId), { type: "author" });
+        }
+        return;
+      }
+      const parentLink = target.closest(".pr-find-parent");
+      if (parentLink) {
+        const comment = parentLink.closest(".pr-comment");
+        const parentId = comment?.getAttribute("data-parent-id");
+        if (parentId) {
+          setupHoverPreview(parentLink, createCommentPreviewFetcher(parentId, comments), {
+            type: "comment",
+            targetGetter: () => document.querySelector(`.pr-comment[data-id="${parentId}"]`)
+          });
+        } else {
+          const postId = comment?.getAttribute("data-post-id");
+          if (postId) {
+            setupHoverPreview(parentLink, createPostPreviewFetcher(postId), {
+              type: "post",
+              targetGetter: () => {
+                const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
+                if (!post) return null;
+                const header = post.querySelector(".pr-post-header");
+                const body = post.querySelector(".pr-post-body-container");
+                const collapsed = post.querySelector(".pr-post-body-container.collapsed");
+                const targets = [];
+                if (header) targets.push(header);
+                if (body && !collapsed) targets.push(body);
+                const stickyHeader2 = document.querySelector(`.pr-sticky-header.visible .pr-post-header[data-post-id="${postId}"]`);
+                if (stickyHeader2) targets.push(stickyHeader2);
+                return targets.length > 0 ? targets : null;
+              }
+            });
+          }
+        }
+        return;
+      }
+      const bodyLink = target.closest(".pr-comment-body a, .pr-post-body a");
+      if (bodyLink) {
+        const href = bodyLink.getAttribute("href");
+        if (href) {
+          if (isCommentUrl(href)) {
+            const id = extractCommentIdFromUrl(href);
+            if (id) setupHoverPreview(bodyLink, createCommentPreviewFetcher(id, comments), { type: "comment" });
+          } else if (isPostUrl(href)) {
+            const id = extractPostIdFromUrl(href);
+            if (id) setupHoverPreview(bodyLink, createPostPreviewFetcher(id), { type: "post" });
+          } else if (isAuthorUrl(href)) {
+            const slug = extractAuthorSlugFromUrl(href);
+            if (slug) setupHoverPreview(bodyLink, createAuthorBySlugPreviewFetcher(slug), { type: "author" });
+          } else if (isWikiUrl(href)) {
+            const slug = extractWikiSlugFromUrl(href);
+            if (slug) setupHoverPreview(bodyLink, createWikiPreviewFetcher(slug), { type: "wiki" });
+          }
+        }
+        return;
+      }
+      const expander = target.closest(".pr-expand, .pr-placeholder-bar");
+      if (expander) {
+        const comment = expander.closest(".pr-comment");
+        const commentId = comment?.getAttribute("data-id");
+        if (commentId) {
+          setupHoverPreview(expander, createCommentPreviewFetcher(commentId, comments), {
+            type: "comment",
+            targetGetter: () => document.querySelector(`.pr-comment[data-id="${commentId}"]`)
+          });
+        }
+      }
+    });
+  };
+  const setupLinkPreviews = (comments, container = document) => {
+    const postHeaders = container.querySelectorAll(".pr-post-header");
     postHeaders.forEach((header) => {
       const postId = header.getAttribute("data-post-id");
       if (!postId) return;
@@ -5393,10 +5670,7 @@ baseScore: 0,
               const body = post.querySelector(".pr-post-body-container");
               const collapsed = post.querySelector(".pr-post-body-container.collapsed");
               if (!body || collapsed) return null;
-              if (isElementFullyVisible(post)) {
-                return [post];
-              }
-              return null;
+              return [post];
             }
           }
         );
@@ -5550,27 +5824,25 @@ refresh() {
     }
     handleScroll() {
       if (!this.container) return;
-      const posts = document.querySelectorAll(".pr-post");
-      let currentPost = null;
-      for (let i = 0; i < posts.length; i++) {
-        const post = posts[i];
-        const rect = post.getBoundingClientRect();
-        if (rect.top < 100 && rect.bottom > 100) {
-          const header = post.querySelector(".pr-post-header");
-          if (header) {
-            const headerRect = header.getBoundingClientRect();
-            if (headerRect.top < -1) {
-              currentPost = post;
-            }
+      const viewportWidth = window.innerWidth;
+      const checkY = 80;
+      const elementAtPoint = document.elementFromPoint(viewportWidth / 2, checkY);
+      if (!elementAtPoint) {
+        this.hide();
+        return;
+      }
+      const currentPost = elementAtPoint.closest(".pr-post");
+      if (currentPost) {
+        const header = currentPost.querySelector(".pr-post-header");
+        if (header) {
+          const headerRect = header.getBoundingClientRect();
+          if (headerRect.top < -1) {
+            this.updateHeaderContent(currentPost);
+            return;
           }
-          break;
         }
       }
-      if (currentPost) {
-        this.updateHeaderContent(currentPost);
-      } else {
-        this.hide();
-      }
+      this.hide();
     }
     updateHeaderContent(currentPost) {
       if (!this.container) return;
@@ -5713,7 +5985,7 @@ refresh() {
   };
   class ReadTracker {
     static UNREAD_ITEM_SELECTOR = ".pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)";
-    static BOTTOM_MARGIN_PX = 50;
+    static BOTTOM_MARGIN_PX = 150;
     scrollMarkDelay;
     commentsDataGetter;
     postsDataGetter;
@@ -5761,15 +6033,24 @@ refresh() {
     processScroll() {
       const items = document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR);
       const readThreshold = 0;
-      const docHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+      const docHeight = Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.offsetHeight
+      );
       const viewportHeight = window.innerHeight;
       const isAtBottom = viewportHeight + window.scrollY >= docHeight - ReadTracker.BOTTOM_MARGIN_PX;
       const unreadCountEl = document.getElementById("pr-unread-count");
       Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
+      const viewportMargin = 2e3;
       for (const el of items) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top > viewportHeight + viewportMargin || rect.bottom < -viewportMargin) {
+          continue;
+        }
         const id = el.getAttribute("data-id");
         if (!id) continue;
-        const rect = el.getBoundingClientRect();
         let checkRect = rect;
         if (el.classList.contains("pr-post")) {
           const bodyContainer = el.querySelector(".pr-post-body-container");
@@ -5806,11 +6087,6 @@ refresh() {
                 const parsedCount = Number.parseInt(liveUnreadCountEl.textContent || "", 10);
                 const newCount = Number.isFinite(parsedCount) ? Math.max(0, parsedCount - 1) : document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
                 liveUnreadCountEl.textContent = newCount.toString();
-                const liveDocHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
-                const isNowAtBottom = window.innerHeight + window.scrollY >= liveDocHeight - 100;
-                if (newCount === 0 && isNowAtBottom) {
-                  this.checkInitialState();
-                }
               }
             }, this.scrollMarkDelay);
           }
@@ -5938,99 +6214,6 @@ refresh() {
     }
     readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);
     readTracker.init();
-  };
-  const smartScrollTo = (el, isPost2) => {
-    const postContainer = el.closest(".pr-post");
-    if (!postContainer) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    const postHeader = postContainer.querySelector(".pr-post-header");
-    const stickyHeader2 = document.getElementById("pr-sticky-header");
-    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
-    const headerHeight = postHeader ? postHeader.offsetHeight : stickyHeight || 60;
-    if (isPost2) {
-      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.pageYOffset : postContainer.getBoundingClientRect().top + window.pageYOffset;
-      window.scrollTo({
-        top: headerTop,
-        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    } else {
-      const elementTop = el.getBoundingClientRect().top + window.pageYOffset;
-      window.scrollTo({
-        top: elementTop - headerHeight - 10,
-behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    }
-  };
-  const refreshPostActionButtons = (postId) => {
-    const selector = postId ? `.pr-post[data-id="${postId}"]` : ".pr-post";
-    const posts = document.querySelectorAll(selector);
-    const updateNextPostButton = (header, postEl) => {
-      if (!header) return;
-      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
-      if (!nBtn) return;
-      let nextPost = postEl ? postEl.nextElementSibling : null;
-      while (nextPost && !nextPost.classList.contains("pr-post")) {
-        nextPost = nextPost.nextElementSibling;
-      }
-      if (!nextPost) {
-        nBtn.classList.add("disabled");
-        nBtn.title = "No more posts in current feed";
-      } else {
-        nBtn.classList.remove("disabled");
-        nBtn.title = "Scroll to next post";
-      }
-    };
-    posts.forEach((post) => {
-      const container = post.querySelector(".pr-post-body-container");
-      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
-      if (container && eBtn) {
-        const isFullPost = container.classList.contains("pr-post-body");
-        if (container.classList.contains("truncated")) {
-          if (container.classList.contains("collapsed") || container.style.display === "none") {
-            eBtn.classList.remove("disabled");
-            eBtn.title = "Expand post body";
-          } else {
-            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
-            if (!isActuallyTruncated) {
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post fits within viewport without truncation";
-            } else {
-              eBtn.classList.remove("disabled");
-              eBtn.title = "Expand post body";
-            }
-          }
-        } else if (isFullPost) {
-          if (container.classList.contains("collapsed")) {
-            eBtn.title = "Expand post body";
-          } else {
-            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
-            if (isSmallContent) {
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post body is small and doesn't need toggle";
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-            } else {
-              eBtn.title = "Collapse post body";
-            }
-          }
-          if (!eBtn.title.includes("small")) {
-            eBtn.classList.remove("disabled");
-          }
-        }
-      }
-      const header = post.querySelector(".pr-post-header");
-      updateNextPostButton(header, post);
-    });
-    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
-    if (stickyHeader2) {
-      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
-      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
-      updateNextPostButton(stickyHeader2, stickyPostEl);
-    }
   };
   const formatStatusDate = (iso) => {
     const d = new Date(iso);
@@ -6268,7 +6451,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6414,7 +6597,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -7853,14 +8036,18 @@ currentCommentId = null;
         }
         if (!rootEl) return;
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        const isVisible = isElementFullyVisible(rootEl);
-        if (!isVisible) {
-          smartScrollTo(rootEl, false);
-        } else {
-          Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
-        }
-        rootEl.classList.add("pr-highlight-parent");
-        setTimeout(() => rootEl.classList.remove("pr-highlight-parent"), 2e3);
+        await withForcedLayout(rootEl, async () => {
+          if (!rootEl.isConnected) return;
+          const isVisible = isElementFullyVisible(rootEl);
+          if (!isVisible) {
+            smartScrollTo(rootEl, false);
+          } else {
+            Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
+          }
+          rootEl.classList.add("pr-highlight-parent");
+          await new Promise((resolve) => setTimeout(resolve, 2e3));
+          rootEl.classList.remove("pr-highlight-parent");
+        });
         return;
       }
     }
@@ -8670,7 +8857,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       request.onerror = () => reject(request.error);
     });
   };
-  const saveArchiveData = async (username, items, lastSyncDate) => {
+  const saveArchiveData = async (username, items, watermarks) => {
     const db = await openDB();
     const tx = db.transaction([STORE_ITEMS, STORE_METADATA], "readwrite");
     const itemStore = tx.objectStore(STORE_ITEMS);
@@ -8679,7 +8866,15 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       const itemToSave = { ...item, username };
       itemStore.put(itemToSave);
     });
-    metadataStore.put({ username, lastSyncDate });
+    const existingMetadataRequest = metadataStore.get(username);
+    const existingMetadata = await requestToPromise(existingMetadataRequest);
+    const updatedMetadata = {
+      username,
+      lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
+      lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
+      lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null
+    };
+    metadataStore.put(updatedMetadata);
     await transactionToPromise(tx);
   };
   const loadArchiveData = async (username) => {
@@ -8703,7 +8898,9 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     });
     return {
       items,
-      lastSyncDate: metadata?.lastSyncDate || null
+      lastSyncDate: metadata?.lastSyncDate || null,
+      lastSyncDate_comments: metadata?.lastSyncDate_comments || null,
+      lastSyncDate_posts: metadata?.lastSyncDate_posts || null
     };
   };
   const upsertContextualEntries = async (username, itemType, items) => {
@@ -8865,46 +9062,122 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     }
     return null;
   };
-  async function fetchCollectionAdaptively(userId, query, key, onProgress, minDate) {
+  const extractImmediateParentWithBody = (comment) => {
+    const parent = comment.parentComment;
+    if (!parent?._id) return null;
+    const body = typeof parent.htmlBody === "string" ? parent.htmlBody : "";
+    if (body.trim().length === 0) return null;
+    const postId = parent.postId || comment.postId || "";
+    if (!postId) return null;
+    return {
+      _id: parent._id,
+      postedAt: parent.postedAt || comment.postedAt || ( new Date()).toISOString(),
+      htmlBody: body,
+      baseScore: typeof parent.baseScore === "number" ? parent.baseScore : 0,
+      voteCount: typeof parent.voteCount === "number" ? parent.voteCount : 0,
+      pageUrl: parent.pageUrl || "",
+      author: parent.user?.username || "",
+      rejected: false,
+      topLevelCommentId: comment.topLevelCommentId || parent._id,
+      user: parent.user ? { ...parent.user, slug: "", karma: 0, htmlBio: "" } : null,
+      postId,
+      post: comment.post ?? null,
+      parentCommentId: parent.parentCommentId || "",
+      parentComment: parent.parentComment ?? null,
+      extendedScore: null,
+      afExtendedScore: parent.afExtendedScore ?? null,
+      currentUserVote: null,
+      currentUserExtendedVote: null,
+      contents: { markdown: parent.contents?.markdown ?? null },
+      descendentCount: 0,
+      directChildrenCount: 0,
+      contextType: "fetched"
+    };
+  };
+  async function fetchCollectionAdaptively(userId, query, key, onProgress, afterDate, onBatch, archiveUsername) {
     let allItems = [];
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
-    let beforeCursor = null;
+    let afterCursor = afterDate ? afterDate.toISOString() : null;
     while (hasMore) {
       const startTime = Date.now();
       try {
-        const response = await queryGraphQL(query, {
-          userId,
-          limit: currentLimit,
-          before: beforeCursor
-        }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
-        const rawResults = response[key]?.results || [];
+        console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
+        const requestBatch = async (limit) => {
+          const response = await queryGraphQL(query, {
+            userId,
+            limit,
+            after: afterCursor
+          }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
+          return response[key]?.results || [];
+        };
+        let fetchLimitUsed = currentLimit;
+        let rawResults = await requestBatch(fetchLimitUsed);
+        while (rawResults.length === fetchLimitUsed) {
+          const boundaryTimestamp = getCursorTimestampFromBatch(rawResults);
+          if (!boundaryTimestamp) break;
+          let boundaryCount = 0;
+          for (let i = rawResults.length - 1; i >= 0; i--) {
+            const row = rawResults[i];
+            if (!row || row.postedAt !== boundaryTimestamp) break;
+            boundaryCount++;
+          }
+          if (boundaryCount <= 1) break;
+          if (fetchLimitUsed >= MAX_PAGE_SIZE) {
+            Logger.warn(
+              `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical postedAt.`
+            );
+            break;
+          }
+          const expandedLimit = Math.min(
+            MAX_PAGE_SIZE,
+            Math.max(fetchLimitUsed + boundaryCount, Math.round(fetchLimitUsed * 1.5))
+          );
+          Logger.debug(
+            `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce timestamp boundary truncation risk.`
+          );
+          fetchLimitUsed = expandedLimit;
+          rawResults = await requestBatch(fetchLimitUsed);
+        }
         const results = rawResults.filter(isValidArchiveItem);
         const duration = Date.now() - startTime;
+        console.log(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
         if (results.length !== rawResults.length) {
           Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
         }
         if (rawResults.length === 0) {
+          console.log(`[Archive ${key}] End of collection reached (empty batch).`);
           hasMore = false;
           break;
         }
+        if (onBatch && results.length > 0) {
+          if (key === "comments") {
+            const extractedParentsById = new Map();
+            for (const item of results) {
+              const parent = extractImmediateParentWithBody(item);
+              if (parent) extractedParentsById.set(parent._id, parent);
+            }
+            const extractedParents = Array.from(extractedParentsById.values());
+            if (extractedParents.length > 0) {
+              try {
+                const cacheOwner = archiveUsername || userId;
+                await saveContextualItems(cacheOwner, extractedParents, extractPostsFromComments(extractedParents));
+              } catch (e) {
+                Logger.warn("Failed to persist extracted immediate parent comments.", e);
+              }
+            }
+          }
+          await onBatch(results);
+        }
         const ratio = TARGET_FETCH_TIME_MS / Math.max(duration, 100);
         const clampedRatio = Math.min(Math.max(ratio, 0.5), 1.5);
-        const nextLimit = Math.round(currentLimit * clampedRatio);
-        const prevLimit = currentLimit;
+        const nextLimit = Math.round(fetchLimitUsed * clampedRatio);
+        const prevLimit = fetchLimitUsed;
         currentLimit = Math.min(Math.max(nextLimit, MIN_PAGE_SIZE), MAX_PAGE_SIZE);
         if (currentLimit !== prevLimit) {
           Logger.debug(`Adaptive batching: ${key} batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
         }
-        let filteredResults = results;
-        if (minDate) {
-          const oldestInBatch = results[results.length - 1];
-          if (oldestInBatch && new Date(oldestInBatch.postedAt) < minDate) {
-            filteredResults = results.filter((item) => new Date(item.postedAt) >= minDate);
-            hasMore = false;
-          }
-        }
-        allItems = [...allItems, ...filteredResults];
+        allItems = [...allItems, ...results];
         const uniqueItems = new Map();
         allItems.forEach((item) => uniqueItems.set(item._id, item));
         allItems = Array.from(uniqueItems.values());
@@ -8914,26 +9187,26 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
             hasMore = false;
           } else {
             const nextCursor = getCursorTimestampFromBatch(rawResults);
-            if (!nextCursor) {
-              Logger.warn(`Archive ${key}: unable to derive next cursor from batch; stopping pagination to avoid loop.`);
+            if (!nextCursor || nextCursor === afterCursor) {
+              Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
               hasMore = false;
             } else {
-              beforeCursor = nextCursor;
+              afterCursor = nextCursor;
             }
           }
         }
       } catch (e) {
-        Logger.error(`Error fetching ${key} with cursor ${beforeCursor}:`, e);
+        Logger.error(`Error fetching ${key} with cursor ${afterCursor}:`, e);
         throw e;
       }
     }
     return allItems;
   }
-  const fetchUserPosts = (userId, onProgress, minDate) => {
-    return fetchCollectionAdaptively(userId, GET_USER_POSTS, "posts", onProgress, minDate);
+  const fetchUserPosts = (userId, onProgress, afterDate, onBatch) => {
+    return fetchCollectionAdaptively(userId, GET_USER_POSTS, "posts", onProgress, afterDate, onBatch);
   };
-  const fetchUserComments = (userId, onProgress, minDate) => {
-    return fetchCollectionAdaptively(userId, GET_USER_COMMENTS, "comments", onProgress, minDate);
+  const fetchUserComments = (userId, onProgress, afterDate, onBatch, archiveUsername) => {
+    return fetchCollectionAdaptively(userId, GET_USER_COMMENTS, "comments", onProgress, afterDate, onBatch, archiveUsername);
   };
   const extractPostsFromComments = (comments) => {
     const postMap = new Map();
@@ -9475,7 +9748,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   const MIN_HIGHLIGHT_TERM_LEN = 3;
   const TOKEN_SEPARATOR_UNICODE_PATTERN = "[^\\p{L}\\p{N}]+";
   const TOKEN_SEPARATOR_ASCII_PATTERN = "[^A-Za-z0-9]+";
-  const APOSTROPHE_FLEX_PATTERN = "['’]*";
+  const APOSTROPHE_FLEX_PATTERN = "['’]?";
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const termToPatternSource = (term, separatorPattern) => {
     const tokens = term.trim().split(/\s+/).filter(Boolean);
@@ -9513,6 +9786,8 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     }
     return Array.from(new Set(terms)).filter((term) => term.length >= MIN_HIGHLIGHT_TERM_LEN).slice(0, MAX_HIGHLIGHT_TERMS);
   };
+  let cachedPatternSignature = null;
+  let cachedPattern = null;
   const highlightTermsInContainer = (container, terms) => {
     const stableTerms = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b));
     const signature = stableTerms.join("");
@@ -9528,7 +9803,14 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       container.setAttribute("data-pr-highlighted-terms", signature);
       return;
     }
-    const pattern = buildHighlightRegex(stableTerms);
+    let pattern;
+    if (cachedPatternSignature === signature) {
+      pattern = cachedPattern;
+    } else {
+      pattern = buildHighlightRegex(stableTerms);
+      cachedPatternSignature = signature;
+      cachedPattern = pattern;
+    }
     if (!pattern) {
       container.setAttribute("data-pr-highlighted-terms", signature);
       return;
@@ -9562,16 +9844,17 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     }
     container.setAttribute("data-pr-highlighted-terms", signature);
   };
-  let currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 250;
+  const getDefaultRenderLimit = () => {
+    const override = window.__PR_RENDER_LIMIT_OVERRIDE;
+    return typeof override === "number" && Number.isFinite(override) && override > 0 ? override : Number.MAX_SAFE_INTEGER;
+  };
+  let currentRenderLimit = getDefaultRenderLimit();
   const INDEX_SNIPPET_MAX_LEN = 120;
   const updateRenderLimit = (limit) => {
     currentRenderLimit = limit;
   };
   const resetRenderLimit = () => {
-    currentRenderLimit = window.__PR_RENDER_LIMIT_OVERRIDE || 5e3;
-  };
-  const incrementRenderLimit = (delta) => {
-    currentRenderLimit += delta;
+    currentRenderLimit = getDefaultRenderLimit();
   };
   const ensureContextForItems = async (items, state2) => {
     const missingIds = new Set();
@@ -9589,7 +9872,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       }
       let current = comment.parentComment;
       let depth = 0;
-      while (current && depth < 5) {
+      while (current && depth < 20) {
         const currentId = typeof current._id === "string" ? current._id : null;
         if (currentId && !state2.commentById.has(currentId)) {
           missingIds.add(currentId);
@@ -9619,41 +9902,60 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       if ("title" in item) continue;
       const comment = item;
       let current = comment.parentComment;
-      while (current?._id) {
+      let depth = 0;
+      while (current?._id && depth < 20) {
         if (!state2.commentById.has(current._id) && !seen.has(current._id)) {
           seen.add(current._id);
           stubs.push(parentRefToStub(current, comment));
         }
         current = current.parentComment;
+        depth++;
       }
     }
     if (stubs.length > 0) {
       getUIHost().mergeComments(stubs, true);
     }
   };
-  const renderChunked = (items, renderFn, container, chunkSize = 50) => {
+  const renderChunked = (items, renderFn, container, abortSignal, onProgress) => {
+    container.innerHTML = "";
+    if (items.length === 0) {
+      return Promise.resolve();
+    }
+    const SYNC_THRESHOLD = 250;
+    const firstBatchSize = Math.min(items.length, SYNC_THRESHOLD);
+    let firstHtml = "";
+    for (let i = 0; i < firstBatchSize; i++) {
+      if (abortSignal?.aborted) return Promise.resolve();
+      firstHtml += renderFn(items[i]);
+    }
+    container.insertAdjacentHTML("beforeend", firstHtml);
+    if (onProgress) onProgress(Math.round(firstBatchSize / items.length * 100));
+    if (items.length <= firstBatchSize) {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
-      container.innerHTML = "";
-      if (items.length === 0) {
-        resolve();
-        return;
-      }
-      let currentIndex = 0;
+      let currentIndex = firstBatchSize;
+      const BACKGROUND_CHUNK_SIZE = 500;
       const renderNextChunk = () => {
-        let html2 = "";
-        const chunk = items.slice(currentIndex, currentIndex + chunkSize);
-        for (const item of chunk) {
-          html2 += renderFn(item);
+        if (abortSignal?.aborted) {
+          resolve();
+          return;
         }
-        container.insertAdjacentHTML("beforeend", html2);
-        currentIndex += chunkSize;
+        const end = Math.min(currentIndex + BACKGROUND_CHUNK_SIZE, items.length);
+        const htmlParts = [];
+        for (let i = currentIndex; i < end; i++) {
+          htmlParts.push(renderFn(items[i]));
+        }
+        container.insertAdjacentHTML("beforeend", htmlParts.join(""));
+        currentIndex = end;
+        if (onProgress) onProgress(Math.round(currentIndex / items.length * 100));
         if (currentIndex < items.length) {
-          requestAnimationFrame(renderNextChunk);
+          setTimeout(renderNextChunk, 0);
         } else {
           resolve();
         }
       };
-      requestAnimationFrame(renderNextChunk);
+      setTimeout(renderNextChunk, 0);
     });
   };
   const renderArchiveFeed = async (container, items, viewMode, state2, sortBy, options = {}) => {
@@ -9661,48 +9963,71 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
       return;
     }
-    const visibleItems = items.slice(0, currentRenderLimit);
-    const loadMoreBtn = document.getElementById("archive-load-more");
-    if (loadMoreBtn) {
-      loadMoreBtn.style.display = items.length > currentRenderLimit ? "block" : "none";
-      if (items.length > currentRenderLimit && loadMoreBtn.querySelector("button")) {
-        loadMoreBtn.querySelector("button").textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
-      }
-    }
-    if (viewMode === "index") {
-      const snippetTerms = options.snippetTerms ?? [];
-      const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
-      await renderChunked(
-        visibleItems,
-        (item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }),
-        container
-      );
-    } else if (isThreadMode(viewMode)) {
-      if (viewMode === "thread-full") {
-        await ensureContextForItems(visibleItems, state2);
+    document.body.style.cursor = "wait";
+    try {
+      const visibleItems = items.slice(0, currentRenderLimit);
+      if (viewMode === "index") {
+        const snippetTerms = options.snippetTerms ?? [];
+        const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
+        const renderPromise = renderChunked(
+          visibleItems,
+          (item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }),
+          container,
+          options.abortSignal,
+          options.onProgress
+        );
+        document.body.style.cursor = "";
+        await renderPromise;
+      } else if (isThreadMode(viewMode)) {
+        if (viewMode === "thread-full") {
+          await ensureContextForItems(visibleItems, state2);
+        } else {
+          ensurePlaceholderContext(visibleItems, state2);
+        }
+        if (options.abortSignal?.aborted) return;
+        const renderPromise = renderThreadView(container, visibleItems, state2, sortBy, options.abortSignal, options.onProgress);
+        document.body.style.cursor = "";
+        await renderPromise;
       } else {
-        ensurePlaceholderContext(visibleItems, state2);
+        const renderPromise = renderChunked(
+          visibleItems,
+          (item) => renderCardItem(item, state2),
+          container,
+          options.abortSignal,
+          options.onProgress
+        );
+        document.body.style.cursor = "";
+        await renderPromise;
       }
-      await renderThreadView(container, visibleItems, state2, sortBy);
-    } else {
-      await renderChunked(
-        visibleItems,
-        (item) => renderCardItem(item, state2),
-        container
-      );
+      if (options.abortSignal?.aborted) return;
+      const isTruncated = items.length > currentRenderLimit;
+      if (isTruncated) {
+        const footer = document.createElement("div");
+        footer.className = "pr-render-truncation-note";
+        footer.style.textAlign = "center";
+        footer.style.padding = "20px";
+        footer.style.color = "var(--pr-text-secondary)";
+        footer.style.borderTop = "1px solid var(--pr-border-subtle)";
+        footer.style.marginTop = "10px";
+        footer.textContent = `Showing first ${currentRenderLimit.toLocaleString()} of ${items.length.toLocaleString()} items. Large datasets are capped for performance.`;
+        container.appendChild(footer);
+      }
+    } finally {
+      if (document.body.style.cursor === "wait") {
+        document.body.style.cursor = "";
+      }
     }
   };
-  const renderThreadView = (container, items, state2, sortBy) => {
-    const visibleCommentIds = new Set();
+  const renderThreadView = (container, items, state2, sortBy, abortSignal, onProgress) => {
     const inclusionCommentIds = new Set();
     items.forEach((item) => {
       if (!("title" in item)) {
-        visibleCommentIds.add(item._id);
         inclusionCommentIds.add(item._id);
         const comment = item;
         let currentId = comment.parentCommentId || comment.parentComment?._id || null;
         let depth = 0;
         while (currentId && depth < 20) {
+          if (inclusionCommentIds.has(currentId)) break;
           inclusionCommentIds.add(currentId);
           const parent = state2.commentById.get(currentId);
           currentId = parent?.parentCommentId || parent?.parentComment?._id || null;
@@ -9737,33 +10062,32 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       }
     });
     postGroups.forEach((group, postId) => {
-      let maxDate = new Date(0);
+      let maxDateStr = "";
       let maxScore = Number.NEGATIVE_INFINITY;
-      const comments = group.comments;
-      comments.forEach((c) => {
-        const cDate = new Date(c.postedAt);
-        if (cDate > maxDate) maxDate = cDate;
+      group.comments.forEach((c) => {
+        if (c.postedAt > maxDateStr) maxDateStr = c.postedAt;
         if (typeof c.baseScore === "number" && c.baseScore > maxScore) {
           maxScore = c.baseScore;
         }
       });
       const post = state2.postById.get(postId);
       if (post) {
-        const postDate = new Date(post.postedAt);
-        if (postDate > maxDate) maxDate = postDate;
+        if (post.postedAt > maxDateStr) maxDateStr = post.postedAt;
         if (typeof post.baseScore === "number" && post.baseScore > maxScore) {
           maxScore = post.baseScore;
         }
       }
-      group.maxDate = maxDate;
+      group.maxDate = new Date(maxDateStr || 0);
       group.maxScore = maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore;
     });
     const sortedGroups = Array.from(postGroups.values());
     switch (sortBy) {
       case "date-asc":
-      case "replyTo":
-case "relevance":
         sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
+        break;
+      case "replyTo":
+      case "relevance":
+        sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
         break;
       case "score":
         sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
@@ -9777,37 +10101,64 @@ case "relevance":
         break;
     }
     container.innerHTML = "";
+    if (sortedGroups.length === 0) {
+      return Promise.resolve();
+    }
+    const SYNC_GROUP_THRESHOLD = 25;
+    const firstBatchSize = Math.min(sortedGroups.length, SYNC_GROUP_THRESHOLD);
+    const firstHtmlParts = [];
+    for (let i = 0; i < firstBatchSize; i++) {
+      if (abortSignal?.aborted) return Promise.resolve();
+      const group = sortedGroups[i];
+      const post = state2.postById.get(group.postId);
+      const postComments = group.comments;
+      if (!post && postComments.length === 0) continue;
+      const postGroup = {
+        postId: group.postId,
+        title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
+        comments: postComments,
+        fullPost: post
+      };
+      firstHtmlParts.push(renderPostGroup(postGroup, state2));
+    }
+    container.insertAdjacentHTML("beforeend", firstHtmlParts.join(""));
+    if (onProgress) onProgress(Math.round(firstBatchSize / sortedGroups.length * 100));
+    if (sortedGroups.length <= firstBatchSize) {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
-      if (sortedGroups.length === 0) {
-        resolve();
-        return;
-      }
-      const CHUNK_SIZE = 15;
-      let currentIndex = 0;
+      let currentIndex = firstBatchSize;
+      const BACKGROUND_CHUNK_SIZE = 50;
       const renderNextChunk = () => {
-        let html2 = "";
-        const chunk = sortedGroups.slice(currentIndex, currentIndex + CHUNK_SIZE);
-        chunk.forEach((group) => {
+        if (abortSignal?.aborted) {
+          resolve();
+          return;
+        }
+        const end = Math.min(currentIndex + BACKGROUND_CHUNK_SIZE, sortedGroups.length);
+        const htmlParts = [];
+        for (let i = currentIndex; i < end; i++) {
+          const group = sortedGroups[i];
           const post = state2.postById.get(group.postId);
           const postComments = group.comments;
-          if (!post && postComments.length === 0) return;
+          if (!post && postComments.length === 0) continue;
           const postGroup = {
             postId: group.postId,
             title: post?.title || postComments.find((c) => c.post?.title)?.post?.title || "Unknown Post",
             comments: postComments,
             fullPost: post
           };
-          html2 += renderPostGroup(postGroup, state2);
-        });
-        container.insertAdjacentHTML("beforeend", html2);
-        currentIndex += CHUNK_SIZE;
+          htmlParts.push(renderPostGroup(postGroup, state2));
+        }
+        container.insertAdjacentHTML("beforeend", htmlParts.join(""));
+        currentIndex = end;
+        if (onProgress) onProgress(Math.round(currentIndex / sortedGroups.length * 100));
         if (currentIndex < sortedGroups.length) {
-          requestAnimationFrame(renderNextChunk);
+          setTimeout(renderNextChunk, 0);
         } else {
           resolve();
         }
       };
-      requestAnimationFrame(renderNextChunk);
+      setTimeout(renderNextChunk, 0);
     });
   };
   const parentRefToStub = (ref, sourceComment) => ({
@@ -9834,6 +10185,35 @@ case "relevance":
     directChildrenCount: 0,
     contextType: "stub"
   });
+  const parentRefToFetchedContext = (ref, sourceComment) => ({
+    ...parentRefToStub(ref, sourceComment),
+    htmlBody: typeof ref.htmlBody === "string" ? ref.htmlBody : "",
+    contents: { markdown: ref.contents?.markdown ?? null },
+    parentComment: ref.parentComment ?? null,
+    contextType: "fetched"
+  });
+  const placeholderPostForTopLevelComment = (comment, state2) => {
+    const statePost = state2.postById.get(comment.postId);
+    if (statePost) return statePost;
+    if (comment.post) return comment.post;
+    return {
+      _id: comment.postId,
+      title: "",
+      slug: "",
+      pageUrl: `${window.location.origin}/posts/${comment.postId}`,
+      postedAt: comment.postedAt || ( new Date()).toISOString(),
+      baseScore: 0,
+      voteCount: 0,
+      user: null,
+      extendedScore: null,
+      afExtendedScore: null,
+      currentUserVote: null,
+      currentUserExtendedVote: null,
+      contents: { markdown: null },
+      commentCount: 0,
+      wordCount: 0
+    };
+  };
   const renderCardItem = (item, state2) => {
     const isPost2 = "title" in item;
     if (isPost2) {
@@ -9850,10 +10230,18 @@ case "relevance":
     const comment = item;
     const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
     const parentFromState = immediateParentId ? state2.commentById.get(immediateParentId) : null;
-    const isContextParentFromState = !!parentFromState && !!parentFromState.contextType;
-    const parentComment = isContextParentFromState ? parentFromState : comment.parentComment ? parentRefToStub(comment.parentComment, comment) : null;
+    const inlineParent = comment.parentComment;
+    const inlineParentHasBody = typeof inlineParent?.htmlBody === "string" && inlineParent.htmlBody.trim().length > 0;
+    const parentComment = inlineParentHasBody && inlineParent ? parentRefToFetchedContext(inlineParent, comment) : parentFromState || (inlineParent ? parentRefToStub(inlineParent, comment) : null);
     if (!parentComment || parentComment._id === comment._id) {
-      return `<div class="pr-archive-item">${renderComment(comment, state2)}</div>`;
+      const headerHtml = renderPostHeader(placeholderPostForTopLevelComment(comment, state2), { state: state2 });
+      const nestedCommentHtml2 = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
+      return `
+      <div class="pr-archive-item pr-archive-top-level-comment">
+        ${headerHtml}
+        ${nestedCommentHtml2}
+      </div>
+    `;
     }
     const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
     return `<div class="pr-archive-item">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
@@ -10273,6 +10661,12 @@ sortCanonicalItems() {
     if (signals.replyToHit) score += 6;
     return score;
   };
+  const EMPTY_SIGNALS = {
+    tokenHits: 0,
+    phraseHits: 0,
+    authorHit: false,
+    replyToHit: false
+  };
   const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {
     const sorted = [...docs];
     switch (sortMode) {
@@ -10302,18 +10696,8 @@ sortCanonicalItems() {
         return sorted;
       case "relevance":
         sorted.sort((a, b) => {
-          const aSignals = relevanceSignalsById.get(a.id) || {
-            tokenHits: 0,
-            phraseHits: 0,
-            authorHit: false,
-            replyToHit: false
-          };
-          const bSignals = relevanceSignalsById.get(b.id) || {
-            tokenHits: 0,
-            phraseHits: 0,
-            authorHit: false,
-            replyToHit: false
-          };
+          const aSignals = relevanceSignalsById.get(a.id) || EMPTY_SIGNALS;
+          const bSignals = relevanceSignalsById.get(b.id) || EMPTY_SIGNALS;
           const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);
           if (scoreCmp !== 0) return scoreCmp;
           const dateCmp = b.postedAtMs - a.postedAtMs;
@@ -10454,39 +10838,38 @@ sortCanonicalItems() {
     signalMap.set(ordinal, created);
     return created;
   };
-  const allOrdinalsSet = (docCount) => {
-    const output = new Set();
-    for (let i = 0; i < docCount; i++) output.add(i);
-    return output;
+  const intersectSortedArrays = (a, b) => {
+    let i = 0;
+    let j = 0;
+    const result = new Uint32Array(Math.min(a.length, b.length));
+    let count = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) {
+        result[count++] = a[i];
+        i++;
+        j++;
+      } else if (a[i] < b[j]) {
+        i++;
+      } else {
+        j++;
+      }
+    }
+    return count === result.length ? result : result.slice(0, count);
   };
-  const intersectSets = (a, b) => {
-    const [small, large] = a.size < b.size ? [a, b] : [b, a];
-    const out = new Set();
-    small.forEach((value) => {
-      if (large.has(value)) out.add(value);
-    });
-    return out;
-  };
-  const postingsToSet = (postings) => {
-    const out = new Set();
-    for (let i = 0; i < postings.length; i++) out.add(postings[i]);
-    return out;
-  };
-  const maybeIntersectWithCandidate = (candidate, current) => {
-    if (!candidate) return current;
-    return intersectSets(candidate, current);
-  };
-  const getTokenPostingIntersection = (index, tokens, docCount) => {
-    if (tokens.length === 0) return allOrdinalsSet(docCount);
+  const getTokenPostingIntersection = (index, tokens) => {
+    if (tokens.length === 0) return null;
     let result = null;
     for (const token of tokens) {
       const postings = index.get(token);
-      if (!postings) return new Set();
-      const postingSet = postingsToSet(postings);
-      result = result ? intersectSets(result, postingSet) : postingSet;
-      if (result.size === 0) return result;
+      if (!postings) return new Uint32Array(0);
+      if (result === null) {
+        result = postings;
+      } else {
+        result = intersectSortedArrays(result, postings);
+        if (result.length === 0) return result;
+      }
     }
-    return result || new Set();
+    return result;
   };
   const tryApplyAppendOnlyPatch = (index, source, items) => {
     if (items.length < index.docs.length) return false;
@@ -10575,11 +10958,12 @@ sortCanonicalItems() {
         deferredStageAClauses.push(clause);
         continue;
       }
-      let matched = new Set();
+      let matched = null;
       switch (clause.kind) {
         case "term": {
           const termTokens = tokenizeForIndex(clause.valueNorm);
           if (termTokens.length === 0) {
+            const results2 = [];
             for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
               if (budgetExceeded()) {
                 partialResults = true;
@@ -10587,105 +10971,142 @@ sortCanonicalItems() {
               }
               const doc = corpus.docs[ordinal];
               if (matchesNormalizedText(doc, clause.valueNorm)) {
-                matched.add(ordinal);
+                results2.push(ordinal);
               }
             }
+            matched = new Uint32Array(results2);
           } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {
-            const postings = corpus.tokenIndex.get(clause.valueNorm);
-            matched = postings ? postingsToSet(postings) : new Set();
+            matched = corpus.tokenIndex.get(clause.valueNorm) || new Uint32Array(0);
           } else {
-            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);
-            accelerated.forEach((ordinal) => {
-              const doc = corpus.docs[ordinal];
-              if (!matchesNormalizedText(doc, clause.valueNorm)) return;
-              matched.add(ordinal);
+            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);
+            if (accelerated) {
+              const results2 = [];
+              accelerated.forEach((ordinal) => {
+                const doc = corpus.docs[ordinal];
+                if (!matchesNormalizedText(doc, clause.valueNorm)) return;
+                results2.push(ordinal);
+              });
+              matched = new Uint32Array(results2);
+            } else {
+              matched = null;
+            }
+          }
+          if (matched) {
+            matched.forEach((ordinal) => {
+              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+              signal.tokenHits += 1;
             });
           }
-          matched.forEach((ordinal) => {
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.tokenHits += 1;
-          });
           break;
         }
         case "author": {
           const nameTokens = tokenizeForIndex(clause.valueNorm);
-          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens, docCount);
-          accelerated.forEach((ordinal) => {
-            const doc = corpus.docs[ordinal];
-            if (!doc.authorNameNorm.includes(clause.valueNorm)) return;
-            matched.add(ordinal);
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.authorHit = true;
-          });
+          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);
+          if (accelerated) {
+            const results2 = [];
+            accelerated.forEach((ordinal) => {
+              const doc = corpus.docs[ordinal];
+              if (!doc.authorNameNorm.includes(clause.valueNorm)) return;
+              results2.push(ordinal);
+              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+              signal.authorHit = true;
+            });
+            matched = new Uint32Array(results2);
+          } else {
+            matched = null;
+          }
           break;
         }
         case "replyto": {
           const nameTokens = tokenizeForIndex(clause.valueNorm);
-          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens, docCount);
-          accelerated.forEach((ordinal) => {
-            const doc = corpus.docs[ordinal];
-            if (!doc.replyToNorm.includes(clause.valueNorm)) return;
-            matched.add(ordinal);
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.replyToHit = true;
-          });
+          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);
+          if (accelerated) {
+            const results2 = [];
+            accelerated.forEach((ordinal) => {
+              const doc = corpus.docs[ordinal];
+              if (!doc.replyToNorm.includes(clause.valueNorm)) return;
+              results2.push(ordinal);
+              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+              signal.replyToHit = true;
+            });
+            matched = new Uint32Array(results2);
+          } else {
+            matched = null;
+          }
           break;
         }
         case "type":
         case "score":
         case "date": {
-          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+          const results2 = [];
+          const constrainedOrdinals = candidateOrdinals;
+          const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;
+          for (let i = 0; i < scanLimit; i++) {
             if (budgetExceeded()) {
               partialResults = true;
               break;
             }
+            const ordinal = constrainedOrdinals ? constrainedOrdinals[i] : i;
             const doc = corpus.docs[ordinal];
             if (matchesClause(doc, clause)) {
-              matched.add(ordinal);
+              results2.push(ordinal);
             }
           }
+          matched = new Uint32Array(results2);
           break;
         }
       }
-      candidateOrdinals = maybeIntersectWithCandidate(candidateOrdinals, matched);
-      if (candidateOrdinals.size === 0) {
-        break;
+      if (matched !== null) {
+        if (candidateOrdinals === null) {
+          candidateOrdinals = matched;
+        } else {
+          candidateOrdinals = intersectSortedArrays(candidateOrdinals, matched);
+        }
+        if (candidateOrdinals.length === 0) {
+          break;
+        }
       }
     }
     const hasPositiveContent = clauses.some(isPositiveContentClause);
     const stageASeeded = candidateOrdinals !== null;
-    if (!candidateOrdinals) {
-      candidateOrdinals = allOrdinalsSet(docCount);
-    }
-    for (const clause of deferredStageAClauses) {
-      if (budgetExceeded()) {
-        partialResults = true;
-        break;
-      }
-      const filtered = new Set();
-      let clauseComplete = true;
-      for (const ordinal of candidateOrdinals.values()) {
-        if (budgetExceeded()) {
-          partialResults = true;
-          clauseComplete = false;
-          break;
-        }
-        const doc = corpus.docs[ordinal];
-        if (matchesClause(doc, clause)) {
-          filtered.add(ordinal);
-        }
-      }
-      if (!clauseComplete) break;
-      candidateOrdinals = filtered;
-      if (candidateOrdinals.size === 0) break;
-    }
-    if (hasPositiveContent) {
-      const filtered = new Set();
-      for (const ordinal of candidateOrdinals.values()) {
+    let stageBApplied = false;
+    if (candidateOrdinals) {
+      for (const clause of deferredStageAClauses) {
         if (budgetExceeded()) {
           partialResults = true;
           break;
         }
+        const filtered = [];
+        let clauseComplete = true;
+        for (let i = 0; i < candidateOrdinals.length; i++) {
+          if (budgetExceeded()) {
+            partialResults = true;
+            clauseComplete = false;
+            break;
+          }
+          const ordinal = candidateOrdinals[i];
+          const doc = corpus.docs[ordinal];
+          if (matchesClause(doc, clause)) {
+            filtered.push(ordinal);
+          }
+        }
+        if (!clauseComplete) {
+          candidateOrdinals = new Uint32Array(filtered);
+          break;
+        }
+        candidateOrdinals = new Uint32Array(filtered);
+        if (candidateOrdinals.length === 0) break;
+      }
+    }
+    const results = [];
+    if (hasPositiveContent && candidateOrdinals) {
+      stageBApplied = true;
+      for (let i = 0; i < candidateOrdinals.length; i++) {
+        if (budgetExceeded()) {
+          partialResults = true;
+          break;
+        }
+        const ordinal = candidateOrdinals[i];
         const doc = corpus.docs[ordinal];
         stageBScanned++;
         let stageBTokenHits = 0;
@@ -10709,12 +11130,11 @@ sortCanonicalItems() {
             signal.phraseHits += stageBPhraseHits;
             signal.tokenHits += stageBTokenHits;
           }
-          filtered.add(ordinal);
+          results.push(ordinal);
         }
       }
-      candidateOrdinals = filtered;
     } else if (!stageASeeded && plan.stageB.length > 0) {
-      const filtered = new Set();
+      stageBApplied = true;
       for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
         if (budgetExceeded()) {
           partialResults = true;
@@ -10739,36 +11159,59 @@ sortCanonicalItems() {
             signal.phraseHits += stageBPhraseHits;
             signal.tokenHits += stageBTokenHits;
           }
-          filtered.add(ordinal);
+          results.push(ordinal);
         }
       }
-      candidateOrdinals = filtered;
+    }
+    let finalOrdinals;
+    if (stageBApplied) {
+      finalOrdinals = new Uint32Array(results);
+    } else if (results.length > 0) {
+      finalOrdinals = new Uint32Array(results);
+    } else if (candidateOrdinals) {
+      finalOrdinals = candidateOrdinals;
+    } else {
+      finalOrdinals = new Uint32Array(docCount);
+      for (let i = 0; i < docCount; i++) finalOrdinals[i] = i;
     }
     if (plan.negations.length > 0) {
-      const filtered = new Set();
-      for (const ordinal of candidateOrdinals.values()) {
+      const filtered = [];
+      for (let i = 0; i < finalOrdinals.length; i++) {
         if (budgetExceeded()) {
           partialResults = true;
           break;
         }
+        const ordinal = finalOrdinals[i];
         const doc = corpus.docs[ordinal];
         const excluded = plan.negations.some((clause) => matchesClause(doc, clause));
-        if (!excluded) filtered.add(ordinal);
+        if (!excluded) filtered.push(ordinal);
       }
-      candidateOrdinals = filtered;
+      finalOrdinals = new Uint32Array(filtered);
     }
-    const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);
+    let docs;
+    if (finalOrdinals.length === docCount) {
+      docs = corpus.docs.slice();
+    } else {
+      docs = new Array(finalOrdinals.length);
+      for (let i = 0; i < finalOrdinals.length; i++) {
+        docs[i] = corpus.docs[finalOrdinals[i]];
+      }
+    }
     const relevanceSignalsById = new Map();
-    const finalCandidateOrdinals = candidateOrdinals;
-    relevanceSignalsByOrdinal.forEach((signals, ordinal) => {
-      if (!finalCandidateOrdinals.has(ordinal)) return;
-      const doc = corpus.docs[ordinal];
-      relevanceSignalsById.set(doc.id, signals);
-    });
+    if (relevanceSignalsByOrdinal.size > 0) {
+      for (let i = 0; i < finalOrdinals.length; i++) {
+        const ordinal = finalOrdinals[i];
+        const signals = relevanceSignalsByOrdinal.get(ordinal);
+        if (signals) {
+          const doc = corpus.docs[ordinal];
+          relevanceSignalsById.set(doc.id, signals);
+        }
+      }
+    }
     return {
       docs,
       relevanceSignalsById,
-      stageACandidateCount: candidateOrdinals.size,
+      stageACandidateCount: finalOrdinals.length,
       stageBScanned,
       partialResults
     };
@@ -11504,7 +11947,7 @@ sortCanonicalItems() {
     const next = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", next);
   };
-  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => {\n    if (pattern.length > 250) return true;\n    return /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || // nested quantifiers\n    /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern) || // consecutive quantifiers\n    /\\\\[1-9]/.test(pattern) || // backreferences \n    /(?:\\(.*?\\|.*?\\).*?){3,}/.test(pattern);\n  };\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        sorted.sort((a, b) => {\n          const aSignals = relevanceSignalsById.get(a.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const bSignals = relevanceSignalsById.get(b.id) || {\n            tokenHits: 0,\n            phraseHits: 0,\n            authorHit: false,\n            replyToHit: false\n          };\n          const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPostingBatch = (index, token, ordinals) => {\n    if (ordinals.length === 0) return;\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.from(ordinals));\n      return;\n    }\n    const next = new Uint32Array(postings.length + ordinals.length);\n    next.set(postings);\n    next.set(ordinals, postings.length);\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    const tokenBatch = /* @__PURE__ */ new Map();\n    const authorBatch = /* @__PURE__ */ new Map();\n    const replyToBatch = /* @__PURE__ */ new Map();\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToBatch, token, ordinal);\n      }\n    }\n    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));\n    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));\n    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const allOrdinalsSet = (docCount) => {\n    const output = /* @__PURE__ */ new Set();\n    for (let i = 0; i < docCount; i++) output.add(i);\n    return output;\n  };\n  const intersectSets = (a, b) => {\n    const [small, large] = a.size < b.size ? [a, b] : [b, a];\n    const out = /* @__PURE__ */ new Set();\n    small.forEach((value) => {\n      if (large.has(value)) out.add(value);\n    });\n    return out;\n  };\n  const postingsToSet = (postings) => {\n    const out = /* @__PURE__ */ new Set();\n    for (let i = 0; i < postings.length; i++) out.add(postings[i]);\n    return out;\n  };\n  const maybeIntersectWithCandidate = (candidate, current) => {\n    if (!candidate) return current;\n    return intersectSets(candidate, current);\n  };\n  const getTokenPostingIntersection = (index, tokens, docCount) => {\n    if (tokens.length === 0) return allOrdinalsSet(docCount);\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return /* @__PURE__ */ new Set();\n      const postingSet = postingsToSet(postings);\n      result = result ? intersectSets(result, postingSet) : postingSet;\n      if (result.size === 0) return result;\n    }\n    return result || /* @__PURE__ */ new Set();\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = /* @__PURE__ */ new Set();\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (budgetExceeded()) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                matched.add(ordinal);\n              }\n            }\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            const postings = corpus.tokenIndex.get(clause.valueNorm);\n            matched = postings ? postingsToSet(postings) : /* @__PURE__ */ new Set();\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens, docCount);\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n              matched.add(ordinal);\n            });\n          }\n          matched.forEach((ordinal) => {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.tokenHits += 1;\n          });\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.authorHit = true;\n          });\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens, docCount);\n          accelerated.forEach((ordinal) => {\n            const doc = corpus.docs[ordinal];\n            if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n            matched.add(ordinal);\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.replyToHit = true;\n          });\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n            if (budgetExceeded()) {\n              partialResults = true;\n              break;\n            }\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              matched.add(ordinal);\n            }\n          }\n          break;\n        }\n      }\n      candidateOrdinals = maybeIntersectWithCandidate(candidateOrdinals, matched);\n      if (candidateOrdinals.size === 0) {\n        break;\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    if (!candidateOrdinals) {\n      candidateOrdinals = allOrdinalsSet(docCount);\n    }\n    for (const clause of deferredStageAClauses) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        break;\n      }\n      const filtered = /* @__PURE__ */ new Set();\n      let clauseComplete = true;\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          clauseComplete = false;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        if (matchesClause(doc, clause)) {\n          filtered.add(ordinal);\n        }\n      }\n      if (!clauseComplete) break;\n      candidateOrdinals = filtered;\n      if (candidateOrdinals.size === 0) break;\n    }\n    if (hasPositiveContent) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      }\n      candidateOrdinals = filtered;\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          filtered.add(ordinal);\n        }\n      }\n      candidateOrdinals = filtered;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = /* @__PURE__ */ new Set();\n      for (const ordinal of candidateOrdinals.values()) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.add(ordinal);\n      }\n      candidateOrdinals = filtered;\n    }\n    const docs = Array.from(candidateOrdinals.values()).map((ordinal) => corpus.docs[ordinal]);\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    const finalCandidateOrdinals = candidateOrdinals;\n    relevanceSignalsByOrdinal.forEach((signals, ordinal) => {\n      if (!finalCandidateOrdinals.has(ordinal)) return;\n      const doc = corpus.docs[ordinal];\n      relevanceSignalsById.set(doc.id, signals);\n    });\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: candidateOrdinals.size,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2,\n          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      let debugExplain;\n      if (request.debugExplain) {\n        const relevanceSignalsById = {};\n        for (const id of ids) {\n          const signals = mergedSignals.get(id);\n          if (!signals) continue;\n          relevanceSignalsById[id] = { ...signals };\n        }\n        debugExplain = { relevanceSignalsById };\n      }\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics,\n        ...debugExplain ? { debugExplain } : {}\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    const base = source === "authored" ? authoredItems : contextItems;\n    const byId = /* @__PURE__ */ new Map();\n    for (const item of base) byId.set(item._id, item);\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    setCorpusItems(source, Array.from(byId.values()));\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    for (const item of message.items) {\n      fullBatch.items.push(item);\n    }\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs,\n      debugExplain: message.debugExplain\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics,\n      ...result.debugExplain ? { debugExplain: result.debugExplain } : {}\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
+  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => {\n    if (pattern.length > 250) return true;\n    return /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || // nested quantifiers\n    /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern) || // consecutive quantifiers\n    /\\\\[1-9]/.test(pattern) || // backreferences \n    /(?:\\(.*?\\|.*?\\).*?){3,}/.test(pattern);\n  };\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const EMPTY_SIGNALS = {\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        sorted.sort((a, b) => {\n          const aSignals = relevanceSignalsById.get(a.id) || EMPTY_SIGNALS;\n          const bSignals = relevanceSignalsById.get(b.id) || EMPTY_SIGNALS;\n          const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPostingBatch = (index, token, ordinals) => {\n    if (ordinals.length === 0) return;\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.from(ordinals));\n      return;\n    }\n    const next = new Uint32Array(postings.length + ordinals.length);\n    next.set(postings);\n    next.set(ordinals, postings.length);\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    const tokenBatch = /* @__PURE__ */ new Map();\n    const authorBatch = /* @__PURE__ */ new Map();\n    const replyToBatch = /* @__PURE__ */ new Map();\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToBatch, token, ordinal);\n      }\n    }\n    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));\n    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));\n    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const intersectSortedArrays = (a, b) => {\n    let i = 0;\n    let j = 0;\n    const result = new Uint32Array(Math.min(a.length, b.length));\n    let count = 0;\n    while (i < a.length && j < b.length) {\n      if (a[i] === b[j]) {\n        result[count++] = a[i];\n        i++;\n        j++;\n      } else if (a[i] < b[j]) {\n        i++;\n      } else {\n        j++;\n      }\n    }\n    return count === result.length ? result : result.slice(0, count);\n  };\n  const getTokenPostingIntersection = (index, tokens) => {\n    if (tokens.length === 0) return null;\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return new Uint32Array(0);\n      if (result === null) {\n        result = postings;\n      } else {\n        result = intersectSortedArrays(result, postings);\n        if (result.length === 0) return result;\n      }\n    }\n    return result;\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = null;\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            const results2 = [];\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (budgetExceeded()) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                results2.push(ordinal);\n              }\n            }\n            matched = new Uint32Array(results2);\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            matched = corpus.tokenIndex.get(clause.valueNorm) || new Uint32Array(0);\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);\n            if (accelerated) {\n              const results2 = [];\n              accelerated.forEach((ordinal) => {\n                const doc = corpus.docs[ordinal];\n                if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n                results2.push(ordinal);\n              });\n              matched = new Uint32Array(results2);\n            } else {\n              matched = null;\n            }\n          }\n          if (matched) {\n            matched.forEach((ordinal) => {\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.tokenHits += 1;\n            });\n          }\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);\n          if (accelerated) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.authorHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            matched = null;\n          }\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);\n          if (accelerated) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.replyToHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            matched = null;\n          }\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          const results2 = [];\n          const constrainedOrdinals = candidateOrdinals;\n          const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;\n          for (let i = 0; i < scanLimit; i++) {\n            if (budgetExceeded()) {\n              partialResults = true;\n              break;\n            }\n            const ordinal = constrainedOrdinals ? constrainedOrdinals[i] : i;\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              results2.push(ordinal);\n            }\n          }\n          matched = new Uint32Array(results2);\n          break;\n        }\n      }\n      if (matched !== null) {\n        if (candidateOrdinals === null) {\n          candidateOrdinals = matched;\n        } else {\n          candidateOrdinals = intersectSortedArrays(candidateOrdinals, matched);\n        }\n        if (candidateOrdinals.length === 0) {\n          break;\n        }\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    let stageBApplied = false;\n    if (candidateOrdinals) {\n      for (const clause of deferredStageAClauses) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const filtered = [];\n        let clauseComplete = true;\n        for (let i = 0; i < candidateOrdinals.length; i++) {\n          if (budgetExceeded()) {\n            partialResults = true;\n            clauseComplete = false;\n            break;\n          }\n          const ordinal = candidateOrdinals[i];\n          const doc = corpus.docs[ordinal];\n          if (matchesClause(doc, clause)) {\n            filtered.push(ordinal);\n          }\n        }\n        if (!clauseComplete) {\n          candidateOrdinals = new Uint32Array(filtered);\n          break;\n        }\n        candidateOrdinals = new Uint32Array(filtered);\n        if (candidateOrdinals.length === 0) break;\n      }\n    }\n    const results = [];\n    if (hasPositiveContent && candidateOrdinals) {\n      stageBApplied = true;\n      for (let i = 0; i < candidateOrdinals.length; i++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = candidateOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      stageBApplied = true;\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    }\n    let finalOrdinals;\n    if (stageBApplied) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (results.length > 0) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (candidateOrdinals) {\n      finalOrdinals = candidateOrdinals;\n    } else {\n      finalOrdinals = new Uint32Array(docCount);\n      for (let i = 0; i < docCount; i++) finalOrdinals[i] = i;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = [];\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = finalOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.push(ordinal);\n      }\n      finalOrdinals = new Uint32Array(filtered);\n    }\n    let docs;\n    if (finalOrdinals.length === docCount) {\n      docs = corpus.docs.slice();\n    } else {\n      docs = new Array(finalOrdinals.length);\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        docs[i] = corpus.docs[finalOrdinals[i]];\n      }\n    }\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    if (relevanceSignalsByOrdinal.size > 0) {\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        const ordinal = finalOrdinals[i];\n        const signals = relevanceSignalsByOrdinal.get(ordinal);\n        if (signals) {\n          const doc = corpus.docs[ordinal];\n          relevanceSignalsById.set(doc.id, signals);\n        }\n      }\n    }\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: finalOrdinals.length,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2,\n          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      let debugExplain;\n      if (request.debugExplain) {\n        const relevanceSignalsById = {};\n        for (const id of ids) {\n          const signals = mergedSignals.get(id);\n          if (!signals) continue;\n          relevanceSignalsById[id] = { ...signals };\n        }\n        debugExplain = { relevanceSignalsById };\n      }\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics,\n        ...debugExplain ? { debugExplain } : {}\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    const base = source === "authored" ? authoredItems : contextItems;\n    const byId = /* @__PURE__ */ new Map();\n    for (const item of base) byId.set(item._id, item);\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    setCorpusItems(source, Array.from(byId.values()));\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    for (const item of message.items) {\n      fullBatch.items.push(item);\n    }\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs,\n      debugExplain: message.debugExplain\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics,\n      ...result.debugExplain ? { debugExplain: result.debugExplain } : {}\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
   const blob = typeof self !== "undefined" && self.Blob && new Blob(["(self.URL || self.webkitURL).revokeObjectURL(self.location.href);", jsContent], { type: "text/javascript;charset=utf-8" });
   function WorkerWrapper(options) {
     let objURL;
@@ -11654,7 +12097,6 @@ sortCanonicalItems() {
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
   const MAX_AUTO_RETRIES = 50;
   const INITIAL_BACKOFF_MS = 2e3;
-  const PAGE_SIZE = 1e4;
   const SEARCH_DEBOUNCE_MS = 180;
   const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
   const initArchive = async (username) => {
@@ -11668,10 +12110,13 @@ sortCanonicalItems() {
       const state2 = createInitialArchiveState(username);
       const root = document.getElementById("power-reader-root");
       if (!root) return;
-      if (!document.getElementById("pr-archive-styles")) {
-        const style = document.createElement("style");
+      let style = document.getElementById("pr-archive-styles");
+      if (!style) {
+        style = document.createElement("style");
         style.id = "pr-archive-styles";
-        style.textContent = `
+        document.head.appendChild(style);
+      }
+      style.textContent = `
         .pr-input {
             padding: 8px 12px;
             border: 1px solid var(--pr-border-color, #ddd);
@@ -12004,11 +12449,6 @@ sortCanonicalItems() {
             outline: 2px solid #0078ff;
             outline-offset: 1px;
         }
-        #archive-result-count.is-loading,
-        #archive-feed.is-loading {
-            opacity: 0.6;
-            transition: opacity 120ms ease;
-        }
         .pr-archive-index-item {
             display: flex;
             align-items: center;
@@ -12178,11 +12618,9 @@ sortCanonicalItems() {
             gap: 10px;
         }
     `;
-        document.head.appendChild(style);
-      }
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -12292,14 +12730,10 @@ sortCanonicalItems() {
       Loading archive data...
     </div>
     <div id="archive-feed" style="margin-top: 20px"></div>
-    <div id="archive-load-more" style="text-align: center; margin: 20px; display: none;">
-        <button class="pr-button">Load More</button>
-    </div>
   `;
       const statusEl = document.getElementById("archive-status");
       const dashboardEl = document.getElementById("archive-dashboard");
       const feedEl = document.getElementById("archive-feed");
-      const loadMoreBtn = document.getElementById("archive-load-more");
       const searchInput = document.getElementById("archive-search");
       const clearBtn = document.getElementById("archive-search-clear");
       const scopeContainer = document.getElementById("archive-scope");
@@ -12320,17 +12754,45 @@ sortCanonicalItems() {
           "/mesa\\s+optimizer/i scope:all"
         ].join("\n");
       }
+      const perfMetrics = {
+        dbLoadMs: 0,
+        networkFetchMs: 0,
+        renderMs: 0,
+        renderPercent: 0,
+        searchMs: 0,
+        hooksMs: 0,
+        newItems: 0
+      };
       let statusBaseMessage = "Checking local database...";
       let statusSearchResultCount = null;
       const renderTopStatusLine = () => {
         if (!statusEl) return;
-        if (statusSearchResultCount === null) {
-          statusEl.textContent = statusBaseMessage;
-          return;
+        let resultLabel = "";
+        if (statusSearchResultCount !== null) {
+          resultLabel = `${statusSearchResultCount.toLocaleString()} search results`;
         }
-        const resultLabel = `${statusSearchResultCount.toLocaleString()} search result${statusSearchResultCount === 1 ? "" : "s"}`;
-        statusEl.textContent = statusBaseMessage ? `${statusBaseMessage} | ${resultLabel}` : resultLabel;
+        const metrics = [];
+        if (perfMetrics.dbLoadMs > 0) metrics.push(`DB: ${perfMetrics.dbLoadMs.toFixed(0)}ms`);
+        if (perfMetrics.networkFetchMs > 0) metrics.push(`Net: ${perfMetrics.networkFetchMs.toFixed(0)}ms`);
+        if (perfMetrics.searchMs > 0) metrics.push(`Search: ${perfMetrics.searchMs.toFixed(0)}ms`);
+        if (perfMetrics.renderMs > 0) {
+          let renderStr = `Render: ${perfMetrics.renderMs.toFixed(0)}ms`;
+          if (perfMetrics.renderPercent > 0 && perfMetrics.renderPercent < 100) {
+            renderStr += ` (${perfMetrics.renderPercent}%)`;
+          }
+          metrics.push(renderStr);
+        }
+        if (perfMetrics.hooksMs > 0) metrics.push(`Hooks: ${perfMetrics.hooksMs.toFixed(0)}ms`);
+        if (perfMetrics.newItems > 0) metrics.push(`+${perfMetrics.newItems} new`);
+        const metricsLabel = metrics.length > 0 ? ` [${metrics.join(" | ")}]` : "";
+        const parts = [statusBaseMessage];
+        if (resultLabel) parts.push(resultLabel);
+        statusEl.textContent = parts.join(" | ") + metricsLabel;
       };
+      const setArchiveRenderProgress = (percent) => {
+        window.__PR_ARCHIVE_RENDER_PROGRESS__ = Math.max(0, Math.min(100, Math.round(percent)));
+      };
+      setArchiveRenderProgress(0);
       const setStatusBaseMessage = (msg, isError2 = false, isSyncing = false) => {
         statusBaseMessage = msg;
         if (!statusEl) return;
@@ -12370,6 +12832,27 @@ sortCanonicalItems() {
         useWorker: shouldUseSearchWorker,
         workerClient
       });
+      let activeRenderController = null;
+      let postObserver = null;
+      const initPostObserver = () => {
+        if (postObserver) postObserver.disconnect();
+        postObserver = new IntersectionObserver((entries2) => {
+          const start = performance.now();
+          let refreshCount = 0;
+          entries2.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const el = entry.target;
+              refreshPostActionButtons(el);
+              refreshCount++;
+              postObserver?.unobserve(el);
+            }
+          });
+          if (refreshCount > 0) {
+            const duration = performance.now() - start;
+            console.log(`[Archive Observer] Refreshed ${refreshCount} posts in ${duration.toFixed(2)}ms`);
+          }
+        }, { rootMargin: "200px" });
+      };
       const urlState = parseArchiveUrlState();
       const isDebugExplainEnabled = () => new URLSearchParams(window.location.search).get("debug") === "1";
       let persistedContextItems = [];
@@ -12607,7 +13090,6 @@ sortCanonicalItems() {
         });
       };
       const computeDebugRelevanceScore = (signals) => signals.tokenHits * 10 + signals.phraseHits * 15 + (signals.authorHit ? 8 : 0) + (signals.replyToHit ? 6 : 0);
-      const escapeSelectorAttrValue = (value) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       const clearDebugExplainAnnotations = () => {
         if (!feedEl) return;
         const existing = feedEl.querySelectorAll(".pr-debug-explain");
@@ -12645,21 +13127,28 @@ sortCanonicalItems() {
           }
           return;
         }
-        for (const item of activeItems) {
-          const target = feedEl.querySelector(`[data-id="${escapeSelectorAttrValue(item._id)}"]`);
-          if (!target) continue;
-          appendExplain(target, activeDebugRelevanceSignalsById[item._id]);
-        }
+        const renderedTargets = feedEl.querySelectorAll("[data-id]");
+        const seenIds = new Set();
+        renderedTargets.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return;
+          const id = node.dataset.id;
+          if (!id || seenIds.has(id)) return;
+          seenIds.add(id);
+          if (activeDebugRelevanceSignalsById[id]) {
+            appendExplain(node, activeDebugRelevanceSignalsById[id]);
+          }
+        });
       };
       const runPostRenderHooks = () => {
-        setupLinkPreviews(uiHost.getReaderState().comments);
+        const start = performance.now();
+        setupLinkPreviewsDelegated(feedEl, uiHost.getReaderState().comments);
+        initPostObserver();
         const posts = feedEl.querySelectorAll(".pr-post");
-        posts.forEach((p) => {
-          const pid = p.getAttribute("data-id") || p.getAttribute("data-post-id");
-          if (pid) refreshPostActionButtons(pid);
-        });
+        posts.forEach((p) => postObserver?.observe(p));
         applySearchHighlight();
         applyDebugExplainAnnotations();
+        perfMetrics.hooksMs = performance.now() - start;
+        renderTopStatusLine();
       };
       const syncAuthoredSearchIndex = () => {
         const canonicalRevision = uiHost.getCanonicalStateRevision();
@@ -12727,8 +13216,8 @@ sortCanonicalItems() {
           const retryBtn = document.createElement("button");
           retryBtn.className = "pr-search-retry-btn";
           retryBtn.textContent = "Run without time limit";
-          retryBtn.addEventListener("click", () => {
-            void refreshView(0);
+          retryBtn.addEventListener("click", async () => {
+            await refreshView(0);
           });
           searchStatusEl.appendChild(retryBtn);
         }
@@ -12779,11 +13268,17 @@ sortCanonicalItems() {
         updateSortOptions(hasContentQuery, currentUi.view);
         const sortMode = sortSelect.value;
         setSearchLoading(true);
+        document.body.style.cursor = "wait";
+        perfMetrics.searchMs = 0;
+        perfMetrics.renderMs = 0;
+        perfMetrics.hooksMs = 0;
+        perfMetrics.renderPercent = 0;
         try {
           syncAuthoredSearchIndex();
           const contextItems = collectContextSearchItems();
           searchManager.setContextItems(contextItems);
           const scopeParam = useDedicatedScopeParam ? currentUi.scope : void 0;
+          const searchStart = performance.now();
           const result = await searchManager.runSearch({
             query: currentUi.query,
             scopeParam,
@@ -12792,6 +13287,7 @@ sortCanonicalItems() {
             debugExplain,
             ...budgetMs !== void 0 ? { budgetMs } : {}
           });
+          perfMetrics.searchMs = performance.now() - searchStart;
           if (requestId !== activeQueryRequestId) {
             return;
           }
@@ -12819,19 +13315,60 @@ sortCanonicalItems() {
             showRenderCountDialog(totalItems, async (count) => {
               pendingRenderCount = count;
               updateRenderLimit(count);
-              await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, renderOptions);
+              let hooksPrimed2 = false;
+              setArchiveRenderProgress(0);
+              await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, {
+                ...renderOptions,
+                onProgress: (percent) => {
+                  setArchiveRenderProgress(percent);
+                  if (!hooksPrimed2 && percent > 0) {
+                    hooksPrimed2 = true;
+                    runPostRenderHooks();
+                  }
+                }
+              });
+              setArchiveRenderProgress(100);
               runPostRenderHooks();
             });
             return;
           }
+          if (activeRenderController) {
+            activeRenderController.abort();
+          }
+          activeRenderController = new AbortController();
           if (pendingRenderCount !== null) {
             updateRenderLimit(pendingRenderCount);
           }
-          await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, renderOptions);
+          const renderStart = performance.now();
+          perfMetrics.renderPercent = 0;
+          let hooksPrimed = false;
+          setArchiveRenderProgress(0);
+          await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, {
+            ...renderOptions,
+            abortSignal: activeRenderController.signal,
+            onProgress: (percent) => {
+              perfMetrics.renderPercent = percent;
+              perfMetrics.renderMs = performance.now() - renderStart;
+              setArchiveRenderProgress(percent);
+              renderTopStatusLine();
+              if (!hooksPrimed && percent > 0) {
+                hooksPrimed = true;
+                runPostRenderHooks();
+              }
+            }
+          });
+          if (activeRenderController.signal.aborted) {
+            return;
+          }
+          perfMetrics.renderMs = performance.now() - renderStart;
+          perfMetrics.renderPercent = 100;
+          setArchiveRenderProgress(100);
+          renderTopStatusLine();
           runPostRenderHooks();
         } finally {
           if (requestId === activeQueryRequestId) {
             setSearchLoading(false);
+            document.body.style.cursor = "";
           }
         }
       };
@@ -12869,7 +13406,7 @@ sortCanonicalItems() {
             <button id="render-all-btn" class="pr-button">Render All (${totalCount.toLocaleString()})</button>
           </div>
           <p style="font-size: 0.85em; color: var(--pr-text-tertiary); margin-top: 10px;">
-            💡 Tip: Use the "Load More" button to view additional items after initial render.
+            The selected count is your session render cap. Choose "Render All" to avoid truncation.
           </p>
         </div>
       `;
@@ -12888,8 +13425,8 @@ sortCanonicalItems() {
         if (searchDispatchTimer) {
           window.clearTimeout(searchDispatchTimer);
         }
-        searchDispatchTimer = window.setTimeout(() => {
-          void refreshView();
+        searchDispatchTimer = window.setTimeout(async () => {
+          await refreshView();
         }, SEARCH_DEBOUNCE_MS);
       };
       searchInput?.addEventListener("input", () => {
@@ -12898,7 +13435,7 @@ sortCanonicalItems() {
         updateResetButton();
         scheduleSearchRefresh();
       });
-      clearBtn?.addEventListener("click", () => {
+      clearBtn?.addEventListener("click", async () => {
         if (searchInput.value.length === 0) return;
         searchInput.value = "";
         updateClearButton();
@@ -12909,10 +13446,10 @@ sortCanonicalItems() {
         updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
         updateResetButton();
         writeCurrentToolbarUrlState("");
-        void refreshView();
+        await refreshView();
         searchInput.focus();
       });
-      searchHelpEl?.addEventListener("click", (event) => {
+      searchHelpEl?.addEventListener("click", async (event) => {
         const target = event.target.closest(".pr-search-example");
         if (!target) return;
         const query = target.dataset.query;
@@ -12925,16 +13462,16 @@ sortCanonicalItems() {
           window.clearTimeout(searchDispatchTimer);
           searchDispatchTimer = null;
         }
-        void refreshView();
+        await refreshView();
         searchInput.focus();
       });
-      searchInput?.addEventListener("keydown", (event) => {
+      searchInput?.addEventListener("keydown", async (event) => {
         if (event.key === "Enter") {
           if (searchDispatchTimer) {
             window.clearTimeout(searchDispatchTimer);
             searchDispatchTimer = null;
           }
-          void refreshView();
+          await refreshView();
           return;
         }
         if (event.key === "Escape") {
@@ -12949,13 +13486,13 @@ sortCanonicalItems() {
             updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
             updateResetButton();
             writeCurrentToolbarUrlState("");
-            void refreshView();
+            await refreshView();
             return;
           }
           searchInput.blur();
         }
       });
-      facetsEl?.addEventListener("click", (event) => {
+      facetsEl?.addEventListener("click", async (event) => {
         const chip = event.target.closest(".pr-facet-chip");
         if (!chip) return;
         const fragment = chip.dataset.fragment;
@@ -12978,7 +13515,7 @@ sortCanonicalItems() {
           window.clearTimeout(searchDispatchTimer);
           searchDispatchTimer = null;
         }
-        void refreshView();
+        await refreshView();
         searchInput.focus();
       });
       const isInTextInput = (target) => {
@@ -12988,8 +13525,8 @@ sortCanonicalItems() {
       };
       const isElementVisible = (element) => {
         if (!element || !element.isConnected) return false;
-        const style = window.getComputedStyle(element);
-        if (style.display === "none" || style.visibility === "hidden") return false;
+        const style2 = window.getComputedStyle(element);
+        if (style2.display === "none" || style2.visibility === "hidden") return false;
         return element.getClientRects().length > 0;
       };
       const isArchiveUiActive = () => searchInput.isConnected && isElementVisible(root) && isElementVisible(document.querySelector(".pr-archive-container"));
@@ -13001,13 +13538,14 @@ sortCanonicalItems() {
       const handleArchiveGlobalKeydown = (event) => {
         if (event.defaultPrevented) return;
         if (event.ctrlKey || event.metaKey || event.altKey) return;
-        if (!isArchiveUiActive()) {
+        if (!searchInput.isConnected) {
           document.removeEventListener("keydown", handleArchiveGlobalKeydown);
           if (shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ === handleArchiveGlobalKeydown) {
             delete shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
           }
           return;
         }
+        if (!isArchiveUiActive()) return;
         if (event.key === "/" && !isInTextInput(event.target)) {
           event.preventDefault();
           searchInput.focus();
@@ -13016,7 +13554,7 @@ sortCanonicalItems() {
       };
       shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ = handleArchiveGlobalKeydown;
       document.addEventListener("keydown", handleArchiveGlobalKeydown);
-      resetBtn?.addEventListener("click", () => {
+      resetBtn?.addEventListener("click", async () => {
         if (searchDispatchTimer) {
           window.clearTimeout(searchDispatchTimer);
           searchDispatchTimer = null;
@@ -13037,9 +13575,9 @@ sortCanonicalItems() {
           scope: DEFAULT_SCOPE,
           sort: DEFAULT_SORT
         });
-        void refreshView();
+        await refreshView();
       });
-      scopeContainer?.addEventListener("click", (event) => {
+      scopeContainer?.addEventListener("click", async (event) => {
         const button = event.target.closest(".pr-seg-btn");
         if (!button) return;
         const nextValue = button.dataset.value;
@@ -13047,17 +13585,17 @@ sortCanonicalItems() {
         setScopeValue(nextValue);
         useDedicatedScopeParam = true;
         updateResetButton();
-        void refreshView();
+        await refreshView();
       });
-      scopeContainer?.addEventListener("keydown", (event) => {
+      scopeContainer?.addEventListener("keydown", async (event) => {
         const currentButton = event.target.closest(".pr-seg-btn");
         if (!currentButton) return;
         const buttons = getScopeButtons();
         const currentIndex = buttons.indexOf(currentButton);
         if (currentIndex < 0 || buttons.length === 0) return;
         let nextIndex = null;
-        if (event.key === "ArrowRight" || event.key === "ArrowDown") nextIndex = (currentIndex + 1) % buttons.length;
-        if (event.key === "ArrowLeft" || event.key === "ArrowUp") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+        if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % buttons.length;
+        if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
         if (event.key === "Home") nextIndex = 0;
         if (event.key === "End") nextIndex = buttons.length - 1;
         if (nextIndex === null) return;
@@ -13070,36 +13608,36 @@ sortCanonicalItems() {
         setScopeValue(nextValue);
         useDedicatedScopeParam = true;
         updateResetButton();
-        void refreshView();
+        await refreshView();
       });
-      sortSelect?.addEventListener("change", () => {
+      sortSelect?.addEventListener("change", async () => {
         state2.sortBy = sortSelect.value;
         updateResetButton();
-        void refreshView();
+        await refreshView();
       });
-      const scheduleViewRefresh = (source) => {
+      const scheduleViewRefresh = async (source) => {
         if (viewModeRefreshTimer) {
           window.clearTimeout(viewModeRefreshTimer);
           viewModeRefreshTimer = null;
         }
         if (source === "pointer") {
-          void refreshView();
+          await refreshView();
           return;
         }
-        viewModeRefreshTimer = window.setTimeout(() => {
+        viewModeRefreshTimer = window.setTimeout(async () => {
           viewModeRefreshTimer = null;
-          void refreshView();
+          await refreshView();
         }, VIEW_MODE_KEYBOARD_DEBOUNCE_MS);
       };
-      const applyViewModeChange = (nextView, source) => {
+      const applyViewModeChange = async (nextView, source) => {
         if (nextView === getViewValue() && state2.viewMode === nextView) return;
         state2.viewMode = nextView;
         setViewValue(nextView);
         updateSortOptions(deriveHasContentQuery(searchInput.value), nextView);
         updateResetButton();
-        scheduleViewRefresh(source);
+        await scheduleViewRefresh(source);
       };
-      const activateViewTab = (index, source = "keyboard") => {
+      const activateViewTab = async (index, source = "keyboard") => {
         const tabs = getViewTabs();
         if (tabs.length === 0) return;
         const normalizedIndex = (index + tabs.length) % tabs.length;
@@ -13107,16 +13645,16 @@ sortCanonicalItems() {
         const nextView = targetTab.dataset.value;
         if (!nextView) return;
         targetTab.focus();
-        applyViewModeChange(nextView, source);
+        await applyViewModeChange(nextView, source);
       };
-      viewContainer?.addEventListener("click", (event) => {
+      viewContainer?.addEventListener("click", async (event) => {
         const tab = event.target.closest(".pr-view-tab");
         if (!tab) return;
         const nextView = tab.dataset.value;
         if (!nextView) return;
-        applyViewModeChange(nextView, "pointer");
+        await applyViewModeChange(nextView, "pointer");
       });
-      viewContainer?.addEventListener("keydown", (event) => {
+      viewContainer?.addEventListener("keydown", async (event) => {
         const currentTab = event.target.closest(".pr-view-tab");
         if (!currentTab) return;
         const tabs = getViewTabs();
@@ -13124,36 +13662,29 @@ sortCanonicalItems() {
         if (currentIndex < 0) return;
         switch (event.key) {
           case "ArrowRight":
-          case "ArrowDown":
             event.preventDefault();
-            activateViewTab(currentIndex + 1, "keyboard");
+            await activateViewTab(currentIndex + 1, "keyboard");
             break;
           case "ArrowLeft":
-          case "ArrowUp":
             event.preventDefault();
-            activateViewTab(currentIndex - 1, "keyboard");
+            await activateViewTab(currentIndex - 1, "keyboard");
             break;
           case "Home":
             event.preventDefault();
-            activateViewTab(0, "keyboard");
+            await activateViewTab(0, "keyboard");
             break;
           case "End":
             event.preventDefault();
-            activateViewTab(tabs.length - 1, "keyboard");
+            await activateViewTab(tabs.length - 1, "keyboard");
             break;
           case "Enter":
           case " ":
             event.preventDefault();
-            activateViewTab(currentIndex, "keyboard");
+            await activateViewTab(currentIndex, "keyboard");
             break;
           default:
             break;
         }
-      });
-      loadMoreBtn?.querySelector("button")?.addEventListener("click", async () => {
-        incrementRenderLimit(PAGE_SIZE);
-        await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, getCurrentRenderOptions());
-        runPostRenderHooks();
       });
       feedEl?.addEventListener("click", (e) => {
         const target = e.target;
@@ -13260,7 +13791,10 @@ sortCanonicalItems() {
           pendingRenderCount = null;
           resetRenderLimit();
         }
+        const dbStart = performance.now();
         const cached2 = await loadArchiveData(username);
+        perfMetrics.dbLoadMs = performance.now() - dbStart;
+        renderTopStatusLine();
         const setStatus = (msg, isError2 = false, isSyncing = false) => {
           setStatusBaseMessage(msg, isError2, isSyncing);
         };
@@ -13269,28 +13803,51 @@ sortCanonicalItems() {
           syncErrorState.retryCount = attemptNumber;
           syncErrorState.abortController = new AbortController();
           try {
+            const [currentCached, cachedContext2] = await Promise.all([
+              loadArchiveData(username),
+              loadAllContextualItems(username).catch((e) => {
+                Logger.warn("Failed to load contextual cache during reload", e);
+                return { posts: [], comments: [] };
+              })
+            ]);
+            state2.items = currentCached.items;
+            persistedContextItems = [...cachedContext2.posts, ...cachedContext2.comments];
+            contextSearchItemsCache = null;
+            state2.itemById.clear();
+            state2.items.forEach((item) => state2.itemById.set(item._id, item));
             if (attemptNumber > 1) {
               setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
             } else if (forceFull) {
               setStatus(`Starting full resync for ${username}`, false, true);
-            } else if (cached2.items.length > 0) {
-              setStatus(`Loaded ${cached2.items.length} items. Checking for updates`, false, true);
+            } else if (currentCached.items.length > 0) {
+              setStatus(`Loaded ${currentCached.items.length} items. Checking for updates`, false, true);
             } else {
               setStatus(`No local data. Fetching full history for ${username}`, false, true);
             }
-            const lastSyncDate = forceFull ? null : cached2.lastSyncDate;
+            const watermarks = {
+              lastSyncDate: forceFull ? null : currentCached.lastSyncDate,
+              lastSyncDate_comments: forceFull ? null : currentCached.lastSyncDate_comments,
+              lastSyncDate_posts: forceFull ? null : currentCached.lastSyncDate_posts
+            };
+            const netStart = performance.now();
+            const initialCount = state2.items.length;
             await syncArchive(
               username,
               state2,
-              lastSyncDate,
+              watermarks,
               (msg) => setStatus(msg, false, true),
               syncErrorState.abortController.signal
             );
+            perfMetrics.networkFetchMs = performance.now() - netStart;
+            perfMetrics.newItems = state2.items.length - initialCount;
+            renderTopStatusLine();
             syncErrorState.isRetrying = false;
             syncErrorState.retryCount = 0;
             if (errorContainer) errorContainer.style.display = "none";
             setStatus(`Sync complete. ${state2.items.length} total items.`, false, false);
-            updateItemMap(state2.items);
+            if (perfMetrics.newItems > 0) {
+              updateItemMap(state2.items);
+            }
             if (pendingRetryCount === 0) {
               isSyncInProgress = false;
             }
@@ -13301,7 +13858,7 @@ sortCanonicalItems() {
             setStatus(displayError, true, false);
             if (syncErrorState.abortController?.signal.aborted) {
               Logger.info("Sync was cancelled by user");
-              setStatus(`Sync cancelled. Showing cached data (${cached2.items.length} items).`, false, false);
+              setStatus(`Sync cancelled. Showing cached data (${state2.items.length} items).`, false, false);
               pendingRetryCount = 0;
               isSyncInProgress = false;
               return;
@@ -13358,29 +13915,39 @@ sortCanonicalItems() {
           performSync(true);
         }
       });
-      const cached = await loadArchiveData(username);
+      const [cached, cachedContext] = await Promise.all([
+        loadArchiveData(username),
+        loadAllContextualItems(username).catch((e) => {
+          Logger.warn("Failed to load contextual cache", e);
+          return { posts: [], comments: [] };
+        })
+      ]);
       state2.items = cached.items;
-      updateItemMap(state2.items);
-      try {
-        const cachedContext = await loadAllContextualItems(username);
-        persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
-        contextSearchItemsCache = null;
-        if (persistedContextItems.length > 0 && (getScopeValue() === "all" || searchInput.value.trim().length > 0)) {
-          await refreshView();
-        }
-      } catch (e) {
-        Logger.warn("Failed to load contextual cache for archive search scope:all", e);
-        persistedContextItems = [];
-        contextSearchItemsCache = null;
-      }
-      activeItems = state2.items;
+      persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+      contextSearchItemsCache = null;
       if (cached.items.length > 0) {
-        setStatusBaseMessage(`Loaded ${cached.items.length} items from cache.`, false, false);
+        setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
       } else {
         dashboardEl.style.display = "block";
         setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
       }
-      await performSync();
+      const syncPromise = performSync();
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("timeout"), 2e3));
+      const raceResult = await Promise.race([syncPromise, timeoutPromise]);
+      if (raceResult === "timeout") {
+        console.log("[Archive Init] Sync taking > 2s, rendering cache first.");
+        if (cached.items.length > 0) {
+          setStatusBaseMessage(`Sync in progress... Showing cached data.`, false, true);
+          updateItemMap(state2.items);
+        }
+      }
+      await syncPromise;
+      const isRendered = !!feedEl.querySelector(".pr-archive-item, .pr-archive-index-item, .pr-post");
+      if (!isRendered) {
+        console.log(`[Archive Init] Final render check: currentItems=${state2.items.length}, newItems=${perfMetrics.newItems}`);
+        updateItemMap(state2.items);
+      }
+      await refreshView();
       dashboardEl.style.display = "none";
       signalReady();
     } catch (err) {
@@ -13395,7 +13962,7 @@ sortCanonicalItems() {
       }
     }
   };
-  const syncArchive = async (username, state2, lastSyncDate, onStatus, abortSignal) => {
+  const syncArchive = async (username, state2, watermarks, onStatus, abortSignal) => {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
@@ -13410,19 +13977,30 @@ sortCanonicalItems() {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
-    const minDate = lastSyncDate ? new Date(lastSyncDate) : void 0;
-    if (minDate) {
-      onStatus(`Fetching items since ${minDate.toLocaleDateString()}...`);
+    const afterDateComments = watermarks.lastSyncDate_comments ? new Date(watermarks.lastSyncDate_comments) : void 0;
+    const afterDatePosts = watermarks.lastSyncDate_posts ? new Date(watermarks.lastSyncDate_posts) : void 0;
+    if (afterDateComments || afterDatePosts) {
+      const cStr = afterDateComments ? afterDateComments.toLocaleDateString() : "start";
+      const pStr = afterDatePosts ? afterDatePosts.toLocaleDateString() : "start";
+      onStatus(`Resuming: Comments from ${cStr}, Posts from ${pStr}...`);
     }
     const comments = await fetchUserComments(userId, (count) => {
       onStatus(`Fetching comments: ${count} new...`);
-    }, minDate);
+    }, afterDateComments, async (batch) => {
+      const newestInBatch = batch[batch.length - 1].postedAt;
+      await saveArchiveData(username, batch, { lastSyncDate_comments: newestInBatch });
+      console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch}`);
+    }, username);
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
     const posts = await fetchUserPosts(userId, (count) => {
       onStatus(`Fetching posts: ${count} new...`);
-    }, minDate);
+    }, afterDatePosts, async (batch) => {
+      const newestInBatch = batch[batch.length - 1].postedAt;
+      await saveArchiveData(username, batch, { lastSyncDate_posts: newestInBatch });
+      console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch}`);
+    });
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
@@ -13436,12 +14014,20 @@ sortCanonicalItems() {
       const uniqueNewItems = newItems.filter((i) => !existingIds.has(i._id));
       state2.items = [...uniqueNewItems, ...state2.items];
       state2.items.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
-      await saveArchiveData(username, uniqueNewItems, syncStartTime);
+      await saveArchiveData(username, [], {
+        lastSyncDate: syncStartTime,
+        lastSyncDate_comments: syncStartTime,
+        lastSyncDate_posts: syncStartTime
+      });
       onStatus(`Sync complete. ${state2.items.length} total items.`);
     } else {
-      const statusMsg = lastSyncDate ? `Up to date. (${state2.items.length} items)` : `No history found for ${username}.`;
+      const statusMsg = watermarks.lastSyncDate ? `Up to date. (${state2.items.length} items)` : `No history found for ${username}.`;
       onStatus(statusMsg);
-      await saveArchiveData(username, [], syncStartTime);
+      await saveArchiveData(username, [], {
+        lastSyncDate: syncStartTime,
+        lastSyncDate_comments: syncStartTime,
+        lastSyncDate_posts: syncStartTime
+      });
     }
   };
   const initReader = async () => {
@@ -13497,7 +14083,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.684"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

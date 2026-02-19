@@ -41,32 +41,33 @@ export class StickyHeader {
     private handleScroll() {
         if (!this.container) return;
 
-        const posts = document.querySelectorAll('.pr-post');
-        let currentPost: HTMLElement | null = null;
-
-        // Find the post currently occupying the majority of the view or at the top
-        for (let i = 0; i < posts.length; i++) {
-            const post = posts[i] as HTMLElement;
-            const rect = post.getBoundingClientRect();
-            // If post top is above middle of screen and bottom is below top of screen
-            if (rect.top < 100 && rect.bottom > 100) {
-                // NEW: Only activate sticky if the regular header is actually off-screen (scrolled past)
-                const header = post.querySelector('.pr-post-header');
-                if (header) {
-                    const headerRect = header.getBoundingClientRect();
-                    if (headerRect.top < -1) {
-                        currentPost = post;
-                    }
-                }
-                break;
-            }
+        // Optimization: Use elementFromPoint to find the post at the top of viewport
+        // instead of querySelectorAll + looping through thousands of items.
+        // We check a point slightly below the top (e.g. 80px) to account for header areas.
+        const viewportWidth = window.innerWidth;
+        const checkY = 80;
+        const elementAtPoint = document.elementFromPoint(viewportWidth / 2, checkY);
+        
+        if (!elementAtPoint) {
+            this.hide();
+            return;
         }
+
+        const currentPost = elementAtPoint.closest('.pr-post') as HTMLElement;
 
         if (currentPost) {
-            this.updateHeaderContent(currentPost);
-        } else {
-            this.hide();
+            // Only activate sticky if the regular header is actually off-screen (scrolled past)
+            const header = currentPost.querySelector('.pr-post-header') as HTMLElement;
+            if (header) {
+                const headerRect = header.getBoundingClientRect();
+                if (headerRect.top < -1) {
+                    this.updateHeaderContent(currentPost);
+                    return;
+                }
+            }
         }
+        
+        this.hide();
     }
 
     private updateHeaderContent(currentPost: HTMLElement) {

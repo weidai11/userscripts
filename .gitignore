@@ -57,3 +57,5 @@ GEMINI.md
 *.old
 tmp/
 test-results.json/
+
+conductor/

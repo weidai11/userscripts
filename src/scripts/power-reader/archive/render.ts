@@ -10,7 +10,14 @@ import { renderPostGroup, renderPostBody } from '../render/post';
 import { renderComment } from '../render/comment';
 import { getUIHost } from '../render/uiHost';
 
-let currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 250;
+const getDefaultRenderLimit = (): number => {
+  const override = (window as any).__PR_RENDER_LIMIT_OVERRIDE;
+  return typeof override === 'number' && Number.isFinite(override) && override > 0
+    ? override
+    : Number.MAX_SAFE_INTEGER;
+};
+
+let currentRenderLimit = getDefaultRenderLimit();
 const INDEX_SNIPPET_MAX_LEN = 120;
 
 export type RenderArchiveOptions = {
@@ -29,14 +36,7 @@ export const updateRenderLimit = (limit: number) => {
  * Reset view limit to default (called by initArchive)
  */
 export const resetRenderLimit = () => {
-  currentRenderLimit = (window as any).__PR_RENDER_LIMIT_OVERRIDE || 5000;
-};
-
-/**
- * Increment view limit (Load More)
- */
-export const incrementRenderLimit = (delta: number) => {
-  currentRenderLimit += delta;
+  currentRenderLimit = getDefaultRenderLimit();
 };
 
 /**
@@ -67,8 +67,8 @@ const ensureContextForItems = async (
     let current: any = comment.parentComment;
     let depth = 0;
 
-    // Traverse up to 5 levels to get context
-    while (current && depth < 5) {
+    // Traverse up to 20 levels to get context
+    while (current && depth < 20) {
       const currentId = typeof current._id === 'string' ? current._id : null;
       if (currentId && !state.commentById.has(currentId)) {
         missingIds.add(currentId);
@@ -116,8 +116,9 @@ const ensurePlaceholderContext = (
     if ('title' in item) continue;
     const comment = item as Comment;
     let current = comment.parentComment as any;
+    let depth = 0;
 
-    while (current?._id) {
+    while (current?._id && depth < 20) {
       // Keep walking upward even when an ancestor is already seen/loaded;
       // that avoids skipping deeper missing ancestors on shared chains.
       if (!state.commentById.has(current._id) && !seen.has(current._id)) {
@@ -125,6 +126,7 @@ const ensurePlaceholderContext = (
         stubs.push(parentRefToStub(current, comment));
       }
       current = current.parentComment;
+      depth++;
     }
   }
 
@@ -142,35 +144,63 @@ const renderChunked = <T>(
   items: T[],
   renderFn: (item: T) => string,
   container: HTMLElement,
-  chunkSize: number = 50
+  abortSignal?: AbortSignal,
+  onProgress?: (percent: number) => void
 ): Promise<void> => {
+  container.innerHTML = '';
+  if (items.length === 0) {
+    return Promise.resolve();
+  }
+
+  // Render first 250 items synchronously for immediate visual feedback
+  const SYNC_THRESHOLD = 250;
+  const firstBatchSize = Math.min(items.length, SYNC_THRESHOLD);
+
+  let firstHtml = '';
+  for (let i = 0; i < firstBatchSize; i++) {
+    if (abortSignal?.aborted) return Promise.resolve();
+    firstHtml += renderFn(items[i]);
+  }
+  container.insertAdjacentHTML('beforeend', firstHtml);
+
+  if (onProgress) onProgress(Math.round((firstBatchSize / items.length) * 100));
+
+  if (items.length <= firstBatchSize) {
+    return Promise.resolve();
+  }
+
+  // Render the rest in large background chunks
   return new Promise((resolve) => {
-    container.innerHTML = '';
-    if (items.length === 0) {
-      resolve();
-      return;
-    }
+    let currentIndex = firstBatchSize;
+    const BACKGROUND_CHUNK_SIZE = 500; // Large chunks finish the list quickly
 
-    let currentIndex = 0;
     const renderNextChunk = () => {
-      let html = '';
-      const chunk = items.slice(currentIndex, currentIndex + chunkSize);
-
-      for (const item of chunk) {
-        html += renderFn(item);
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
       }
 
-      container.insertAdjacentHTML('beforeend', html);
-      currentIndex += chunkSize;
+      const end = Math.min(currentIndex + BACKGROUND_CHUNK_SIZE, items.length);
+      const htmlParts: string[] = [];
+      for (let i = currentIndex; i < end; i++) {
+        htmlParts.push(renderFn(items[i]));
+      }
+
+      container.insertAdjacentHTML('beforeend', htmlParts.join(''));
+      currentIndex = end;
+
+      if (onProgress) onProgress(Math.round((currentIndex / items.length) * 100));
 
       if (currentIndex < items.length) {
-        requestAnimationFrame(renderNextChunk);
+        // Use setTimeout(0) to yield to the browser but continue as fast as possible
+        // This avoids artificially inflating the Render metric by waiting for VSync cycles
+        setTimeout(renderNextChunk, 0);
       } else {
         resolve();
       }
     };
 
-    requestAnimationFrame(renderNextChunk);
+    setTimeout(renderNextChunk, 0);
   });
 };
 
@@ -180,75 +210,100 @@ export const renderArchiveFeed = async (
   viewMode: ArchiveViewMode,
   state: ReaderState,
   sortBy?: ArchiveSortBy,
-  options: RenderArchiveOptions = {}
+  options: RenderArchiveOptions & { abortSignal?: AbortSignal, onProgress?: (percent: number) => void } = {}
 ): Promise<void> => {
   if (items.length === 0) {
     container.innerHTML = '<div class="pr-status">No items found for this user.</div>';
     return;
   }
 
-  const visibleItems = items.slice(0, currentRenderLimit);
-  const loadMoreBtn = document.getElementById('archive-load-more');
+  // Set loading cursor on body only for the heavy synchronous start
+  document.body.style.cursor = 'wait';
 
-  if (loadMoreBtn) {
-    loadMoreBtn.style.display = items.length > currentRenderLimit ? 'block' : 'none';
-    if (items.length > currentRenderLimit && loadMoreBtn.querySelector('button')) {
-      loadMoreBtn.querySelector('button')!.textContent = `Load More (${items.length - currentRenderLimit} remaining)`;
-    }
-  }
+  try {
+    const visibleItems = items.slice(0, currentRenderLimit);
 
-  if (viewMode === 'index') {
-    const snippetTerms = options.snippetTerms ?? [];
-    const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
-    await renderChunked(
-      visibleItems,
-      (item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }),
-      container
-    );
-  } else if (isThreadMode(viewMode)) {
-    // [P2-FIX] Load parent context first, then render thread view
-    // [WS3-FIX] Pass sortBy for group-level sorting
-    if (viewMode === 'thread-full') {
-      await ensureContextForItems(visibleItems, state);
+    if (viewMode === 'index') {
+      const snippetTerms = options.snippetTerms ?? [];
+      const snippetPattern = options.snippetPattern ?? buildHighlightRegex(snippetTerms);
+      const renderPromise = renderChunked(
+        visibleItems,
+        (item) => renderIndexItem(item, { ...options, snippetTerms, snippetPattern }),
+        container,
+        options.abortSignal,
+        options.onProgress
+      );
+      // Reset cursor as soon as the first batch is likely painted
+      document.body.style.cursor = '';
+      await renderPromise;
+    } else if (isThreadMode(viewMode)) {
+      if (viewMode === 'thread-full') {
+        await ensureContextForItems(visibleItems, state);
+      } else {
+        ensurePlaceholderContext(visibleItems, state);
+      }
+      
+      if (options.abortSignal?.aborted) return;
+
+      const renderPromise = renderThreadView(container, visibleItems, state, sortBy, options.abortSignal, options.onProgress);
+      document.body.style.cursor = '';
+      await renderPromise;
     } else {
-      ensurePlaceholderContext(visibleItems, state);
+      const renderPromise = renderChunked(
+        visibleItems,
+        (item) => renderCardItem(item, state),
+        container,
+        options.abortSignal,
+        options.onProgress
+      );
+      document.body.style.cursor = '';
+      await renderPromise;
     }
-    await renderThreadView(container, visibleItems, state, sortBy);
-  } else {
-    await renderChunked(
-      visibleItems,
-      (item) => renderCardItem(item, state),
-      container
-    );
+
+    if (options.abortSignal?.aborted) return;
+
+    // [PR-FIX] Add truncation note if results are capped by render limit
+    const isTruncated = items.length > currentRenderLimit;
+    if (isTruncated) {
+      const footer = document.createElement('div');
+      footer.className = 'pr-render-truncation-note';
+      footer.style.textAlign = 'center';
+      footer.style.padding = '20px';
+      footer.style.color = 'var(--pr-text-secondary)';
+      footer.style.borderTop = '1px solid var(--pr-border-subtle)';
+      footer.style.marginTop = '10px';
+      footer.textContent = `Showing first ${currentRenderLimit.toLocaleString()} of ${items.length.toLocaleString()} items. Large datasets are capped for performance.`;
+      container.appendChild(footer);
+    }
+  } finally {
+    // Reset cursor just in case it wasn't reset earlier
+    if (document.body.style.cursor === 'wait') {
+      document.body.style.cursor = '';
+    }
   }
 };
 
-/**
- * Render items grouped by Thread (Post)
- * [WS2-FIX] Renders visible comments plus ancestor context
- * [WS3-FIX] Implements true group-level sorting based on sort mode
- */
 const renderThreadView = (
   container: HTMLElement,
   items: (Post | Comment)[],
   state: ReaderState,
-  sortBy?: ArchiveSortBy
+  sortBy?: ArchiveSortBy,
+  abortSignal?: AbortSignal,
+  onProgress?: (percent: number) => void
 ): Promise<void> => {
   // 1. Build inclusion set: visible comments + their ancestors
-  const visibleCommentIds = new Set<string>();
   const inclusionCommentIds = new Set<string>();
 
   items.forEach(item => {
     if (!('title' in item)) {
-      visibleCommentIds.add(item._id);
       inclusionCommentIds.add(item._id);
 
       // [WS2-FIX] Add ancestor IDs from state.commentById
       const comment = item as Comment;
-      // Handle both parentCommentId string and parentComment object
       let currentId: string | null = comment.parentCommentId || (comment as any).parentComment?._id || null;
       let depth = 0;
-      while (currentId && depth < 20) { // Limit depth to prevent infinite loops
+      while (currentId && depth < 20) { 
+        if (inclusionCommentIds.has(currentId)) break; // Optimization: Stop if parent is already in the set
         inclusionCommentIds.add(currentId);
         const parent = state.commentById.get(currentId);
         currentId = parent?.parentCommentId || (parent as any)?.parentComment?._id || null;
@@ -257,7 +312,7 @@ const renderThreadView = (
     }
   });
 
-  // 2. Group into Posts, filtering non-visible comments
+  // 2. Group into Posts
   const postGroups = new Map<string, {
     postId: string;
     comments: Comment[];
@@ -265,7 +320,6 @@ const renderThreadView = (
     maxScore: number;
   }>();
 
-  // [WS2-FIX] Use the broader inclusion set instead of just visible items
   inclusionCommentIds.forEach(commentId => {
     const comment = state.commentById.get(commentId);
     if (!comment) return;
@@ -281,7 +335,6 @@ const renderThreadView = (
     postGroups.get(comment.postId)!.comments.push(comment);
   });
 
-  // Also include standalone posts
   items.forEach(item => {
     if ('title' in item) {
       if (!postGroups.has(item._id)) {
@@ -297,41 +350,35 @@ const renderThreadView = (
 
   // Calculate metrics per group
   postGroups.forEach((group, postId) => {
-    let maxDate = new Date(0);
+    let maxDateStr = "";
     let maxScore = Number.NEGATIVE_INFINITY;
-
-    const comments = group.comments;
-
-    // Evaluate all included comments for group sorting metrics
-    comments.forEach(c => {
-      const cDate = new Date(c.postedAt);
-      if (cDate > maxDate) maxDate = cDate;
+    group.comments.forEach(c => {
+      if (c.postedAt > maxDateStr) maxDateStr = c.postedAt;
       if (typeof c.baseScore === 'number' && c.baseScore > maxScore) {
         maxScore = c.baseScore;
       }
     });
-
-    // If no comments, use post date/score for metrics
     const post = state.postById.get(postId);
     if (post) {
-      const postDate = new Date(post.postedAt);
-      if (postDate > maxDate) maxDate = postDate;
+      if (post.postedAt > maxDateStr) maxDateStr = post.postedAt;
       if (typeof post.baseScore === 'number' && post.baseScore > maxScore) {
         maxScore = post.baseScore;
       }
     }
-
-    group.maxDate = maxDate;
+    group.maxDate = new Date(maxDateStr || 0); // Re-instantiate once per group for sorting compatibility
     group.maxScore = maxScore === Number.NEGATIVE_INFINITY ? 0 : maxScore;
   });
 
-  // 3. [WS3-FIX] Sort post groups by computed metrics
+  // 3. Sort post groups
   const sortedGroups = Array.from(postGroups.values());
   switch (sortBy) {
     case 'date-asc':
-    case 'replyTo': // Fallback to date for replyTo in thread view
-    case 'relevance': // Fallback to date for relevance in thread view
       sortedGroups.sort((a, b) => a.maxDate.getTime() - b.maxDate.getTime());
+      break;
+    case 'replyTo':
+    case 'relevance':
+      // Fallback to newest-first (matching default)
+      sortedGroups.sort((a, b) => b.maxDate.getTime() - a.maxDate.getTime());
       break;
     case 'score':
       sortedGroups.sort((a, b) => b.maxScore - a.maxScore);
@@ -348,28 +395,57 @@ const renderThreadView = (
   // 4. Clear container
   container.innerHTML = '';
 
-  // 5. Render each post group with all inclusion comments in chunks
-  return new Promise<void>((resolve) => {
-    if (sortedGroups.length === 0) {
-      resolve();
-      return;
-    }
+  if (sortedGroups.length === 0) {
+    return Promise.resolve();
+  }
 
-    const CHUNK_SIZE = 15; // smaller chunk size for groups (heavy)
-    let currentIndex = 0;
+  // Render first 25 post groups synchronously
+  const SYNC_GROUP_THRESHOLD = 25;
+  const firstBatchSize = Math.min(sortedGroups.length, SYNC_GROUP_THRESHOLD);
+
+  const firstHtmlParts: string[] = [];
+  for (let i = 0; i < firstBatchSize; i++) {
+    if (abortSignal?.aborted) return Promise.resolve();
+    const group = sortedGroups[i];
+    const post = state.postById.get(group.postId);
+    const postComments = group.comments;
+    if (!post && postComments.length === 0) continue;
+
+    const postGroup = {
+      postId: group.postId,
+      title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
+      comments: postComments,
+      fullPost: post
+    };
+    firstHtmlParts.push(renderPostGroup(postGroup, state));
+  }
+  container.insertAdjacentHTML('beforeend', firstHtmlParts.join(''));
+
+  if (onProgress) onProgress(Math.round((firstBatchSize / sortedGroups.length) * 100));
+
+  if (sortedGroups.length <= firstBatchSize) {
+    return Promise.resolve();
+  }
+
+  // Render remaining thread groups in larger background chunks
+  return new Promise<void>((resolve) => {
+    let currentIndex = firstBatchSize;
+    const BACKGROUND_CHUNK_SIZE = 50;
 
     const renderNextChunk = () => {
-      let html = '';
-      const chunk = sortedGroups.slice(currentIndex, currentIndex + CHUNK_SIZE);
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
+      }
 
-      chunk.forEach(group => {
+      const end = Math.min(currentIndex + BACKGROUND_CHUNK_SIZE, sortedGroups.length);
+      const htmlParts: string[] = [];
+
+      for (let i = currentIndex; i < end; i++) {
+        const group = sortedGroups[i];
         const post = state.postById.get(group.postId);
-
-        // [WS2-FIX] Include all comments in the inclusion set (visible + ancestors)
         const postComments = group.comments;
-
-        // If we have neither post nor comments, skip (shouldn't happen directly from items)
-        if (!post && postComments.length === 0) return;
+        if (!post && postComments.length === 0) continue;
 
         const postGroup = {
           postId: group.postId,
@@ -377,24 +453,24 @@ const renderThreadView = (
           comments: postComments,
           fullPost: post
         };
+        htmlParts.push(renderPostGroup(postGroup, state));
+      }
 
-        html += renderPostGroup(postGroup, state);
-      });
+      container.insertAdjacentHTML('beforeend', htmlParts.join(''));
+      currentIndex = end;
 
-      container.insertAdjacentHTML('beforeend', html);
-      currentIndex += CHUNK_SIZE;
+      if (onProgress) onProgress(Math.round((currentIndex / sortedGroups.length) * 100));
 
       if (currentIndex < sortedGroups.length) {
-        requestAnimationFrame(renderNextChunk);
+        setTimeout(renderNextChunk, 0);
       } else {
         resolve();
       }
     };
 
-    requestAnimationFrame(renderNextChunk);
+    setTimeout(renderNextChunk, 0);
   });
 };
-
 
 /**
  * Convert a ParentCommentRef (from the GraphQL parentComment chain)
@@ -423,6 +499,38 @@ const parentRefToStub = (ref: ParentCommentRef, sourceComment: Comment): Comment
   contextType: 'stub',
 } as any as Comment);
 
+const parentRefToFetchedContext = (ref: ParentCommentRef, sourceComment: Comment): Comment => ({
+  ...parentRefToStub(ref, sourceComment),
+  htmlBody: typeof ref.htmlBody === 'string' ? ref.htmlBody : '',
+  contents: { markdown: ref.contents?.markdown ?? null },
+  parentComment: ref.parentComment ?? null,
+  contextType: 'fetched',
+} as any as Comment);
+
+const placeholderPostForTopLevelComment = (comment: Comment, state: ReaderState): Post => {
+  const statePost = state.postById.get(comment.postId);
+  if (statePost) return statePost;
+  if (comment.post) return comment.post;
+
+  return {
+    _id: comment.postId,
+    title: '',
+    slug: '',
+    pageUrl: `${window.location.origin}/posts/${comment.postId}`,
+    postedAt: comment.postedAt || new Date().toISOString(),
+    baseScore: 0,
+    voteCount: 0,
+    user: null,
+    extendedScore: null,
+    afExtendedScore: null,
+    currentUserVote: null,
+    currentUserExtendedVote: null,
+    contents: { markdown: null },
+    commentCount: 0,
+    wordCount: 0,
+  } as unknown as Post;
+};
+
 /**
  * 1. Card View - Uses shared rendering components
  */
@@ -446,13 +554,22 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
   const comment = item as Comment;
   const immediateParentId = comment.parentCommentId || comment.parentComment?._id || null;
   const parentFromState = immediateParentId ? state.commentById.get(immediateParentId) : null;
-  const isContextParentFromState = !!parentFromState && !!(parentFromState as any).contextType;
-  const parentComment = isContextParentFromState
-    ? parentFromState
-    : (comment.parentComment ? parentRefToStub(comment.parentComment, comment) : null);
+  const inlineParent = comment.parentComment;
+  const inlineParentHasBody = typeof inlineParent?.htmlBody === 'string'
+    && inlineParent.htmlBody.trim().length > 0;
+  const parentComment = inlineParentHasBody && inlineParent
+    ? parentRefToFetchedContext(inlineParent, comment)
+    : (parentFromState || (inlineParent ? parentRefToStub(inlineParent, comment) : null));
 
   if (!parentComment || parentComment._id === comment._id) {
-    return `<div class="pr-archive-item">${renderComment(comment, state)}</div>`;
+    const headerHtml = renderPostHeader(placeholderPostForTopLevelComment(comment, state), { state });
+    const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
+    return `
+      <div class="pr-archive-item pr-archive-top-level-comment">
+        ${headerHtml}
+        ${nestedCommentHtml}
+      </div>
+    `;
   }
 
   // In card view, show immediate parent context with the current comment nested under it.

@@ -27,7 +27,6 @@ test.describe('Reproduction: [t] failing to show parent content', () => {
             posts: [post], 
             comments: initialComments,
             testMode: true,
-            verbose: true,
             onGraphQL: `
                 if (query.includes('query GetCommentsByIds')) {
                     const ids = variables.commentIds;

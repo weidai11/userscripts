@@ -5,7 +5,7 @@
 
 import type { Comment, Post, NamesAttachedReactionsScore } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
-import { getReadState, isRead, getLoadFrom } from '../utils/storage';
+import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
 import { renderPostHeader, escapeHtml } from '../utils/rendering';
 import { renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
@@ -131,22 +131,22 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
   const commentsWithPlaceholders = withMissingParentPlaceholders(group.comments, state);
   const visibleChildrenByParentId = buildChildrenIndex(commentsWithPlaceholders);
 
-  const readState = getReadState();
+  const { readState, cutoff } = getReadTrackingInputs(state.isArchiveMode);
   const commentSet = new Set(commentsWithPlaceholders.map(c => c._id));
   const rootComments = (commentsWithPlaceholders as Comment[]).filter(c =>
     !c.parentCommentId || !commentSet.has(c.parentCommentId)
   );
 
-  const cutoff = getLoadFrom();
   const isImplicitlyRead = (item: { postedAt?: string }) => {
     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
   };
 
   rootComments.forEach((c: any) => {
+    const isItemRead = !state.isArchiveMode && (readState[c._id] === 1 || isImplicitlyRead(c));
     c.treeKarma = calculateTreeKarma(
       c._id,
       c.baseScore || 0,
-      readState[c._id] === 1 || isImplicitlyRead(c),
+      isItemRead,
       visibleChildrenByParentId.get(c._id) || [],
       readState,
       visibleChildrenByParentId,
@@ -189,7 +189,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     Logger.warn(`renderPostGroup: fullPost missing for ${group.postId}, using fallback`);
   }
 
-  const isReadPost = isRead(group.postId, readState, postToRender.postedAt);
+  const isReadPost = !state.isArchiveMode && isRead(group.postId, readState, postToRender.postedAt);
 
   // Detect current expansion state if element already exists in DOM
   const existingEl = document.querySelector(`.pr-post[data-id="${group.postId}"]`);

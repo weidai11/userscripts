@@ -200,6 +200,16 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
   2. Use CSS Variables for secondary highlights (like recency) and apply them via a low-priority rule, then override them or use `!important` classes only for high-priority temporary highlights (like hover/parent nav).
   3. Example: `.pr-comment[style*="--pr-recency-color"]` attribute selector shared same specificity as classes, so the order in `styles.ts` matters.
 
+### Content-Visibility & Precise Hit-Testing
+- **Context**: To maintain performance with thousands of items, we use `content-visibility: auto` on `.pr-post` and `.pr-comment`.
+- **Problem**: Chromium may skip painting elements with `content-visibility: auto` until they are about to enter the viewport. This breaks `document.elementFromPoint()` and other hit-testing APIs (used by `isElementFullyVisible`), which often report these elements as missing or obscured because their content hasn't been painted yet.
+- **Solution**: The `withForcedLayout(element, callback)` utility. 
+    - It temporarily adds a `.pr-force-layout` class to the nearest post group (sets `content-visibility: visible !important`).
+    - It forces a synchronous reflow (`offsetHeight`).
+    - **CRITICAL**: It awaits a **double `requestAnimationFrame`** to ensure the browser has actually completed a paint cycle before executing the measurement callback.
+    - It restores the original layout state after a 500ms delay (allowing for smooth scrolling/animations).
+- **Usage**: Use this for any logic that depends on `elementFromPoint` or complex DOM measurements while `content-visibility` is active.
+
 ---
 
 ## Architecture & State

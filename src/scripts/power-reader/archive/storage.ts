@@ -146,12 +146,16 @@ const openDB = (): Promise<IDBDatabase> => {
 };
 
 /**
- * Save authored items and update lastSyncDate for a user.
+ * Save authored items and update watermarks for a user.
  */
 export const saveArchiveData = async (
   username: string,
   items: (Post | Comment)[],
-  lastSyncDate: string
+  watermarks: {
+    lastSyncDate?: string | null;
+    lastSyncDate_comments?: string | null;
+    lastSyncDate_posts?: string | null;
+  }
 ): Promise<void> => {
   const db = await openDB();
   const tx = db.transaction([STORE_ITEMS, STORE_METADATA], 'readwrite');
@@ -165,7 +169,18 @@ export const saveArchiveData = async (
     itemStore.put(itemToSave);
   });
 
-  metadataStore.put({ username, lastSyncDate });
+  // Get current metadata to preserve existing watermarks if not provided in this call
+  const existingMetadataRequest = metadataStore.get(username);
+  const existingMetadata = await requestToPromise(existingMetadataRequest);
+
+  const updatedMetadata = {
+    username,
+    lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
+    lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
+    lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null
+  };
+
+  metadataStore.put(updatedMetadata);
   await transactionToPromise(tx);
 };
 
@@ -175,6 +190,8 @@ export const saveArchiveData = async (
 export const loadArchiveData = async (username: string): Promise<{
   items: (Post | Comment)[];
   lastSyncDate: string | null;
+  lastSyncDate_comments: string | null;
+  lastSyncDate_posts: string | null;
 }> => {
   const db = await openDB();
 
@@ -203,7 +220,9 @@ export const loadArchiveData = async (username: string): Promise<{
 
   return {
     items,
-    lastSyncDate: metadata?.lastSyncDate || null
+    lastSyncDate: metadata?.lastSyncDate || null,
+    lastSyncDate_comments: metadata?.lastSyncDate_comments || null,
+    lastSyncDate_posts: metadata?.lastSyncDate_posts || null
   };
 };
 

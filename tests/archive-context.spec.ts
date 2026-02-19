@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
-import { expectArchiveViewSelected, selectArchiveView } from './helpers/archiveControls';
+import { expectArchiveViewSelected, selectArchiveView, waitForArchiveRenderComplete } from './helpers/archiveControls';
 
 test.describe('User Archive Context Type & View Modes', () => {
   let scriptContent: string;
@@ -71,6 +71,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Switch to thread-full view to trigger context fetching
     await selectArchiveView(page, 'thread-full');
@@ -141,6 +142,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Initialize fetch counter
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
@@ -204,6 +206,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Initialize fetch counter
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
@@ -268,6 +271,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Verify card view is active
     await expectArchiveViewSelected(page, 'card');
@@ -286,6 +290,72 @@ test.describe('User Archive Context Type & View Modes', () => {
     // Verify stub has reduced opacity styling (placeholder)
     const stubStyle = await parentStub.evaluate(el => window.getComputedStyle(el).opacity);
     expect(parseFloat(stubStyle)).toBeLessThan(1);
+  });
+
+  test('[PR-UARCH-29] card view shows top-level comments under parent post header', async ({ page }) => {
+    const userId = 'u-test-user';
+    const username = 'TestUser';
+
+    const topLevelComment = {
+      _id: 'comment-top-level',
+      postedAt: '2024-01-15T12:00:00Z',
+      htmlBody: '<p>Top-level comment content</p>',
+      baseScore: 11,
+      voteCount: 2,
+      author: 'TestUser',
+      postId: 'post-parent',
+      topLevelCommentId: 'comment-top-level',
+      parentCommentId: null,
+      parentComment: null,
+      user: { _id: userId, username, displayName: 'Test User', slug: 'testuser', karma: 100 },
+      pageUrl: 'https://lesswrong.com/posts/post-parent/comment-top-level',
+      contents: { markdown: 'Top-level comment content' },
+      post: {
+        _id: 'post-parent',
+        title: 'Parent Post Title',
+        slug: 'parent-post-title',
+        pageUrl: 'https://lesswrong.com/posts/post-parent',
+        postedAt: '2024-01-15T10:00:00Z',
+        baseScore: 100,
+        voteCount: 15,
+        commentCount: 1,
+        wordCount: 1200,
+        user: { _id: 'u-post-author', username: 'PostAuthor', displayName: 'Post Author', slug: 'postauthor', karma: 500 },
+        contents: { markdown: 'Parent post body' },
+        htmlBody: '<p>Parent post body</p>'
+      }
+    };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><body><div id="app"></div></body></html>',
+      testMode: true,
+      onGraphQL: `
+        if (query.includes('UserBySlug') || query.includes('user(input:')) {
+          return { data: { user: { _id: '${userId}', username: '${username}', displayName: 'Test User' } } };
+        }
+        if (query.includes('GetUserPosts')) {
+          return { data: { posts: { results: [] } } };
+        }
+        if (query.includes('GetUserComments')) {
+          return { data: { comments: { results: [${JSON.stringify(topLevelComment)}] } } };
+        }
+      `
+    });
+
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await expectArchiveViewSelected(page, 'card');
+
+    const topLevelCard = page.locator('.pr-archive-item').filter({
+      has: page.locator('.pr-comment[data-id="comment-top-level"]')
+    }).first();
+
+    await expect(topLevelCard.locator('.pr-post-header .pr-post-title')).toContainText('Parent Post Title');
+    await expect(topLevelCard.locator('.pr-replies .pr-comment[data-id="comment-top-level"]')).toBeVisible();
+    await expect(topLevelCard.locator('.pr-context-placeholder')).toHaveCount(0);
   });
 
   test('[PR-UARCH-30] index view click-to-expand', async ({ page }) => {
@@ -326,6 +396,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Switch to index view
     await selectArchiveView(page, 'index');
@@ -394,6 +465,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Switch to card view
     await selectArchiveView(page, 'card');
@@ -472,6 +544,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Initialize fetch counter
     await page.evaluate(() => { (window as any).__TEST_FETCH_COUNT__ = 0; });
@@ -527,6 +600,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
     // Verify thread modes disable Reply To sort option and normalize selected sort.
     await selectArchiveView(page, 'card');
@@ -577,3 +651,4 @@ test.describe('User Archive Context Type & View Modes', () => {
     expect(replyToOptionPlaceholder).toBe(true);
   });
 });
+

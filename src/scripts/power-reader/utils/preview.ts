@@ -6,6 +6,7 @@
 /* eslint-disable no-useless-assignment */
 import { Logger } from './logger';
 import { sanitizeHtml } from './sanitize';
+import { withForcedLayout } from './dom';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
@@ -214,7 +215,7 @@ export function setupHoverPreview(
   if (trigger.dataset.previewAttached) return;
   trigger.dataset.previewAttached = '1';
 
-  trigger.addEventListener('mouseenter', (e: MouseEvent) => {
+  trigger.addEventListener('mouseenter', async (e: MouseEvent) => {
     trackMousePos(e);
     Logger.debug('Preview mouseenter: trigger=', trigger.tagName, trigger.className, 'dataset=', JSON.stringify(trigger.dataset));
 
@@ -225,17 +226,17 @@ export function setupHoverPreview(
 
     // Check visibility for highlight and preview skipping
     if (options.targetGetter) {
-      const result = options.targetGetter();
+      const result = await options.targetGetter();
       if (result) {
         const targets = Array.isArray(result) ? result : [result];
 
         // 1. Highlight matches (always, regardless of visibility)
         if (targets.length > 0) {
-          console.info(`[setupHoverPreview] Adding pr-parent-hover to ${targets.length} targets`);
-          targets.forEach(t => t.classList.add('pr-parent-hover'));
+          targets.forEach(t => {
+            t.classList.add('pr-parent-hover');
+          });
 
           const removeHighlight = () => {
-            console.info(`[setupHoverPreview] Removing pr-parent-hover from ${targets.length} targets`);
             targets.forEach(t => t.classList.remove('pr-parent-hover'));
             trigger.removeEventListener('mouseleave', removeHighlight);
           };
@@ -246,8 +247,11 @@ export function setupHoverPreview(
         // SPECIAL CASE: If the target is a sticky header, we still show the preview 
         // because the sticky header doesn't show the full post body.
 
-        // We check visibility BEFORE adding the highlight class usually, 
-        // but since we just added it, we must ensure isElementFullyVisible ignores it.
+        // [PR-FIX] Force layout for ALL target containers to ensure elementFromPoint works correctly
+        const containers = new Set(targets.map(t => t.closest('.pr-post-group') || t) as HTMLElement[]);
+        const forcePromises = Array.from(containers).map(c => withForcedLayout(c, () => { /* Wake up */ }));
+        await Promise.all(forcePromises);
+
         const allFullyVisible = targets.every(t => {
           const isSticky = !!t.closest('.pr-sticky-header');
           if (isSticky) return false;

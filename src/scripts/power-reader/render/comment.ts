@@ -7,7 +7,7 @@ import type { Comment, NamesAttachedReactionsScore } from '../../../shared/graph
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
 import { getScoreColor, getRecencyColor } from '../utils/colors';
-import { getReadState, isRead, getLoadFrom } from '../utils/storage';
+import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
 import { sanitizeHtml } from '../utils/sanitize';
@@ -88,11 +88,12 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
 const getContextType = (comment: Comment): string | undefined =>
   (comment as any).contextType;
 
-const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = ''): string => {
+const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = '', state?: ReaderState): string => {
   const postId = comment.postId || '';
+  const readClass = state?.isArchiveMode ? '' : 'read';
 
   return `
-    <div class="pr-comment pr-item read pr-missing-parent"
+    <div class="pr-comment pr-item ${readClass} pr-missing-parent"
          data-id="${comment._id}"
          data-post-id="${postId}"
          data-parent-id=""
@@ -119,13 +120,13 @@ export const renderCommentTree = (
   const visibleReplies = replies.filter(r => idSet.has(r._id));
 
   // [PR-READ-07] Check for implicit read based on cutoff
-  const cutoff = getLoadFrom();
+  const { readState, cutoff } = getReadTrackingInputs(state.isArchiveMode);
+  
   const isImplicitlyRead = (item: { postedAt?: string }) => {
     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
   };
 
   if (visibleReplies.length > 0) {
-    const readState = getReadState();
     visibleReplies.forEach((r: any) => {
       const isItemRead = !state.isArchiveMode && (readState[r._id] === 1 || isImplicitlyRead(r));
       r.treeKarma = calculateTreeKarma(
@@ -218,14 +219,14 @@ const renderContextPlaceholder = (
 
 export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
   const ct = getContextType(comment);
-  if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml);
+  if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml, state);
   if (ct === 'stub') return renderContextPlaceholder(comment, state, repliesHtml);
 
-  const readState = getReadState();
-  // In archive mode, we ignore the local read state entirely to prevent collapsing context
+  const { readState } = getReadTrackingInputs(state.isArchiveMode);
+  // In archive mode, we ignore the local read state entirely to prevent collapsing context or greying out text
   const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
-  const commentIsRead = ct === 'fetched' || isLocallyRead;
-  const unreadDescendantCount = getUnreadDescendantCount(comment._id, state, readState);
+  const commentIsRead = !state.isArchiveMode && (ct === 'fetched' || isLocallyRead);
+  const unreadDescendantCount = state.isArchiveMode ? Infinity : getUnreadDescendantCount(comment._id, state, readState);
 
   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
   // Exception: Never collapse if forceVisible is set (e.g. via Trace to Root)

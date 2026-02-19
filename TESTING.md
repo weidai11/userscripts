@@ -67,6 +67,7 @@ Validates the new User Archive 2.0 subsystem.
 - **Routing**: Verifies that `?view=archive&username=...` triggers the archive takeover.
 - **Bulk Loading**: Mocks the paginated `GetUserPosts` and `GetUserComments` queries.
 - **Rendering**: Ensures unified chronological feed displays both posts and comments correctly.
+- **Pagination Guardrail**: Confirms archive does not expose bottom-of-list "Load More" item pagination controls.
 
 #### 🔵 UI Interactions (`power-reader.ui.spec.ts`)
 Focuses on user interactions within the rendered Power Reader interface.
@@ -108,7 +109,8 @@ We use a custom `FileReporter` that automatically saves test output (stdout and 
 - **Location**: `test_logs/test_run_YYYYMMDD_HHMMSS.log`
 - **Feature**: At the end of every test run, the full absolute path to the log file is printed to the console.
 - **Benefit**: No need for manual `pwsh` scripts; just run `npm test` and check the log if something fails.
-- **Debug/Verbose Logs**: Browser debug/verbose logs are only written to the file when running a single spec file. If you need them, rerun a single file (for example: `npx playwright test tests/power-reader.spec.ts`). The test output will also remind you when this applies.
+- **Debug/Verbose Logs**: Browser debug/verbose logs are only piped during a single spec run. Multi-file/full-suite runs suppress these logs even if tests pass `verbose: true` to helpers.
+- **Temporary Override**: If you intentionally need browser logs in a multi-file run, set `PW_FORCE_BROWSER_LOGS=true` for that command, then unset it afterward.
 
 ### PowerShell Logger (Legacy)
 If you need to stream logs in real-time or if Playwright fails to start entirely, use our helper script:
@@ -126,6 +128,7 @@ Tests often capture screenshots on failure or specific checkpoints. Look for `po
 ### Archive Mode & Large Datasets
 Archive testing can be slow if rendering thousands of items.
 - **`__PR_ARCHIVE_LARGE_THRESHOLD`**: You can override the performance dialog threshold (default 10,000) by setting this on `window` in `onInit`. This allows testing the "Large Dataset" logic with small item counts (e.g., 100).
+- **Behavior note**: This is about initial render cap selection; archive does not use user-clickable list pagination ("Load More") at the bottom of the feed.
 
 ---
 
@@ -235,3 +238,15 @@ If a hover test fails like "Element not found":
 2.  **Settle Time**: Use `page.waitForTimeout(500)` after script injection. The reader needs a moment to attach its global listeners to `window` and `document`.
 3.  **Threshold Awareness**: The application uses a **200ms threshold** for "intentional hover" (checks if mouse moved recently). Ensure your test moves the mouse < 200ms before dispatching `mouseenter`.
 4.  **Trace logs**: Run tests with `--debug` and look for `BROWSER: isIntentionalHover: true/false` in the console.
+
+---
+
+### Content-Visibility & Hit-Testing (`elementFromPoint`)
+- **Symptom**: `isElementFullyVisible` or "Trace to Root" logic fails, incorrectly reporting elements as hidden or obscured, especially in Playwright/headless Chrome.
+- **Cause**: We use `content-visibility: auto` for performance. Browsers (especially Chromium) may skip painting these elements until they are about to enter the viewport. `document.elementFromPoint()` and other hit-testing APIs often fail to "hit" an element that hasn't been painted yet, even if it's technically in the viewport.
+- **Fix**: Use the `withForcedLayout(element, callback)` utility. 
+    1. It adds a `.pr-force-layout` class (overriding `content-visibility` to `visible !important`).
+    2. Forces a reflow via `offsetHeight`.
+    3. Awaits a **double `requestAnimationFrame`** (essential for the browser to complete a paint cycle).
+    4. Performs the measurement/hit-test in the callback.
+    5. Restores original layout after a brief delay.

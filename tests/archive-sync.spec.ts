@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
-import { selectArchiveView } from './helpers/archiveControls';
+import { selectArchiveView, waitForArchiveRenderComplete } from './helpers/archiveControls';
 
 test.describe('Power Reader Archive Sync', () => {
     let scriptContent: string;
@@ -48,6 +48,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         // Verify cached post is displayed
         await expect(page.locator('.pr-item h2')).toHaveText('Cached Post Before Sync Failure');
@@ -71,6 +72,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.reload();
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         // Cached post should still be visible
         await expect(page.locator('.pr-item h2')).toHaveText('Cached Post Before Sync Failure');
@@ -151,6 +153,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
         await expect(page.locator('.pr-item h2')).toHaveText('Old Cached Post');
 
         // Second visit includes one in-flight item between syncStart and syncEnd.
@@ -168,19 +171,6 @@ test.describe('Power Reader Archive Sync', () => {
                             posts: {
                                 results: [
                                     {
-                                        _id: 'post-in-flight',
-                                        title: 'In-Flight Post',
-                                        slug: 'in-flight-post',
-                                        pageUrl: 'https://lesswrong.com/posts/post-in-flight',
-                                        postedAt: '${inFlightPostedAt}',
-                                        baseScore: 20,
-                                        voteCount: 5,
-                                        commentCount: 0,
-                                        htmlBody: '<p>In Flight</p>',
-                                        contents: { markdown: 'In Flight' },
-                                        user: { _id: '${userId}', username: '${username}' }
-                                    },
-                                    {
                                         _id: 'post-old',
                                         title: 'Old Cached Post',
                                         slug: 'old-cached-post',
@@ -191,6 +181,19 @@ test.describe('Power Reader Archive Sync', () => {
                                         commentCount: 0,
                                         htmlBody: '<p>Old</p>',
                                         contents: { markdown: 'Old' },
+                                        user: { _id: '${userId}', username: '${username}' }
+                                    },
+                                    {
+                                        _id: 'post-in-flight',
+                                        title: 'In-Flight Post',
+                                        slug: 'in-flight-post',
+                                        pageUrl: 'https://lesswrong.com/posts/post-in-flight',
+                                        postedAt: '${inFlightPostedAt}',
+                                        baseScore: 20,
+                                        voteCount: 5,
+                                        commentCount: 0,
+                                        htmlBody: '<p>In Flight</p>',
+                                        contents: { markdown: 'In Flight' },
                                         user: { _id: '${userId}', username: '${username}' }
                                     }
                                 ]
@@ -207,6 +210,7 @@ test.describe('Power Reader Archive Sync', () => {
         await page.reload();
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         await expect(async () => {
             const titles = await page.locator('.pr-item h2').allTextContents();
@@ -281,6 +285,7 @@ if (query.includes('GetCommentsByIds')) {
   await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
   await page.evaluate(scriptContent);
   await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
   // Switch to Thread View (triggers context fetch)
   await selectArchiveView(page, 'thread-full');
@@ -365,6 +370,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         // Verify Old Post is there
         await expect(page.locator('.pr-item h2')).toHaveText('Old Post');
@@ -393,8 +399,8 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
                     return { data: { user: { _id: '${userId}', username: '${username}' } } };
                 }
                 if (query.includes('GetUserPosts')) {
-                    // Return both posts (Newest first is standard API behavior)
-                    return { data: { posts: { results: [${JSON.stringify(newPost)}, ${JSON.stringify(initialPost)}] } } };
+                    // Return both posts (Oldest first for forward-sync)
+                    return { data: { posts: { results: [${JSON.stringify(initialPost)}, ${JSON.stringify(newPost)}] } } };
                 }
                 if (query.includes('GetUserComments')) {
                     return { data: { comments: { results: [] } } };
@@ -406,6 +412,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
         await page.reload();
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         // It should load cache first (Old Post), then sync and find New Post.
         // We expect eventually both to be visible.
@@ -502,6 +509,7 @@ return { data: {} };
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         await page.evaluate(() => { (window as any).__CTX_FETCH_COUNT__ = 0; });
         await selectArchiveView(page, 'thread-full');
@@ -535,6 +543,7 @@ return { data: {} };
         await page.reload();
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         await page.evaluate(() => { (window as any).__CTX_FETCH_COUNT__ = 0; });
         await selectArchiveView(page, 'thread-full');
@@ -645,6 +654,7 @@ return { data: {} };
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         await selectArchiveView(page, 'thread-full');
         await expect(page.locator('.pr-comment[data-id="c-owned-parent"]')).toBeVisible();
@@ -700,11 +710,11 @@ if (query.includes('GetUserPosts')) {
 if (query.includes('GetUserComments')) {
   window.__COMMENT_BATCH_CALLS__ = (window.__COMMENT_BATCH_CALLS__ || 0) + 1;
 
-  if (!variables.before) {
-    const base = Date.parse('2025-01-20T00:00:00Z');
+  if (!variables.after) {
+    const base = Date.parse('2025-01-01T00:00:00Z');
     const firstBatch = [];
     for (let i = 0; i < 100; i++) {
-      const ts = new Date(base - i * 60000).toISOString();
+      const ts = new Date(base + i * 60000).toISOString();
       firstBatch.push(makeComment('c-first-' + i, ts, 'First batch comment ' + i));
     }
     // Partial-response poison row; valid rows should still paginate forward.
@@ -718,7 +728,7 @@ if (query.includes('GetUserComments')) {
   return {
     data: {
       comments: {
-        results: [makeComment('c-second-page', '2025-01-01T00:00:00Z', 'Second page sentinel comment')]
+        results: [makeComment('c-second-page', '2025-02-01T00:00:00Z', 'Second page sentinel comment')]
       }
     }
   };
@@ -730,6 +740,7 @@ return { data: {} };
         await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
         // Requirement outcome: pagination must continue past a partial/poisoned row
         // and still load older pages.
@@ -737,3 +748,4 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-second-page"]')).toBeVisible();
     });
 });
+

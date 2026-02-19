@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.686] - 2026-02-19
+
+### Added
+- **Eager Parent Preloading ([PR-UARCH-47])**: The User Archive now requests the `htmlBody` of immediate parent comments during the initial sync and eagerly caches them in IndexedDB. This eliminates secondary network round-trips when rendering Thread View or Card View context, significantly improving perceived performance and reducing server load.
+
+### Optimized
+- **Rendering Performance**: Implemented several targeted optimizations to improve User Archive rendering speed and main-thread responsiveness.
+    - **Yielding & Metric Accuracy**: Switched from `requestAnimationFrame` to `setTimeout(0)` for batch fragment insertion. This prevents artificially inflating the `Render` metric by skipping unnecessary VSync waits while still maintaining UI responsiveness.
+    - **Algorithmic Short-Circuit**: Optimized Thread View reconstruction by breaking out of ancestor traversal as soon as a known ID is encountered, eliminating redundant O(N) work on shared thread branches.
+    - **Memory Optimization**: Replaced thousands of `new Date()` allocations with direct ISO string comparisons for date-based sorting metrics, significantly reducing Garbage Collection pressure.
+    - **Efficient String Building**: Converged on `Array.push()` and `join('')` patterns for large HTML fragment generation, avoiding the quadratic complexity of string concatenation (`+=`).
+    - **Refinement**: Fixed a truncation note that inaccurately referred to manual pagination controls and improved render concurrency protection.
+- **Search Engine Performance**: Drastically reduced search latency and memory pressure in the User Archive.
+    - **Typed Array Intersections**: Replaced expensive `Set<number>` conversions with O(A+B) two-pointer intersections on `Uint32Array` postings, eliminating massive object allocations during Stage-A filtering.
+    - **Lazy Candidate Allocation**: Removed the eager allocation of full-corpus `Set` objects for global scans, moving to lazy `Uint32Array` initialization only when positive filters are applied.
+    - **Ranker Allocation Cleanup**: Optimized the `relevance` sort loop by using a static `EMPTY_SIGNALS` reference, preventing the creation of tens of thousands of temporary anonymous objects during O(N log N) sort operations.
+    - **Refinement**: Optimized signal filtering to only process items in the final result set and refined lazy ordinal allocation for large-corpus global scans.
+- **Test Integrity**: Verified that the full suite of requirement-mapped Playwright tests passes successfully after the optimizations.
+
+## [1.2.685] - 2026-02-19
+
 ## [1.2.684] - 2026-02-19
 
 ### Changed

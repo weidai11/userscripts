@@ -182,6 +182,21 @@ export function toggleAuthorPreference(
 }
 
 /**
+ * Get sanitized read tracking inputs based on archive mode
+ */
+export interface ReadTrackingInputs {
+  readState: Record<string, 1>;
+  cutoff: string | undefined;
+}
+
+export function getReadTrackingInputs(isArchiveMode: boolean): ReadTrackingInputs {
+  if (isArchiveMode) {
+    return { readState: {}, cutoff: undefined };
+  }
+  return { readState: getReadState(), cutoff: getLoadFrom() || undefined };
+}
+
+/**
  * Clear all read state
  */
 export function clearReadState(): void {

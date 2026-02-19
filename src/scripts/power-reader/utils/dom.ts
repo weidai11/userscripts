@@ -40,12 +40,111 @@ export const smartScrollTo = (el: HTMLElement, isPost: boolean): void => {
 };
 
 /**
+ * Optimized batch refresh for all post action buttons in a container.
+ * Performs a single DOM scan instead of per-post scans.
+ */
+export const refreshAllPostActionButtons = (container: HTMLElement | Document = document): void => {
+    const posts = container.querySelectorAll('.pr-post');
+    const viewportHeight = window.innerHeight;
+
+    // Pre-calculate next sibling links for all posts in this container
+    posts.forEach((post, idx) => {
+        const header = post.querySelector('.pr-post-header') as HTMLElement;
+        const bodyContainer = post.querySelector('.pr-post-body-container') as HTMLElement;
+        const eBtn = post.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
+        const nBtn = post.querySelector('[data-action="scroll-to-next-post"]') as HTMLElement;
+
+        // 1. Next Post Button logic
+        if (nBtn) {
+            let nextPost: Element | null = post.nextElementSibling;
+            while (nextPost && !(nextPost as HTMLElement).classList.contains('pr-post')) {
+                nextPost = nextPost.nextElementSibling;
+            }
+            if (!nextPost) {
+                nBtn.classList.add('disabled');
+                nBtn.title = 'No more posts in current feed';
+            } else {
+                nBtn.classList.remove('disabled');
+                nBtn.title = 'Scroll to next post';
+            }
+        }
+
+        // 2. Expand [e] button logic (Truncation)
+        if (bodyContainer && eBtn) {
+            const isFullPost = bodyContainer.classList.contains('pr-post-body');
+
+            if (bodyContainer.classList.contains('truncated')) {
+                if (bodyContainer.classList.contains('collapsed') || bodyContainer.style.display === 'none') {
+                    eBtn.classList.remove('disabled');
+                    eBtn.title = 'Expand post body';
+                } else {
+                    const isActuallyTruncated = bodyContainer.scrollHeight > bodyContainer.offsetHeight;
+                    if (!isActuallyTruncated) {
+                        const overlay = bodyContainer.querySelector('.pr-read-more-overlay') as HTMLElement;
+                        if (overlay) overlay.style.display = 'none';
+                        eBtn.classList.add('disabled');
+                        eBtn.title = 'Post fits within viewport without truncation';
+                    } else {
+                        eBtn.classList.remove('disabled');
+                        eBtn.title = 'Expand post body';
+                    }
+                }
+            } else if (isFullPost) {
+                if (bodyContainer.classList.contains('collapsed')) {
+                    eBtn.title = 'Expand post body';
+                } else {
+                    const isSmallContent = bodyContainer.scrollHeight <= (viewportHeight * 0.5);
+                    if (isSmallContent) {
+                        eBtn.classList.add('disabled');
+                        eBtn.title = 'Post body is small and doesn\'t need toggle';
+                        const overlay = bodyContainer.querySelector('.pr-read-more-overlay') as HTMLElement;
+                        if (overlay) overlay.style.display = 'none';
+                    } else {
+                        eBtn.title = 'Collapse post body';
+                    }
+                }
+                if (!eBtn.title.includes('small')) {
+                    eBtn.classList.remove('disabled');
+                }
+            }
+        }
+    });
+
+    // Update sticky header specifically if it exists
+    const stickyHeader = document.querySelector('.pr-sticky-header .pr-post-header') as HTMLElement;
+    if (stickyHeader) {
+        const stickyPostId = stickyHeader.getAttribute('data-post-id');
+        const nBtn = stickyHeader.querySelector('[data-action="scroll-to-next-post"]') as HTMLElement;
+        if (nBtn && stickyPostId) {
+            const currentPost = document.querySelector(`.pr-post[data-id="${stickyPostId}"]`);
+            let nextPost: Element | null = currentPost ? currentPost.nextElementSibling : null;
+            while (nextPost && !(nextPost as HTMLElement).classList.contains('pr-post')) {
+                nextPost = nextPost.nextElementSibling;
+            }
+            if (!nextPost) {
+                nBtn.classList.add('disabled');
+                nBtn.title = 'No more posts in current feed';
+            } else {
+                nBtn.classList.remove('disabled');
+                nBtn.title = 'Scroll to next post';
+            }
+        }
+    }
+};
+
+/**
  * Update post action buttons ([e], [a], etc.) based on actual DOM state.
  * For [e], checks if content is truly truncated.
  */
-export const refreshPostActionButtons = (postId?: string): void => {
-    const selector = postId ? `.pr-post[data-id="${postId}"]` : '.pr-post';
-    const posts = document.querySelectorAll(selector);
+export const refreshPostActionButtons = (target?: string | HTMLElement): void => {
+    let posts: NodeListOf<Element> | HTMLElement[];
+    
+    if (target instanceof HTMLElement) {
+        posts = [target];
+    } else {
+        const selector = target ? `.pr-post[data-id="${target}"]` : '.pr-post';
+        posts = document.querySelectorAll(selector);
+    }
 
     const updateNextPostButton = (header: HTMLElement | null, postEl: Element | null): void => {
         if (!header) return;
@@ -66,7 +165,8 @@ export const refreshPostActionButtons = (postId?: string): void => {
         }
     };
 
-    posts.forEach(post => {
+    posts.forEach(postNode => {
+        const post = postNode as HTMLElement;
         const container = post.querySelector('.pr-post-body-container') as HTMLElement;
         const eBtn = post.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
 
@@ -129,3 +229,49 @@ export const refreshPostActionButtons = (postId?: string): void => {
         updateNextPostButton(stickyHeader, stickyPostEl);
     }
 };
+
+const forceLayoutCounts = new WeakMap<HTMLElement, number>();
+
+/**
+ * Temporarily bypasses content-visibility for precise DOM measurements and layout tests
+ */
+export async function withForcedLayout<T>(
+    element: HTMLElement,
+    callback: () => T | Promise<T>
+): Promise<T> {
+    // 1. Find the highest relevant container (post group) to wake up the whole tree
+    const container = (element.closest('.pr-post-group') || element) as HTMLElement;
+
+    // 2. Force layout constraint off (using a reference counter to prevent race conditions)
+    const count = (forceLayoutCounts.get(container) || 0) + 1;
+    forceLayoutCounts.set(container, count);
+    if (count === 1) container.classList.add('pr-force-layout');
+
+    // 3. Force a synchronous browser reflow so dimensions instantly update
+    // (reading offsetHeight flushes the layout queue)
+    void container.offsetHeight;
+
+    // Wait for the browser to actually paint the new layout, which is required
+    // for elementFromPoint to hit the correct elements.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    try {
+        if (!container.isConnected) {
+            return await callback();
+        }
+        // 4. Execute our visibility checks and scrolls
+        return await callback();
+    } finally {
+        // 5. Restore content-visibility optimization, but delay it slightly if we 
+        // need to hold the layout steady for a smooth scroll animation.
+        setTimeout(() => {
+            const prevCount = forceLayoutCounts.get(container) || 0;
+            if (prevCount <= 1) {
+                forceLayoutCounts.delete(container);
+                container.classList.remove('pr-force-layout');
+            } else {
+                forceLayoutCounts.set(container, prevCount - 1);
+            }
+        }, 500); // 500ms covers the smooth scroll duration
+    }
+}

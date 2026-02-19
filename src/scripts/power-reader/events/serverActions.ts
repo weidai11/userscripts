@@ -29,7 +29,7 @@ import type {
     GetCommentsByIdsQueryVariables,
 } from '../../../generated/graphql';
 import type { ReaderState } from '../state';
-import { smartScrollTo } from '../utils/dom';
+import { smartScrollTo, withForcedLayout } from '../utils/dom';
 import { CONFIG } from '../config';
 import { isElementFullyVisible } from '../utils/preview';
 import { Logger } from '../utils/logger';
@@ -641,16 +641,21 @@ export const handleLoadParentsAndScroll = async (target: HTMLElement, state: Rea
 
             await new Promise(resolve => requestAnimationFrame(resolve));
 
-            const isVisible = isElementFullyVisible(rootEl);
+            await withForcedLayout(rootEl, async () => {
+                if (!rootEl.isConnected) return;
 
-            if (!isVisible) {
-                smartScrollTo(rootEl, false);
-            } else {
-                Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
-            }
+                const isVisible = isElementFullyVisible(rootEl);
 
-            rootEl.classList.add('pr-highlight-parent');
-            setTimeout(() => rootEl.classList.remove('pr-highlight-parent'), 2000);
+                if (!isVisible) {
+                    smartScrollTo(rootEl, false);
+                } else {
+                    Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
+                }
+
+                rootEl.classList.add('pr-highlight-parent');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                rootEl.classList.remove('pr-highlight-parent');
+            });
             return;
         }
     }

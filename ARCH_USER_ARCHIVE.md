@@ -17,7 +17,7 @@ Transform the user profile into a powerful, offline-first research tool that agg
 ### Phase 2: Parity & Search (✅ Completed)
 **Goal**: Match and exceed the utility of `lw_user_archive.html`.
 - **Client-Side Filters (✅ Done)**: Instant regex filtering on body text via search bar.
-- **Pagination (✅ Done)**: "Load More" virtualization to handle large datasets.
+- **Render Guardrail (✅ Done)**: Bounded render caps with chunked DOM insertion for large datasets (no user-click pagination controls).
 - **Sorting (✅ Done)**:
   - **Karma**: Best/Worst takes.
   - **Date**: Oldest/Newest.
@@ -100,7 +100,7 @@ const isThreadMode = (mode: ArchiveViewMode): boolean =>
 - **GraphQL Queries**:
   - **UserComments**: Fetch comments by `userId`.
   - **UserPosts**: Fetch posts by `userId`.
-  - **Note**: Unlike the main reader which uses date-windowed queries (`after`/`before`), the archive bulk fetch mechanism loops through *all* pages until it hits the `lastSyncDate` watermark.
+  - **Note**: The archive bulk fetch mechanism performs a forward sync using `after` cursors and `sortBy: "oldest"`, starting from the `lastSyncDate` watermark and continuing until all new items are retrieved. This matches the main reader's date-windowed query patterns.
 
 - **Reuse**:
   - Import `fetchRepliesBatch` from `../services/loader` to implement "Threaded Context".

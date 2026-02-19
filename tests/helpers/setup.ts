@@ -44,6 +44,8 @@ export interface MockSetupOptions {
     onGraphQL?: string;
     onMutation?: string; // Legacy alias
     mockHtml?: string;
+    // Legacy flag used by many tests. This no longer enables terminal log piping
+    // during multi-file runs (to keep full-suite output clean).
     verbose?: boolean;
     appDebugMode?: boolean;
     appVerbose?: boolean;
@@ -115,10 +117,13 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
     const mockHtml = opts.mockHtml ?? DEFAULT_MOCK_HTML;
     const comments = opts.comments ?? (opts.posts ? [] : DEFAULT_COMMENTS);
     const posts = opts.posts ?? (opts.comments ? [] : DEFAULT_POSTS);
-    const allowVerboseLogs = (opts.verbose ?? false) && process.env.PW_SINGLE_FILE_RUN === 'true';
+    const isSingleFileRun = process.env.PW_SINGLE_FILE_RUN === 'true';
+    const forceBrowserLogs = process.env.PW_FORCE_BROWSER_LOGS === 'true';
+    const shouldPipeBrowserConsole = isSingleFileRun || forceBrowserLogs;
+    const allowVerboseLogs = shouldPipeBrowserConsole && (opts.verbose || isSingleFileRun || forceBrowserLogs);
 
-    if (opts.verbose || process.env.PW_SINGLE_FILE_RUN === 'true') {
-        // Only print verbose/debug logs when running a single spec file.
+    if (shouldPipeBrowserConsole) {
+        // Mirror browser console output only in single-spec runs, unless explicitly forced.
         page.on('console', msg => {
             const type = msg.type();
             const text = msg.text();
@@ -242,7 +247,16 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
                             const handler = new Function('query', 'variables', 'body', data.onGraphQL);
                             const res = handler(query, variables, body);
                             if (res !== null && res !== undefined) {
-                                setTimeout(() => options.onload({ responseText: JSON.stringify(res) }), 10);
+                                if (res instanceof Promise) {
+                                    res.then(resolvedRes => {
+                                        setTimeout(() => options.onload({ responseText: JSON.stringify(resolvedRes) }), 10);
+                                    }).catch(err => {
+                                        console.error('Error in async onGraphQL handler:', err);
+                                        if (options.onerror) options.onerror(err);
+                                    });
+                                } else {
+                                    setTimeout(() => options.onload({ responseText: JSON.stringify(res) }), 10);
+                                }
                                 return;
                             }
                         } catch (e) {

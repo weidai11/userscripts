@@ -42,6 +42,13 @@ const computeRelevanceScore = (signals: RelevanceSignals): number => {
   return score;
 };
 
+const EMPTY_SIGNALS: RelevanceSignals = {
+  tokenHits: 0,
+  phraseHits: 0,
+  authorHit: false,
+  replyToHit: false
+};
+
 export const sortSearchDocs = (
   docs: ArchiveSearchDoc[],
   sortMode: ArchiveSearchSortMode,
@@ -76,18 +83,8 @@ export const sortSearchDocs = (
       return sorted;
     case 'relevance':
       sorted.sort((a, b) => {
-        const aSignals = relevanceSignalsById.get(a.id) || {
-          tokenHits: 0,
-          phraseHits: 0,
-          authorHit: false,
-          replyToHit: false
-        };
-        const bSignals = relevanceSignalsById.get(b.id) || {
-          tokenHits: 0,
-          phraseHits: 0,
-          authorHit: false,
-          replyToHit: false
-        };
+        const aSignals = relevanceSignalsById.get(a.id) || EMPTY_SIGNALS;
+        const bSignals = relevanceSignalsById.get(b.id) || EMPTY_SIGNALS;
         const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);
         if (scoreCmp !== 0) return scoreCmp;
 

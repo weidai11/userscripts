@@ -36,6 +36,14 @@ export const STYLES = `
     box-sizing: border-box;
   }
 
+  /* Temporarily bypass content-visibility for precise DOM measurements and smooth scrolling */
+  .pr-force-layout,
+  .pr-force-layout .pr-comment,
+  .pr-force-layout .pr-post {
+      content-visibility: visible !important;
+      contain-intrinsic-size: auto !important;
+  }
+
   /* Resize handles */
   .pr-resize-handle {
     position: fixed;
@@ -265,6 +273,8 @@ export const STYLES = `
     border: 1px solid #ddd;
     border-radius: 4px;
     background: #fafafa;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .pr-post-header {
@@ -422,6 +432,8 @@ export const STYLES = `
     border-radius: 4px;
     background: #fff;
     position: relative; /* Context for absolute positioning */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .pr-comment.pr-missing-parent {
@@ -1310,5 +1322,35 @@ export const STYLES = `
     padding: 10px 15px;
     background: white;
     border-top: 1px solid #eee;
+  }
+
+  /* Compact post header for top-level comments in archive card view only */
+  .pr-archive-top-level-comment > .pr-post-header {
+    padding: 4px 8px;
+    gap: 6px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header h2 {
+    font-size: 1em;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-post-meta {
+    font-size: 80%;
+    gap: 4px !important;
+    min-height: 18px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-author-controls {
+    margin: 0 2px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .pr-post-actions {
+    gap: 1px;
+    margin-right: 2px;
+  }
+
+  .pr-archive-top-level-comment > .pr-post-header .text-btn {
+    font-size: 11px !important;
+    padding: 0 1px;
   }
 `;

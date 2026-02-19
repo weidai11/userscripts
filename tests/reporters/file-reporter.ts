@@ -71,7 +71,9 @@ class FileReporter implements Reporter {
         return false;
     }
 
-    private filterVerboseChunk(chunk: string | Buffer): string | null {
+    // Reporter hooks cannot suppress what the list reporter prints to terminal.
+    // This filter only controls what we persist in our file log.
+    private filterVerboseChunkForFileLog(chunk: string | Buffer): string | null {
         if (this.isSingleFileRun) return chunk.toString();
 
         const text = chunk.toString();
@@ -85,13 +87,13 @@ class FileReporter implements Reporter {
         return hasTrailingNewline ? `${kept.join('\n')}\n` : kept.join('\n');
     }
 
-    onStdOut(chunk: string | Buffer) {
-        const filtered = this.filterVerboseChunk(chunk);
+    onStdOut(chunk: string | Buffer): void {
+        const filtered = this.filterVerboseChunkForFileLog(chunk);
         if (filtered) this.logStream.write(filtered);
     }
 
-    onStdErr(chunk: string | Buffer) {
-        const filtered = this.filterVerboseChunk(chunk);
+    onStdErr(chunk: string | Buffer): void {
+        const filtered = this.filterVerboseChunkForFileLog(chunk);
         if (filtered) this.logStream.write(filtered);
     }
 

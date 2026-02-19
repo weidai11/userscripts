@@ -6,7 +6,7 @@ import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode, is
 import { loadAllContextualItems, loadArchiveData, saveArchiveData } from './storage';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
-import { renderArchiveFeed, updateRenderLimit, incrementRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
+import { renderArchiveFeed, updateRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
 import { setUIHost } from '../render/uiHost';
 import { ArchiveUIHost } from './uiHost';
 import { attachEventListeners } from '../events/index';
@@ -15,14 +15,16 @@ import { setupExternalLinks } from '../features/externalLinks';
 import { setupInlineReactions } from '../features/inlineReactions';
 import { setupLinkPreviews } from '../features/linkPreviews';
 import { initPreviewSystem } from '../utils/preview';
-import { refreshPostActionButtons } from '../utils/dom';
+import { refreshAllPostActionButtons, refreshPostActionButtons } from '../utils/dom';
 import { ArchiveSearchManager } from './search';
+import { ReadTracker } from '../services/ReadTracker';
 import { parseArchiveUrlState, writeArchiveUrlState } from './search/urlState';
 import { createSearchWorkerClient } from './search/workerFactory';
 import { parseStructuredQuery } from './search/parser';
 import { isPositiveContentWithoutWildcard } from './search/ast';
 import { extractHighlightTerms, highlightTermsInContainer } from './search/highlight';
 import { computeFacets } from './search/facets';
+import { setupLinkPreviewsDelegated } from '../features/linkPreviews';
 import type { SearchWorkerClient } from './search/protocol';
 import type {
   ArchiveItem,
@@ -40,7 +42,6 @@ const AUTO_RETRY_KEY = 'power-reader-archive-auto-retry';
 const MAX_AUTO_RETRIES = 50;
 const INITIAL_BACKOFF_MS = 2000;
 
-const PAGE_SIZE = 10000;
 const SEARCH_DEBOUNCE_MS = 180;
 const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
 
@@ -67,11 +68,14 @@ export const initArchive = async (username: string): Promise<void> => {
     const root = document.getElementById('power-reader-root');
     if (!root) return;
 
-    // Inject styles for archive specific layouts - Idempotent check
-    if (!document.getElementById('pr-archive-styles')) {
-      const style = document.createElement('style');
+    // Inject or update styles for archive specific layouts
+    let style = document.getElementById('pr-archive-styles') as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement('style');
       style.id = 'pr-archive-styles';
-      style.textContent = `
+      document.head.appendChild(style);
+    }
+    style.textContent = `
         .pr-input {
             padding: 8px 12px;
             border: 1px solid var(--pr-border-color, #ddd);
@@ -404,11 +408,6 @@ export const initArchive = async (username: string): Promise<void> => {
             outline: 2px solid #0078ff;
             outline-offset: 1px;
         }
-        #archive-result-count.is-loading,
-        #archive-feed.is-loading {
-            opacity: 0.6;
-            transition: opacity 120ms ease;
-        }
         .pr-archive-index-item {
             display: flex;
             align-items: center;
@@ -578,8 +577,6 @@ export const initArchive = async (username: string): Promise<void> => {
             gap: 10px;
         }
     `;
-      document.head.appendChild(style);
-    }
 
     root.innerHTML = `
     <div class="pr-header">
@@ -693,15 +690,11 @@ export const initArchive = async (username: string): Promise<void> => {
       Loading archive data...
     </div>
     <div id="archive-feed" style="margin-top: 20px"></div>
-    <div id="archive-load-more" style="text-align: center; margin: 20px; display: none;">
-        <button class="pr-button">Load More</button>
-    </div>
   `;
 
     const statusEl = document.getElementById('archive-status');
     const dashboardEl = document.getElementById('archive-dashboard');
     const feedEl = document.getElementById('archive-feed');
-    const loadMoreBtn = document.getElementById('archive-load-more');
     const searchInput = document.getElementById('archive-search') as HTMLInputElement;
     const clearBtn = document.getElementById('archive-search-clear') as HTMLButtonElement;
     const scopeContainer = document.getElementById('archive-scope') as HTMLDivElement | null;
@@ -722,22 +715,56 @@ export const initArchive = async (username: string): Promise<void> => {
         '/mesa\\s+optimizer/i scope:all'
       ].join('\n');
     }
+
+    const perfMetrics = {
+      dbLoadMs: 0,
+      networkFetchMs: 0,
+      renderMs: 0,
+      renderPercent: 0,
+      searchMs: 0,
+      hooksMs: 0,
+      newItems: 0
+    };
+
     let statusBaseMessage = 'Checking local database...';
     let statusSearchResultCount: number | null = null;
 
     const renderTopStatusLine = (): void => {
       if (!statusEl) return;
 
-      if (statusSearchResultCount === null) {
-        statusEl.textContent = statusBaseMessage;
-        return;
+      let resultLabel = '';
+      if (statusSearchResultCount !== null) {
+        resultLabel = `${statusSearchResultCount.toLocaleString()} search results`;
       }
 
-      const resultLabel = `${statusSearchResultCount.toLocaleString()} search result${statusSearchResultCount === 1 ? '' : 's'}`;
-      statusEl.textContent = statusBaseMessage
-        ? `${statusBaseMessage} | ${resultLabel}`
-        : resultLabel;
+      const metrics: string[] = [];
+      if (perfMetrics.dbLoadMs > 0) metrics.push(`DB: ${perfMetrics.dbLoadMs.toFixed(0)}ms`);
+      if (perfMetrics.networkFetchMs > 0) metrics.push(`Net: ${perfMetrics.networkFetchMs.toFixed(0)}ms`);
+      if (perfMetrics.searchMs > 0) metrics.push(`Search: ${perfMetrics.searchMs.toFixed(0)}ms`);
+
+      if (perfMetrics.renderMs > 0) {
+        let renderStr = `Render: ${perfMetrics.renderMs.toFixed(0)}ms`;
+        if (perfMetrics.renderPercent > 0 && perfMetrics.renderPercent < 100) {
+          renderStr += ` (${perfMetrics.renderPercent}%)`;
+        }
+        metrics.push(renderStr);
+      }
+
+      if (perfMetrics.hooksMs > 0) metrics.push(`Hooks: ${perfMetrics.hooksMs.toFixed(0)}ms`);
+      if (perfMetrics.newItems > 0) metrics.push(`+${perfMetrics.newItems} new`);
+
+      const metricsLabel = metrics.length > 0 ? ` [${metrics.join(' | ')}]` : '';
+
+      const parts = [statusBaseMessage];
+      if (resultLabel) parts.push(resultLabel);
+
+      statusEl.textContent = parts.join(' | ') + metricsLabel;
     };
+
+    const setArchiveRenderProgress = (percent: number): void => {
+      (window as any).__PR_ARCHIVE_RENDER_PROGRESS__ = Math.max(0, Math.min(100, Math.round(percent)));
+    };
+    setArchiveRenderProgress(0);
 
     const setStatusBaseMessage = (msg: string, isError = false, isSyncing = false): void => {
       statusBaseMessage = msg;
@@ -784,6 +811,32 @@ export const initArchive = async (username: string): Promise<void> => {
       useWorker: shouldUseSearchWorker,
       workerClient
     });
+
+    // Controller to cancel background rendering when new query starts
+    let activeRenderController: AbortController | null = null;
+
+    // Observer for lazy post action button refresh
+    let postObserver: IntersectionObserver | null = null;
+    const initPostObserver = () => {
+      if (postObserver) postObserver.disconnect();
+      postObserver = new IntersectionObserver((entries) => {
+        const start = performance.now();
+        let refreshCount = 0;
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const el = entry.target as HTMLElement;
+            refreshPostActionButtons(el);
+            refreshCount++;
+            postObserver?.unobserve(el); // Only need to refresh once on scroll-in
+          }
+        });
+        if (refreshCount > 0) {
+          const duration = performance.now() - start;
+          console.log(`[Archive Observer] Refreshed ${refreshCount} posts in ${duration.toFixed(2)}ms`);
+        }
+      }, { rootMargin: '200px' }); // Refresh slightly before they enter viewport
+    };
+
     const urlState = parseArchiveUrlState();
     const isDebugExplainEnabled = (): boolean =>
       new URLSearchParams(window.location.search).get('debug') === '1';
@@ -1106,9 +1159,6 @@ export const initArchive = async (username: string): Promise<void> => {
       + (signals.authorHit ? 8 : 0)
       + (signals.replyToHit ? 6 : 0);
 
-    const escapeSelectorAttrValue = (value: string): string =>
-      value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-
     const clearDebugExplainAnnotations = (): void => {
       if (!feedEl) return;
       const existing = feedEl.querySelectorAll('.pr-debug-explain');
@@ -1152,25 +1202,38 @@ export const initArchive = async (username: string): Promise<void> => {
         return;
       }
 
-      for (const item of activeItems) {
-        const target = feedEl.querySelector(`[data-id="${escapeSelectorAttrValue(item._id)}"]`) as HTMLElement | null;
-        if (!target) continue;
-        appendExplain(target, activeDebugRelevanceSignalsById[item._id]);
-      }
+      const renderedTargets = feedEl.querySelectorAll('[data-id]');
+      const seenIds = new Set<string>();
+      renderedTargets.forEach((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        const id = node.dataset.id;
+        if (!id || seenIds.has(id)) return;
+        seenIds.add(id);
+        if (activeDebugRelevanceSignalsById[id]) {
+          appendExplain(node, activeDebugRelevanceSignalsById[id]);
+        }
+      });
+
     };
 
     const runPostRenderHooks = () => {
-      setupLinkPreviews(uiHost.getReaderState().comments);
+      const start = performance.now();
 
-      // Post-action buttons can be introduced by thread renders and index expand-in-place cards.
+      // 1. Delegated link previews (O(1) init)
+      setupLinkPreviewsDelegated(feedEl!, uiHost.getReaderState().comments);
+
+      // 2. Lazy post action button refresh via IntersectionObserver
+      // This avoids layout thrashing on 8k items at once
+      initPostObserver();
       const posts = feedEl!.querySelectorAll('.pr-post');
-      posts.forEach(p => {
-        const pid = p.getAttribute('data-id') || p.getAttribute('data-post-id');
-        if (pid) refreshPostActionButtons(pid);
-      });
+      posts.forEach(p => postObserver?.observe(p));
 
+      // 3. Highlight and Debug (Only run if active)
       applySearchHighlight();
       applyDebugExplainAnnotations();
+
+      perfMetrics.hooksMs = performance.now() - start;
+      renderTopStatusLine();
     };
 
     const syncAuthoredSearchIndex = (): void => {
@@ -1260,8 +1323,8 @@ export const initArchive = async (username: string): Promise<void> => {
         const retryBtn = document.createElement('button');
         retryBtn.className = 'pr-search-retry-btn';
         retryBtn.textContent = 'Run without time limit';
-        retryBtn.addEventListener('click', () => {
-          void refreshView(0);
+        retryBtn.addEventListener('click', async () => {
+          await refreshView(0);
         });
         searchStatusEl.appendChild(retryBtn);
       }
@@ -1321,12 +1384,18 @@ export const initArchive = async (username: string): Promise<void> => {
       updateSortOptions(hasContentQuery, currentUi.view);
       const sortMode = sortSelect.value as ArchiveSortBy;
       setSearchLoading(true);
+      document.body.style.cursor = 'wait';
+      perfMetrics.searchMs = 0;
+      perfMetrics.renderMs = 0;
+      perfMetrics.hooksMs = 0;
+      perfMetrics.renderPercent = 0;
 
       try {
         syncAuthoredSearchIndex();
         const contextItems = collectContextSearchItems();
         searchManager.setContextItems(contextItems);
         const scopeParam = useDedicatedScopeParam ? currentUi.scope : undefined;
+        const searchStart = performance.now();
         const result = await searchManager.runSearch({
           query: currentUi.query,
           scopeParam,
@@ -1335,6 +1404,7 @@ export const initArchive = async (username: string): Promise<void> => {
           debugExplain,
           ...(budgetMs !== undefined ? { budgetMs } : {})
         });
+        perfMetrics.searchMs = performance.now() - searchStart;
 
         if (requestId !== activeQueryRequestId) {
           return;
@@ -1370,27 +1440,73 @@ export const initArchive = async (username: string): Promise<void> => {
             pendingRenderCount = count;
             updateRenderLimit(count);
             // Render!
-            await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, renderOptions);
+            let hooksPrimed = false;
+            setArchiveRenderProgress(0);
+            await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, {
+              ...renderOptions,
+              onProgress: (percent) => {
+                setArchiveRenderProgress(percent);
+                if (!hooksPrimed && percent > 0) {
+                  hooksPrimed = true;
+                  runPostRenderHooks();
+                }
+              }
+            });
+            setArchiveRenderProgress(100);
             runPostRenderHooks();
           });
           return;
         }
 
         // 4. Render
-        // Only override render limit for large datasets where user explicitly chose a count
-        // For normal datasets, keep the default limit to enable pagination
+        // Abort any existing background rendering
+        if (activeRenderController) {
+          activeRenderController.abort();
+        }
+        activeRenderController = new AbortController();
+
+        // Only override render limit for large datasets where user explicitly chose a count.
+        // Default render limit stays uncapped unless a test/dev override is provided.
         if (pendingRenderCount !== null) {
           updateRenderLimit(pendingRenderCount);
         }
 
         // Use renderArchiveFeed directly with current activeItems (view) and host's readerState (data)
         // [WS3-FIX] Pass sortBy for thread view group-level sorting
-        await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, renderOptions);
+        const renderStart = performance.now();
+        perfMetrics.renderPercent = 0;
+        let hooksPrimed = false;
+        setArchiveRenderProgress(0);
+
+        await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, {
+          ...renderOptions,
+          abortSignal: activeRenderController.signal,
+          onProgress: (percent) => {
+            perfMetrics.renderPercent = percent;
+            perfMetrics.renderMs = performance.now() - renderStart;
+            setArchiveRenderProgress(percent);
+            renderTopStatusLine();
+            if (!hooksPrimed && percent > 0) {
+              hooksPrimed = true;
+              runPostRenderHooks();
+            }
+          }
+        });
+
+        if (activeRenderController.signal.aborted) {
+          return;
+        }
+
+        perfMetrics.renderMs = performance.now() - renderStart;
+        perfMetrics.renderPercent = 100;
+        setArchiveRenderProgress(100);
+        renderTopStatusLine();
 
         runPostRenderHooks();
       } finally {
         if (requestId === activeQueryRequestId) {
           setSearchLoading(false);
+          document.body.style.cursor = '';
         }
       }
     };
@@ -1446,7 +1562,7 @@ export const initArchive = async (username: string): Promise<void> => {
             <button id="render-all-btn" class="pr-button">Render All (${totalCount.toLocaleString()})</button>
           </div>
           <p style="font-size: 0.85em; color: var(--pr-text-tertiary); margin-top: 10px;">
-            💡 Tip: Use the "Load More" button to view additional items after initial render.
+            The selected count is your session render cap. Choose "Render All" to avoid truncation.
           </p>
         </div>
       `;
@@ -1470,8 +1586,8 @@ export const initArchive = async (username: string): Promise<void> => {
       if (searchDispatchTimer) {
         window.clearTimeout(searchDispatchTimer);
       }
-      searchDispatchTimer = window.setTimeout(() => {
-        void refreshView();
+      searchDispatchTimer = window.setTimeout(async () => {
+        await refreshView();
       }, SEARCH_DEBOUNCE_MS);
     };
 
@@ -1482,7 +1598,7 @@ export const initArchive = async (username: string): Promise<void> => {
       scheduleSearchRefresh();
     });
 
-    clearBtn?.addEventListener('click', () => {
+    clearBtn?.addEventListener('click', async () => {
       if (searchInput.value.length === 0) return;
       searchInput.value = '';
       updateClearButton();
@@ -1493,11 +1609,11 @@ export const initArchive = async (username: string): Promise<void> => {
       updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
       updateResetButton();
       writeCurrentToolbarUrlState('');
-      void refreshView();
+      await refreshView();
       searchInput.focus();
     });
 
-    searchHelpEl?.addEventListener('click', (event: Event) => {
+    searchHelpEl?.addEventListener('click', async (event: Event) => {
       const target = (event.target as HTMLElement).closest('.pr-search-example') as HTMLElement | null;
       if (!target) return;
       const query = target.dataset.query;
@@ -1510,17 +1626,17 @@ export const initArchive = async (username: string): Promise<void> => {
         window.clearTimeout(searchDispatchTimer);
         searchDispatchTimer = null;
       }
-      void refreshView();
+      await refreshView();
       searchInput.focus();
     });
 
-    searchInput?.addEventListener('keydown', (event: KeyboardEvent) => {
+    searchInput?.addEventListener('keydown', async (event: KeyboardEvent) => {
       if (event.key === 'Enter') {
         if (searchDispatchTimer) {
           window.clearTimeout(searchDispatchTimer);
           searchDispatchTimer = null;
         }
-        void refreshView();
+        await refreshView();
         return;
       }
 
@@ -1536,14 +1652,14 @@ export const initArchive = async (username: string): Promise<void> => {
           updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
           updateResetButton();
           writeCurrentToolbarUrlState('');
-          void refreshView();
+          await refreshView();
           return;
         }
         searchInput.blur();
       }
     });
 
-    facetsEl?.addEventListener('click', (event: Event) => {
+    facetsEl?.addEventListener('click', async (event: Event) => {
       const chip = (event.target as HTMLElement).closest('.pr-facet-chip') as HTMLButtonElement | null;
       if (!chip) return;
       const fragment = chip.dataset.fragment;
@@ -1568,7 +1684,7 @@ export const initArchive = async (username: string): Promise<void> => {
         window.clearTimeout(searchDispatchTimer);
         searchDispatchTimer = null;
       }
-      void refreshView();
+      await refreshView();
       searchInput.focus();
     });
 
@@ -1602,13 +1718,15 @@ export const initArchive = async (username: string): Promise<void> => {
       if (event.defaultPrevented) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
 
-      if (!isArchiveUiActive()) {
+      if (!searchInput.isConnected) {
         document.removeEventListener('keydown', handleArchiveGlobalKeydown);
         if (shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ === handleArchiveGlobalKeydown) {
           delete shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
         }
         return;
       }
+
+      if (!isArchiveUiActive()) return;
 
       if (event.key === '/' && !isInTextInput(event.target)) {
         event.preventDefault();
@@ -1619,7 +1737,7 @@ export const initArchive = async (username: string): Promise<void> => {
     shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ = handleArchiveGlobalKeydown;
     document.addEventListener('keydown', handleArchiveGlobalKeydown);
 
-    resetBtn?.addEventListener('click', () => {
+    resetBtn?.addEventListener('click', async () => {
       if (searchDispatchTimer) {
         window.clearTimeout(searchDispatchTimer);
         searchDispatchTimer = null;
@@ -1643,10 +1761,10 @@ export const initArchive = async (username: string): Promise<void> => {
         scope: DEFAULT_SCOPE,
         sort: DEFAULT_SORT
       });
-      void refreshView();
+      await refreshView();
     });
 
-    scopeContainer?.addEventListener('click', (event: Event) => {
+    scopeContainer?.addEventListener('click', async (event: Event) => {
       const button = (event.target as HTMLElement).closest('.pr-seg-btn') as HTMLButtonElement | null;
       if (!button) return;
       const nextValue = button.dataset.value as ArchiveSearchScope | undefined;
@@ -1654,10 +1772,10 @@ export const initArchive = async (username: string): Promise<void> => {
       setScopeValue(nextValue);
       useDedicatedScopeParam = true;
       updateResetButton();
-      void refreshView();
+      await refreshView();
     });
 
-    scopeContainer?.addEventListener('keydown', (event: KeyboardEvent) => {
+    scopeContainer?.addEventListener('keydown', async (event: KeyboardEvent) => {
       const currentButton = (event.target as HTMLElement).closest('.pr-seg-btn') as HTMLButtonElement | null;
       if (!currentButton) return;
 
@@ -1666,8 +1784,8 @@ export const initArchive = async (username: string): Promise<void> => {
       if (currentIndex < 0 || buttons.length === 0) return;
 
       let nextIndex: number | null = null;
-      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % buttons.length;
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+      if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % buttons.length;
+      if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
       if (event.key === 'Home') nextIndex = 0;
       if (event.key === 'End') nextIndex = buttons.length - 1;
       if (nextIndex === null) return;
@@ -1681,43 +1799,43 @@ export const initArchive = async (username: string): Promise<void> => {
       setScopeValue(nextValue);
       useDedicatedScopeParam = true;
       updateResetButton();
-      void refreshView();
+      await refreshView();
     });
 
-    sortSelect?.addEventListener('change', () => {
+    sortSelect?.addEventListener('change', async () => {
       state.sortBy = sortSelect.value as ArchiveSortBy;
       updateResetButton();
-      void refreshView();
+      await refreshView();
     });
 
-    const scheduleViewRefresh = (source: 'pointer' | 'keyboard') => {
+    const scheduleViewRefresh = async (source: 'pointer' | 'keyboard') => {
       if (viewModeRefreshTimer) {
         window.clearTimeout(viewModeRefreshTimer);
         viewModeRefreshTimer = null;
       }
 
       if (source === 'pointer') {
-        void refreshView();
+        await refreshView();
         return;
       }
 
-      viewModeRefreshTimer = window.setTimeout(() => {
+      viewModeRefreshTimer = window.setTimeout(async () => {
         viewModeRefreshTimer = null;
-        void refreshView();
+        await refreshView();
       }, VIEW_MODE_KEYBOARD_DEBOUNCE_MS);
     };
 
-    const applyViewModeChange = (nextView: ArchiveViewMode, source: 'pointer' | 'keyboard') => {
+    const applyViewModeChange = async (nextView: ArchiveViewMode, source: 'pointer' | 'keyboard') => {
       if (nextView === getViewValue() && state.viewMode === nextView) return;
 
       state.viewMode = nextView;
       setViewValue(nextView);
       updateSortOptions(deriveHasContentQuery(searchInput.value), nextView);
       updateResetButton();
-      scheduleViewRefresh(source);
+      await scheduleViewRefresh(source);
     };
 
-    const activateViewTab = (index: number, source: 'pointer' | 'keyboard' = 'keyboard') => {
+    const activateViewTab = async (index: number, source: 'pointer' | 'keyboard' = 'keyboard') => {
       const tabs = getViewTabs();
       if (tabs.length === 0) return;
 
@@ -1726,18 +1844,18 @@ export const initArchive = async (username: string): Promise<void> => {
       const nextView = targetTab.dataset.value as ArchiveViewMode | undefined;
       if (!nextView) return;
       targetTab.focus();
-      applyViewModeChange(nextView, source);
+      await applyViewModeChange(nextView, source);
     };
 
-    viewContainer?.addEventListener('click', (event: Event) => {
+    viewContainer?.addEventListener('click', async (event: Event) => {
       const tab = (event.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
       if (!tab) return;
       const nextView = tab.dataset.value as ArchiveViewMode | undefined;
       if (!nextView) return;
-      applyViewModeChange(nextView, 'pointer');
+      await applyViewModeChange(nextView, 'pointer');
     });
 
-    viewContainer?.addEventListener('keydown', (event: KeyboardEvent) => {
+    viewContainer?.addEventListener('keydown', async (event: KeyboardEvent) => {
       const currentTab = (event.target as HTMLElement).closest('.pr-view-tab') as HTMLButtonElement | null;
       if (!currentTab) return;
 
@@ -1747,39 +1865,29 @@ export const initArchive = async (username: string): Promise<void> => {
 
       switch (event.key) {
         case 'ArrowRight':
-        case 'ArrowDown':
           event.preventDefault();
-          activateViewTab(currentIndex + 1, 'keyboard');
+          await activateViewTab(currentIndex + 1, 'keyboard');
           break;
         case 'ArrowLeft':
-        case 'ArrowUp':
           event.preventDefault();
-          activateViewTab(currentIndex - 1, 'keyboard');
+          await activateViewTab(currentIndex - 1, 'keyboard');
           break;
         case 'Home':
           event.preventDefault();
-          activateViewTab(0, 'keyboard');
+          await activateViewTab(0, 'keyboard');
           break;
         case 'End':
           event.preventDefault();
-          activateViewTab(tabs.length - 1, 'keyboard');
+          await activateViewTab(tabs.length - 1, 'keyboard');
           break;
         case 'Enter':
         case ' ':
           event.preventDefault();
-          activateViewTab(currentIndex, 'keyboard');
+          await activateViewTab(currentIndex, 'keyboard');
           break;
         default:
           break;
       }
-    });
-
-    // Setup Load More
-    loadMoreBtn?.querySelector('button')?.addEventListener('click', async () => {
-      incrementRenderLimit(PAGE_SIZE);
-      // [P2-FIX] Pass sortBy to maintain thread sort mode during pagination
-      await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, getCurrentRenderOptions());
-      runPostRenderHooks();
     });
 
     // Index view click-to-expand handler
@@ -1917,7 +2025,10 @@ export const initArchive = async (username: string): Promise<void> => {
         pendingRenderCount = null;
         resetRenderLimit();
       }
+      const dbStart = performance.now();
       const cached = await loadArchiveData(username);
+      perfMetrics.dbLoadMs = performance.now() - dbStart;
+      renderTopStatusLine();
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
         setStatusBaseMessage(msg, isError, isSyncing);
@@ -1929,24 +2040,50 @@ export const initArchive = async (username: string): Promise<void> => {
         syncErrorState.abortController = new AbortController();
 
         try {
+          // Re-load fresh data from DB to get updated watermarks from any previous partial success
+          const [currentCached, cachedContext] = await Promise.all([
+            loadArchiveData(username),
+            loadAllContextualItems(username).catch(e => {
+              Logger.warn('Failed to load contextual cache during reload', e);
+              return { posts: [], comments: [] };
+            })
+          ]);
+
+          // Update in-memory state to include items saved by previous failed attempts
+          state.items = currentCached.items;
+          persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+          contextSearchItemsCache = null;
+
+          state.itemById.clear();
+          state.items.forEach((item: any) => state.itemById.set(item._id, item));
+
           if (attemptNumber > 1) {
             setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
           } else if (forceFull) {
             setStatus(`Starting full resync for ${username}`, false, true);
-          } else if (cached.items.length > 0) {
-            setStatus(`Loaded ${cached.items.length} items. Checking for updates`, false, true);
+          } else if (currentCached.items.length > 0) {
+            setStatus(`Loaded ${currentCached.items.length} items. Checking for updates`, false, true);
           } else {
             setStatus(`No local data. Fetching full history for ${username}`, false, true);
           }
 
-          const lastSyncDate = forceFull ? null : cached.lastSyncDate;
+          const watermarks = {
+            lastSyncDate: forceFull ? null : currentCached.lastSyncDate,
+            lastSyncDate_comments: forceFull ? null : currentCached.lastSyncDate_comments,
+            lastSyncDate_posts: forceFull ? null : currentCached.lastSyncDate_posts
+          };
+          const netStart = performance.now();
+          const initialCount = state.items.length;
           await syncArchive(
             username,
             state,
-            lastSyncDate,
+            watermarks,
             (msg) => setStatus(msg, false, true),
             syncErrorState.abortController.signal
           );
+          perfMetrics.networkFetchMs = performance.now() - netStart;
+          perfMetrics.newItems = state.items.length - initialCount;
+          renderTopStatusLine();
 
           // Success - clear error state
           syncErrorState.isRetrying = false;
@@ -1956,8 +2093,11 @@ export const initArchive = async (username: string): Promise<void> => {
           // Clear syncing state
           setStatus(`Sync complete. ${state.items.length} total items.`, false, false);
 
-          // Update view with new data
-          updateItemMap(state.items);
+          // Only trigger a rerender if we actually found new data.
+          // refreshView (called via updateItemMap) will abort any in-progress "cached only" render.
+          if (perfMetrics.newItems > 0) {
+            updateItemMap(state.items);
+          }
 
           // If this attempt completed and no retry callbacks are still pending,
           // release the sync lock even when this call originated from a scheduled/manual retry.
@@ -1976,7 +2116,7 @@ export const initArchive = async (username: string): Promise<void> => {
           // Check if aborted
           if (syncErrorState.abortController?.signal.aborted) {
             Logger.info('Sync was cancelled by user');
-            setStatus(`Sync cancelled. Showing cached data (${cached.items.length} items).`, false, false);
+            setStatus(`Sync cancelled. Showing cached data (${state.items.length} items).`, false, false);
             pendingRetryCount = 0;
             isSyncInProgress = false;
             return;
@@ -2057,37 +2197,57 @@ export const initArchive = async (username: string): Promise<void> => {
       }
     });
 
-    // 1. Try loading from IndexedDB
-    const cached = await loadArchiveData(username);
+    // 1. Try loading from IndexedDB (Main + Context)
+    const [cached, cachedContext] = await Promise.all([
+      loadArchiveData(username),
+      loadAllContextualItems(username).catch(e => {
+        Logger.warn('Failed to load contextual cache', e);
+        return { posts: [], comments: [] };
+      })
+    ]);
+
     state.items = cached.items;
+    persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+    contextSearchItemsCache = null;
 
-    // Initial sync of host state
-    updateItemMap(state.items);
-
-    try {
-      const cachedContext = await loadAllContextualItems(username);
-      persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
-      contextSearchItemsCache = null;
-      if (persistedContextItems.length > 0 && (getScopeValue() === 'all' || searchInput.value.trim().length > 0)) {
-        await refreshView();
-      }
-    } catch (e) {
-      Logger.warn('Failed to load contextual cache for archive search scope:all', e);
-      persistedContextItems = [];
-      contextSearchItemsCache = null;
-    }
-
-    activeItems = state.items;
+    // We no longer trigger an initial render from cache here.
+    // Instead, we wait for sync to finish (or fail) and then render once.
+    // updateItemMap(state.items);
 
     if (cached.items.length > 0) {
-      setStatusBaseMessage(`Loaded ${cached.items.length} items from cache.`, false, false);
+      setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
     } else {
       dashboardEl!.style.display = 'block';
       setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
     }
 
     // 2. Perform Sync with error handling
-    await performSync();
+    // Start sync but don't wait indefinitely if it's slow
+    const syncPromise = performSync();
+    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('timeout'), 2000));
+
+    const raceResult = await Promise.race([syncPromise, timeoutPromise]);
+
+    if (raceResult === 'timeout') {
+      console.log('[Archive Init] Sync taking > 2s, rendering cache first.');
+      if (cached.items.length > 0) {
+        setStatusBaseMessage(`Sync in progress... Showing cached data.`, false, true);
+        updateItemMap(state.items);
+      }
+    }
+
+    // Wait for the sync to eventually finish (it will call updateItemMap itself if new items found)
+    await syncPromise;
+
+    // 3. Final render check
+    // If we haven't rendered yet (e.g. sync was fast but found no new items), do it now.
+    const isRendered = !!feedEl!.querySelector('.pr-archive-item, .pr-archive-index-item, .pr-post');
+    if (!isRendered) {
+      console.log(`[Archive Init] Final render check: currentItems=${state.items.length}, newItems=${perfMetrics.newItems}`);
+      updateItemMap(state.items);
+    }
+
+    await refreshView();
 
     dashboardEl!.style.display = 'none';
     signalReady();
@@ -2111,7 +2271,11 @@ export const initArchive = async (username: string): Promise<void> => {
 const syncArchive = async (
   username: string,
   state: any,
-  lastSyncDate: string | null,
+  watermarks: {
+    lastSyncDate: string | null;
+    lastSyncDate_comments: string | null;
+    lastSyncDate_posts: string | null;
+  },
   onStatus: (msg: string) => void,
   abortSignal?: AbortSignal
 ) => {
@@ -2135,14 +2299,24 @@ const syncArchive = async (
     throw new Error('Sync aborted');
   }
 
-  const minDate = lastSyncDate ? new Date(lastSyncDate) : undefined;
-  if (minDate) {
-    onStatus(`Fetching items since ${minDate.toLocaleDateString()}...`);
+  // Resumable independent watermarks
+  const afterDateComments = watermarks.lastSyncDate_comments ? new Date(watermarks.lastSyncDate_comments) : undefined;
+  const afterDatePosts = watermarks.lastSyncDate_posts ? new Date(watermarks.lastSyncDate_posts) : undefined;
+
+  if (afterDateComments || afterDatePosts) {
+    const cStr = afterDateComments ? afterDateComments.toLocaleDateString() : 'start';
+    const pStr = afterDatePosts ? afterDatePosts.toLocaleDateString() : 'start';
+    onStatus(`Resuming: Comments from ${cStr}, Posts from ${pStr}...`);
   }
 
   const comments = await fetchUserComments(userId, (count) => {
     onStatus(`Fetching comments: ${count} new...`);
-  }, minDate);
+  }, afterDateComments, async (batch) => {
+    // Incremental save for comments
+    const newestInBatch = batch[batch.length - 1].postedAt;
+    await saveArchiveData(username, batch, { lastSyncDate_comments: newestInBatch });
+    console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch}`);
+  }, username);
 
   // Check for abort after fetching comments
   if (abortSignal?.aborted) {
@@ -2151,16 +2325,21 @@ const syncArchive = async (
 
   const posts = await fetchUserPosts(userId, (count) => {
     onStatus(`Fetching posts: ${count} new...`);
-  }, minDate);
+  }, afterDatePosts, async (batch) => {
+    // Incremental save for posts
+    const newestInBatch = batch[batch.length - 1].postedAt;
+    await saveArchiveData(username, batch, { lastSyncDate_posts: newestInBatch });
+    console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch}`);
+  });
 
-  // Check for abort after fetching comments
+  // Check for abort after fetching posts
   if (abortSignal?.aborted) {
     throw new Error('Sync aborted');
   }
 
   const newItems = [...posts, ...comments];
 
-  // Check for abort before expensive merge/save operations
+  // Check for abort before final updates
   if (abortSignal?.aborted) {
     throw new Error('Sync aborted');
   }
@@ -2177,12 +2356,21 @@ const syncArchive = async (
     // Re-sort (Default to date for the background state)
     state.items.sort((a: any, b: any) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
 
-    await saveArchiveData(username, uniqueNewItems, syncStartTime);
+    // Final watermark update to sync start time to cover any items created during sync
+    await saveArchiveData(username, [], {
+      lastSyncDate: syncStartTime,
+      lastSyncDate_comments: syncStartTime,
+      lastSyncDate_posts: syncStartTime
+    });
 
     onStatus(`Sync complete. ${state.items.length} total items.`);
   } else {
-    const statusMsg = lastSyncDate ? `Up to date. (${state.items.length} items)` : `No history found for ${username}.`;
+    const statusMsg = watermarks.lastSyncDate ? `Up to date. (${state.items.length} items)` : `No history found for ${username}.`;
     onStatus(statusMsg);
-    await saveArchiveData(username, [], syncStartTime);
+    await saveArchiveData(username, [], {
+      lastSyncDate: syncStartTime,
+      lastSyncDate_comments: syncStartTime,
+      lastSyncDate_posts: syncStartTime
+    });
   }
 };

@@ -15,7 +15,7 @@ import { Logger } from '../utils/logger';
  */
 export class ReadTracker {
     private static readonly UNREAD_ITEM_SELECTOR = '.pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)';
-    private static readonly BOTTOM_MARGIN_PX = 50;
+    private static readonly BOTTOM_MARGIN_PX = 150;
 
     private scrollMarkDelay: number;
     private commentsDataGetter: () => { postedAt: string, _id: string }[];
@@ -78,18 +78,32 @@ export class ReadTracker {
     private processScroll() {
         const items = document.querySelectorAll<HTMLElement>(ReadTracker.UNREAD_ITEM_SELECTOR);
         const readThreshold = 0;
-        const docHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
+        const docHeight = Math.max(
+            document.body.scrollHeight,
+            document.documentElement.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.offsetHeight
+        );
         const viewportHeight = window.innerHeight;
         const isAtBottom = viewportHeight + window.scrollY >= docHeight - ReadTracker.BOTTOM_MARGIN_PX;
         const unreadCountEl = document.getElementById('pr-unread-count');
 
         Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
 
+        // [PR-FIX] Limit checks to elements near the viewport to avoid huge layouts/loops
+        // If we have 10k items, checking them all is expensive even off-screen.
+        const viewportMargin = 2000; // Only check items within 2000px of viewport
+
         for (const el of items) {
+            const rect = el.getBoundingClientRect();
+            
+            // Skip expensive visibility/marking logic for items far away from viewport
+            if (rect.top > viewportHeight + viewportMargin || rect.bottom < -viewportMargin) {
+                continue;
+            }
+
             const id = el.getAttribute('data-id');
             if (!id) continue;
-
-            const rect = el.getBoundingClientRect();
 
             // For posts and comments, we only care if the BODY is scrolled past, not the children/comments below it.
             let checkRect = rect;
@@ -138,13 +152,6 @@ export class ReadTracker {
                                 ? Math.max(0, parsedCount - 1)
                                 : document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
                             liveUnreadCountEl.textContent = newCount.toString();
-
-                            // If we just hit 0 unread while at bottom, trigger server check
-                            const liveDocHeight = Math.max(document.body.offsetHeight, document.documentElement.offsetHeight);
-                            const isNowAtBottom = window.innerHeight + window.scrollY >= liveDocHeight - 100;
-                            if (newCount === 0 && isNowAtBottom) {
-                                this.checkInitialState();
-                            }
                         }
                     }, this.scrollMarkDelay);
                 }

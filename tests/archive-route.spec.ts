@@ -1,44 +1,46 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
 import {
-    expectArchiveScopeSelected,
-    expectArchiveViewSelected,
-    selectArchiveScope,
-    selectArchiveView
+  expectArchiveScopeSelected,
+  expectArchiveViewSelected,
+  selectArchiveScope,
+  selectArchiveView,
+  waitForArchiveRenderComplete
 } from './helpers/archiveControls';
 
 test.describe('Power Reader Archive Route', () => {
-    let scriptContent: string;
+  let scriptContent: string;
 
-    test.beforeAll(() => {
-        scriptContent = getScriptContent();
+  test.beforeAll(() => {
+    scriptContent = getScriptContent();
+  });
+
+  test('falls back to main reader when archive view missing username [PR-UARCH-02]', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      currentUser: { _id: 'u-test', username: 'TestUser', slug: 'test-user' }
     });
 
-    test('falls back to main reader when archive view missing username [PR-UARCH-02]', async ({ page }) => {
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            currentUser: { _id: 'u-test', username: 'TestUser', slug: 'test-user' }
-        });
+    // Navigate to archive view WITHOUT username parameter
+    await page.goto('https://www.lesswrong.com/reader?view=archive', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        // Navigate to archive view WITHOUT username parameter
-        await page.goto('https://www.lesswrong.com/reader?view=archive', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    // Should NOT show archive header (should be main reader)
+    await expect(page.locator('text=User Archive:')).toHaveCount(0);
 
-        // Should NOT show archive header (should be main reader)
-        await expect(page.locator('text=User Archive:')).toHaveCount(0);
+    // Should show main reader content instead
+    await expect(page.locator('#power-reader-root')).toBeVisible();
+    await expect(page.locator('.pr-header')).toContainText('Power Reader');
+  });
 
-        // Should show main reader content instead
-        await expect(page.locator('#power-reader-root')).toBeVisible();
-        await expect(page.locator('.pr-header')).toContainText('Power Reader');
-    });
-
-    test('[PR-UARCH-01] supports sorting and index view', async ({ page }) => {
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+  test('[PR-UARCH-01] supports sorting and index view', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 const userId = 'u-wei-dai';
                 const userObj = { _id: userId, username: 'Wei_Dai', displayName: 'Wei Dai', slug: 'wei-dai', karma: 100 };
 
@@ -86,31 +88,32 @@ test.describe('Power Reader Archive Route', () => {
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Verify Default Sort (Date Newest)
-        const firstItemTitle = page.locator('.pr-item h2').first();
-        await expect(firstItemTitle).toHaveText('New Low Score Post');
-
-        // Test View Mode Switching (To Index)
-        await selectArchiveView(page, 'index');
-        await expect(page.locator('.pr-archive-index-item').first()).toBeVisible();
-        await expect(page.locator('.pr-archive-index-item')).toHaveCount(2);
-
-        // Test Sorting (To Karma High-Low)
-        await page.locator('#archive-sort').selectOption('score');
-        await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
     });
 
-    test('[PR-UARCH-41] archive search worker is enabled by default', async ({ page }) => {
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onInit: `
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    // Verify Default Sort (Date Newest)
+    const firstItemTitle = page.locator('.pr-item h2').first();
+    await expect(firstItemTitle).toHaveText('New Low Score Post');
+
+    // Test View Mode Switching (To Index)
+    await selectArchiveView(page, 'index');
+    await expect(page.locator('.pr-archive-index-item').first()).toBeVisible();
+    await expect(page.locator('.pr-archive-index-item')).toHaveCount(2);
+
+    // Test Sorting (To Karma High-Low)
+    await page.locator('#archive-sort').selectOption('score');
+    await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
+  });
+
+  test('[PR-UARCH-41] archive search worker is enabled by default', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
 const win = window;
 win.__TEST_WORKER_CTOR_COUNT__ = 0;
 win.__TEST_WORKER_POST_COUNT__ = 0;
@@ -126,7 +129,7 @@ win.Worker = class WorkerSpy extends OriginalWorker {
   }
 };
 `,
-            onGraphQL: `
+      onGraphQL: `
 const userId = 'u-worker-default';
 const userObj = { _id: userId, username: 'WorkerDefault_User', displayName: 'Worker Default User', slug: 'worker-default-user', karma: 100 };
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
@@ -157,21 +160,22 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerDefault_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0)).toBeGreaterThan(0);
-        await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0)).toBeGreaterThan(0);
     });
 
-    test('[PR-UARCH-41] archive search worker can be disabled via global opt-out', async ({ page }) => {
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onInit: `
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerDefault_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0)).toBeGreaterThan(0);
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0)).toBeGreaterThan(0);
+  });
+
+  test('[PR-UARCH-41] archive search worker can be disabled via global opt-out', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
 const win = window;
 win.__PR_ARCHIVE_SEARCH_USE_WORKER = false;
 win.__TEST_WORKER_CTOR_COUNT__ = 0;
@@ -188,7 +192,7 @@ win.Worker = class WorkerSpy extends OriginalWorker {
   }
 };
 `,
-            onGraphQL: `
+      onGraphQL: `
 const userId = 'u-worker-off';
 const userObj = { _id: userId, username: 'WorkerOff_User', displayName: 'Worker Off User', slug: 'worker-off-user', karma: 100 };
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
@@ -219,23 +223,24 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerOff_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const workerCtorCount = await page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0);
-        const workerPostCount = await page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0);
-        expect(workerCtorCount).toBe(0);
-        expect(workerPostCount).toBe(0);
     });
 
-    test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerOff_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    const workerCtorCount = await page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0);
+    const workerPostCount = await page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0);
+    expect(workerCtorCount).toBe(0);
+    expect(workerPostCount).toBe(0);
+  });
+
+  test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 const userId = 'u-wei-dai';
 const userObj = { _id: userId, username: 'Wei_Dai', displayName: 'Wei Dai', slug: 'wei-dai', karma: 100 };
 const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', slug: 'other-user', karma: 50 };
@@ -289,46 +294,138 @@ if (query.includes('GetCommentsByIds')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Verify Thread Structure - uses Power Reader's standard post/comment classes
-        const rootPost = page.locator('.pr-post');
-        await expect(rootPost).toBeVisible();
-        await expect(rootPost).toContainText('Context Post');
-
-        // Thread view now renders comments using standard Power Reader comment structure
-        const userComment = page.locator('.pr-comment[data-id="c1"]');
-        await expect(userComment).toBeVisible();
-        await expect(userComment).toContainText('My Reply');
-
-        // [WS2-FIX] Assert parent context comment is rendered
-        // The parent comment should be visible as context in the same post group
-        const parentComment = page.locator('.pr-comment[data-id="c-parent"]');
-        await expect(parentComment).toBeVisible();
-        await expect(parentComment).toContainText('Parent Comment Body');
-
-        // Verify parent and child are in the same post group
-        const postGroup = page.locator('.pr-post');
-        await expect(postGroup).toContainText('Parent Comment Body');
-        await expect(postGroup).toContainText('My Reply');
     });
 
-    test('[PR-UARCH-20] thread view supports group-level date sorting', async ({ page }) => {
-        const userId = 'u-thread-sort-user';
-        const userObj = { _id: userId, username: 'ThreadSort_User', displayName: 'Thread Sort User', slug: 'thread-sort-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Verify Thread Structure - uses Power Reader's standard post/comment classes
+    const rootPost = page.locator('.pr-post');
+    await expect(rootPost).toBeVisible();
+    await expect(rootPost).toContainText('Context Post');
+
+    // Thread view now renders comments using standard Power Reader comment structure
+    const userComment = page.locator('.pr-comment[data-id="c1"]');
+    await expect(userComment).toBeVisible();
+    await expect(userComment).toContainText('My Reply');
+
+    // [WS2-FIX] Assert parent context comment is rendered
+    // The parent comment should be visible as context in the same post group
+    const parentComment = page.locator('.pr-comment[data-id="c-parent"]');
+    await expect(parentComment).toBeVisible();
+    await expect(parentComment).toContainText('Parent Comment Body');
+
+    // Verify parent and child are in the same post group
+    const postGroup = page.locator('.pr-post');
+    await expect(postGroup).toContainText('Parent Comment Body');
+    await expect(postGroup).toContainText('My Reply');
+  });
+
+  test('[PR-UARCH-47] archive comment loading extracts and caches immediate parents', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
+const userId = 'u-wei-dai';
+const userObj = { _id: userId, username: 'Wei_Dai', displayName: 'Wei Dai', slug: 'wei-dai', karma: 100 };
+const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', slug: 'other-user', karma: 50 };
+
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: userObj } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  // [PR-UARCH-47] Verify the query actually requests the parent body
+  if (query.includes('parentComment') && query.includes('htmlBody')) {
+    window.__GET_USER_COMMENTS_REQUESTED_BODY = true;
+  }
+  return {
+    data: {
+      comments: {
+        results: [
+          {
+            _id: 'c1',
+            postedAt: '2025-01-10T12:00:00Z',
+            baseScore: 5,
+            htmlBody: '<p>My Reply</p>',
+            user: userObj,
+            post: { _id: 'p1', title: 'Context Post', pageUrl: '...', user: otherUser },
+            parentComment: {
+              _id: 'c-parent',
+              postedAt: '2025-01-09T12:00:00Z',
+              htmlBody: '<p>Eagerly Loaded Parent Body</p>',
+              user: otherUser,
+              parentComment: null
+            },
+            postId: 'p1',
+            parentCommentId: 'c-parent'
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetCommentsByIds')) {
+  window.__GET_COMMENTS_BY_IDS_CALLED = true;
+  return {
+    data: {
+      comments: {
+        results: []
+      }
+    }
+  };
+}
+return { data: {} };
+`
+    });
+
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    // Verify that the initial query requested the parent body
+    const queryRequestedBody = await page.evaluate(() => window.__GET_USER_COMMENTS_REQUESTED_BODY === true);
+    expect(queryRequestedBody).toBe(true);
+
+    // Ensure flag is reset just in case
+    await page.evaluate(() => { window.__GET_COMMENTS_BY_IDS_CALLED = false; });
+
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Verify the parent comment is rendered with the eagerly loaded body
+    const parentComment = page.locator('.pr-comment[data-id="c-parent"]');
+    await expect(parentComment).toBeVisible();
+    await expect(parentComment).toContainText('Eagerly Loaded Parent Body');
+
+    // Card view should also use the eagerly loaded parent body, not a stub placeholder.
+    await selectArchiveView(page, 'card');
+    const cardParentComment = page.locator('.pr-comment[data-id="c-parent"]');
+    await expect(cardParentComment).toContainText('Eagerly Loaded Parent Body');
+    await expect(cardParentComment).not.toHaveClass(/pr-context-placeholder/);
+
+    // Verify that GetCommentsByIds was NOT called because it was cached
+    const wasCalled = await page.evaluate(() => window.__GET_COMMENTS_BY_IDS_CALLED === true);
+    expect(wasCalled).toBe(false);
+  });
+
+  test('[PR-UARCH-20] thread view supports group-level date sorting', async ({ page }) => {
+    const userId = 'u-thread-sort-user';
+    const userObj = { _id: userId, username: 'ThreadSort_User', displayName: 'Thread Sort User', slug: 'thread-sort-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -369,43 +466,44 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ThreadSort_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Verify both posts are rendered
-        await expect(page.locator('.pr-post')).toHaveCount(2);
-
-        // Default date sort (newest first) - Post 1 should come before Post 2
-        const postTitles = page.locator('.pr-post-header h2');
-        await expect(postTitles.nth(0)).toContainText('Newer Post');
-        await expect(postTitles.nth(1)).toContainText('Older Post');
-
-        // Change to date-asc (oldest first)
-        await page.locator('#archive-sort').selectOption('date-asc');
-
-        // Wait for rerender and verify Post 2 now comes before Post 1
-        await expect(async () => {
-            const titles = await postTitles.allTextContents();
-            expect(titles[0]).toContain('Older Post');
-            expect(titles[1]).toContain('Newer Post');
-        }).toPass({ timeout: 5000 });
     });
 
-    test('[PR-UARCH-21] thread view supports group-level karma sorting', async ({ page }) => {
-        const userId = 'u-karma-sort-user';
-        const userObj = { _id: userId, username: 'KarmaSort_User', displayName: 'Karma Sort User', slug: 'karma-sort-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ThreadSort_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Verify both posts are rendered
+    await expect(page.locator('.pr-post')).toHaveCount(2);
+
+    // Default date sort (newest first) - Post 1 should come before Post 2
+    const postTitles = page.locator('.pr-post-header h2');
+    await expect(postTitles.nth(0)).toContainText('Newer Post');
+    await expect(postTitles.nth(1)).toContainText('Older Post');
+
+    // Change to date-asc (oldest first)
+    await page.locator('#archive-sort').selectOption('date-asc');
+
+    // Wait for rerender and verify Post 2 now comes before Post 1
+    await expect(async () => {
+      const titles = await postTitles.allTextContents();
+      expect(titles[0]).toContain('Older Post');
+      expect(titles[1]).toContain('Newer Post');
+    }).toPass({ timeout: 5000 });
+  });
+
+  test('[PR-UARCH-21] thread view supports group-level karma sorting', async ({ page }) => {
+    const userId = 'u-karma-sort-user';
+    const userObj = { _id: userId, username: 'KarmaSort_User', displayName: 'Karma Sort User', slug: 'karma-sort-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -446,45 +544,46 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=KarmaSort_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Verify both posts are rendered
-        await expect(page.locator('.pr-post')).toHaveCount(2);
-
-        // Change to karma sort (high to low) - High Karma Post should come first
-        await page.locator('#archive-sort').selectOption('score');
-
-        await expect(async () => {
-            const titles = await page.locator('.pr-post-header h2').allTextContents();
-            expect(titles[0]).toContain('High Karma Post');
-            expect(titles[1]).toContain('Low Karma Post');
-        }).toPass({ timeout: 5000 });
-
-        // Change to karma-asc (low to high) - Low Karma Post should come first
-        await page.locator('#archive-sort').selectOption('score-asc');
-
-        await expect(async () => {
-            const titles = await page.locator('.pr-post-header h2').allTextContents();
-            expect(titles[0]).toContain('Low Karma Post');
-            expect(titles[1]).toContain('High Karma Post');
-        }).toPass({ timeout: 5000 });
     });
 
-    test('search supports explicit regex literal filtering [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-search-user';
-        const userObj = { _id: userId, username: 'Search_User', displayName: 'Search User', slug: 'search-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=KarmaSort_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Verify both posts are rendered
+    await expect(page.locator('.pr-post')).toHaveCount(2);
+
+    // Change to karma sort (high to low) - High Karma Post should come first
+    await page.locator('#archive-sort').selectOption('score');
+
+    await expect(async () => {
+      const titles = await page.locator('.pr-post-header h2').allTextContents();
+      expect(titles[0]).toContain('High Karma Post');
+      expect(titles[1]).toContain('Low Karma Post');
+    }).toPass({ timeout: 5000 });
+
+    // Change to karma-asc (low to high) - Low Karma Post should come first
+    await page.locator('#archive-sort').selectOption('score-asc');
+
+    await expect(async () => {
+      const titles = await page.locator('.pr-post-header h2').allTextContents();
+      expect(titles[0]).toContain('Low Karma Post');
+      expect(titles[1]).toContain('High Karma Post');
+    }).toPass({ timeout: 5000 });
+  });
+
+  test('search supports explicit regex literal filtering [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-search-user';
+    const userObj = { _id: userId, username: 'Search_User', displayName: 'Search User', slug: 'search-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -529,45 +628,46 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Search_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Both items should be visible initially
-        await expect(page.locator('.pr-item')).toHaveCount(2);
-
-        // Regex literals are explicit in structured mode.
-        const searchInput = page.locator('#archive-search');
-        await searchInput.fill('/alpha|beta/i');
-
-        // Wait for filter to apply using polling
-        await expect(async () => {
-            const count = await page.locator('.pr-item').count();
-            expect(count).toBe(2);
-        }).toPass({ timeout: 5000 });
-
-        // Match only the alpha post.
-        await searchInput.fill('/^.*alpha.*$/i');
-
-        // Wait for filter to apply
-        await expect(async () => {
-            const count = await page.locator('.pr-item').count();
-            expect(count).toBe(1);
-        }).toPass({ timeout: 5000 });
-
-        await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
     });
 
-    test('search syntax help expands and example clicks execute queries [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-help-user';
-        const userObj = { _id: userId, username: 'Help_User', displayName: 'Help User', slug: 'help-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Search_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Both items should be visible initially
+    await expect(page.locator('.pr-item')).toHaveCount(2);
+
+    // Regex literals are explicit in structured mode.
+    const searchInput = page.locator('#archive-search');
+    await searchInput.fill('/alpha|beta/i');
+
+    // Wait for filter to apply using polling
+    await expect(async () => {
+      const count = await page.locator('.pr-item').count();
+      expect(count).toBe(2);
+    }).toPass({ timeout: 5000 });
+
+    // Match only the alpha post.
+    await searchInput.fill('/^.*alpha.*$/i');
+
+    // Wait for filter to apply
+    await expect(async () => {
+      const count = await page.locator('.pr-item').count();
+      expect(count).toBe(1);
+    }).toPass({ timeout: 5000 });
+
+    await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
+  });
+
+  test('search syntax help expands and example clicks execute queries [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-help-user';
+    const userObj = { _id: userId, username: 'Help_User', displayName: 'Help User', slug: 'help-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -612,38 +712,39 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Help_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const helpDetails = page.locator('#archive-search-help');
-        await expect(helpDetails).toBeVisible();
-        await expect(helpDetails).not.toHaveAttribute('open', '');
-
-        await page.locator('#archive-search-help > summary').click();
-        await expect(helpDetails).toHaveAttribute('open', '');
-
-        await page.locator('.pr-search-example[data-query=\'"alignment tax" -type:comment\']').click();
-
-        await expect(page.locator('#archive-search')).toHaveValue('"alignment tax" -type:comment');
-        await expect.poll(() =>
-            page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')
-        ).toBe('archive-search');
-        await expect(page.locator('.pr-item')).toHaveCount(1);
-        await expect(page.locator('.pr-item h2')).toHaveText('Alignment Tax Primer');
     });
 
-    test('search index refreshes after in-place canonical load-all merge [PR-UARCH-22]', async ({ page }) => {
-        const userId = 'u-search-refresh-user';
-        const userObj = { _id: userId, username: 'SearchRefresh_User', displayName: 'Search Refresh User', slug: 'search-refresh-user', karma: 100 };
-        const otherUser = { _id: 'u-other-search-refresh', username: 'OtherSearchRefresh', displayName: 'Other Search Refresh', slug: 'other-search-refresh', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Help_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    const helpDetails = page.locator('#archive-search-help');
+    await expect(helpDetails).toBeVisible();
+    await expect(helpDetails).not.toHaveAttribute('open', '');
+
+    await page.locator('#archive-search-help > summary').click();
+    await expect(helpDetails).toHaveAttribute('open', '');
+
+    await page.locator('.pr-search-example[data-query=\'"alignment tax" -type:comment\']').click();
+
+    await expect(page.locator('#archive-search')).toHaveValue('"alignment tax" -type:comment');
+    await expect.poll(() =>
+      page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')
+    ).toBe('archive-search');
+    await expect(page.locator('.pr-item')).toHaveCount(1);
+    await expect(page.locator('.pr-item h2')).toHaveText('Alignment Tax Primer');
+  });
+
+  test('search index refreshes after in-place canonical load-all merge [PR-UARCH-22]', async ({ page }) => {
+    const userId = 'u-search-refresh-user';
+    const userObj = { _id: userId, username: 'SearchRefresh_User', displayName: 'Search Refresh User', slug: 'search-refresh-user', karma: 100 };
+    const otherUser = { _id: 'u-other-search-refresh', username: 'OtherSearchRefresh', displayName: 'Other Search Refresh', slug: 'other-search-refresh', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -727,37 +828,41 @@ if (query.includes('query GetPostComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=SearchRefresh_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await selectArchiveView(page, 'thread-full');
-        const loadAllBtn = page.locator('.pr-post[data-id="p-load"] [data-action="load-all-comments"]');
-        await expect(loadAllBtn).toBeVisible();
-        await loadAllBtn.click();
-        await expect(loadAllBtn).toHaveText('[a]', { timeout: 10000 });
-
-        await page.locator('#archive-search').fill('searchindexneedle');
-
-        await expect(async () => {
-            await expect(page.locator('#archive-status')).toContainText('1 search result');
-            await expect(page.locator('.pr-comment[data-id="c-load-new"]')).toHaveCount(1);
-            await expect(page.locator('.pr-comment[data-id="c-load-authored"]')).toHaveCount(0);
-        }).toPass({ timeout: 5000 });
     });
 
-    test('[PR-UARCH-46] archive search highlights matches and centers index snippets', async ({ page }) => {
-        const userId = 'u-highlight-user';
-        const username = 'Highlight_User';
-        const userObj = { _id: userId, username, displayName: 'Highlight User', slug: 'highlight-user', karma: 100 };
-        const matchBody = `BEGINNING_SENTINEL ${'x '.repeat(90)}alignment tax ${'y '.repeat(90)}`;
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=SearchRefresh_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await selectArchiveView(page, 'thread-full');
+    const loadAllBtn = page.locator('.pr-post[data-id="p-load"] [data-action="load-all-comments"]');
+    await expect(loadAllBtn).toBeVisible();
+    await loadAllBtn.click();
+
+    // With synchronous rendering, the button should have its final text 
+    // as soon as the click handler returns.
+    await expect(loadAllBtn).toHaveText('[a]');
+
+    await page.locator('#archive-search').fill('searchindexneedle');
+
+    await expect(async () => {
+      await expect(page.locator('#archive-status')).toContainText('1 search result');
+      await expect(page.locator('.pr-comment[data-id="c-load-new"]')).toHaveCount(1);
+      await expect(page.locator('.pr-comment[data-id="c-load-authored"]')).toHaveCount(0);
+    }).toPass({ timeout: 5000 });
+  });
+
+  test('[PR-UARCH-46] archive search highlights matches and centers index snippets', async ({ page }) => {
+    const userId = 'u-highlight-user';
+    const username = 'Highlight_User';
+    const userObj = { _id: userId, username, displayName: 'Highlight User', slug: 'highlight-user', karma: 100 };
+    const matchBody = `BEGINNING_SENTINEL ${'x '.repeat(90)}alignment tax ${'y '.repeat(90)}`;
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -802,44 +907,45 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=alignment`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"]')).toHaveCount(1);
-        await expect(page.locator('.pr-comment[data-id="c-highlight-miss"]')).toHaveCount(0);
-        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
-        await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveText(/alignment/i);
-
-        await selectArchiveView(page, 'index');
-
-        const hitRow = page.locator('.pr-archive-index-item[data-id="c-highlight-hit"]');
-        const hitSnippet = hitRow.locator('.pr-index-title');
-        await expect(hitRow).toBeVisible();
-        await expect(hitSnippet).toContainText('alignment tax');
-        await expect(hitSnippet).not.toContainText('BEGINNING_SENTINEL');
-        await expect(hitSnippet.locator('mark.pr-search-highlight')).toHaveCount(1);
-
-        await hitRow.click();
-        await expect(page.locator('.pr-index-expanded[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
-
-        await page.locator('.pr-index-collapse-btn[data-id="c-highlight-hit"]').click();
-        await expect(page.locator('.pr-archive-index-item[data-id="c-highlight-hit"] .pr-index-title mark.pr-search-highlight')).toHaveCount(1);
     });
 
-    test('archive facets add, replace, and remove structured query fragments', async ({ page }) => {
-        const userId = 'u-facet-user';
-        const username = 'Facet_User';
-        const userObj = { _id: userId, username, displayName: 'Facet User', slug: 'facet-user', karma: 100 };
-        const authorA = { _id: 'u-author-a', username: 'AuthorA', displayName: 'Facet Author A', slug: 'author-a', karma: 10 };
-        const authorB = { _id: 'u-author-b', username: 'AuthorB', displayName: 'Facet Author B', slug: 'author-b', karma: 11 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=alignment`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await expect(page.locator('.pr-comment[data-id="c-highlight-hit"]')).toHaveCount(1);
+    await expect(page.locator('.pr-comment[data-id="c-highlight-miss"]')).toHaveCount(0);
+    await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
+    await expect(page.locator('.pr-comment[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveText(/alignment/i);
+
+    await selectArchiveView(page, 'index');
+
+    const hitRow = page.locator('.pr-archive-index-item[data-id="c-highlight-hit"]');
+    const hitSnippet = hitRow.locator('.pr-index-title');
+    await expect(hitRow).toBeVisible();
+    await expect(hitSnippet).toContainText('alignment tax');
+    await expect(hitSnippet).not.toContainText('BEGINNING_SENTINEL');
+    await expect(hitSnippet.locator('mark.pr-search-highlight')).toHaveCount(1);
+
+    await hitRow.click();
+    await expect(page.locator('.pr-index-expanded[data-id="c-highlight-hit"] .pr-comment-body mark.pr-search-highlight')).toHaveCount(1);
+
+    await page.locator('.pr-index-collapse-btn[data-id="c-highlight-hit"]').click();
+    await expect(page.locator('.pr-archive-index-item[data-id="c-highlight-hit"] .pr-index-title mark.pr-search-highlight')).toHaveCount(1);
+  });
+
+  test('archive facets add, replace, and remove structured query fragments', async ({ page }) => {
+    const userId = 'u-facet-user';
+    const username = 'Facet_User';
+    const userObj = { _id: userId, username, displayName: 'Facet User', slug: 'facet-user', karma: 100 };
+    const authorA = { _id: 'u-author-a', username: 'AuthorA', displayName: 'Facet Author A', slug: 'author-a', karma: 10 };
+    const authorB = { _id: 'u-author-b', username: 'AuthorB', displayName: 'Facet Author B', slug: 'author-b', karma: 11 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -904,59 +1010,60 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await expect(page.locator('#archive-facets')).toBeVisible();
-        const searchInput = page.locator('#archive-search');
-        await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' })).toBeVisible();
-        await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author B' })).toBeVisible();
-        const postsChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Posts' });
-
-        await postsChip.click();
-        await expect(searchInput).toHaveValue('type:post');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBe('type:post');
-        await expect(page.locator('#archive-status')).toContainText('1 search result');
-
-        await postsChip.click();
-        await expect(searchInput).toHaveValue('');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
-        await expect(page.locator('#archive-status')).toContainText('3 search results');
-
-        await searchInput.fill('date:2024-01-01..2025-12-31');
-        await page.keyboard.press('Enter');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2024-01-01..2025-12-31');
-        await expect(page.locator('#archive-status')).toContainText('3 search results');
-
-        const year2025Chip = page.locator('#archive-facets .pr-facet-chip', { hasText: '2025' });
-        await year2025Chip.click();
-        await expect(searchInput).toHaveValue('date:2025-01-01..2025-12-31');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2025-01-01..2025-12-31');
-        await expect(page.locator('#archive-status')).toContainText('2 search results');
-
-        await searchInput.fill('author:facet-author-a');
-        await page.keyboard.press('Enter');
-        await expect(searchInput).toHaveValue('author:facet-author-a');
-        await expect(page.locator('#archive-status')).toContainText('2 search results');
-
-        const authorAChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' });
-        await expect(authorAChip).toHaveClass(/active/);
-        await authorAChip.click();
-        await expect(searchInput).toHaveValue('');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
     });
 
-    test('invalid regex literals are excluded with warning [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-regex-fail-user';
-        const userObj = { _id: userId, username: 'RegexFail_User', displayName: 'Regex Fail User', slug: 'regex-fail-user', karma: 100 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await expect(page.locator('#archive-facets')).toBeVisible();
+    const searchInput = page.locator('#archive-search');
+    await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' })).toBeVisible();
+    await expect(page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author B' })).toBeVisible();
+    const postsChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Posts' });
+
+    await postsChip.click();
+    await expect(searchInput).toHaveValue('type:post');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBe('type:post');
+    await expect(page.locator('#archive-status')).toContainText('1 search result');
+
+    await postsChip.click();
+    await expect(searchInput).toHaveValue('');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+    await expect(page.locator('#archive-status')).toContainText('3 search results');
+
+    await searchInput.fill('date:2024-01-01..2025-12-31');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2024-01-01..2025-12-31');
+    await expect(page.locator('#archive-status')).toContainText('3 search results');
+
+    const year2025Chip = page.locator('#archive-facets .pr-facet-chip', { hasText: '2025' });
+    await year2025Chip.click();
+    await expect(searchInput).toHaveValue('date:2025-01-01..2025-12-31');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toContain('date:2025-01-01..2025-12-31');
+    await expect(page.locator('#archive-status')).toContainText('2 search results');
+
+    await searchInput.fill('author:facet-author-a');
+    await page.keyboard.press('Enter');
+    await expect(searchInput).toHaveValue('author:facet-author-a');
+    await expect(page.locator('#archive-status')).toContainText('2 search results');
+
+    const authorAChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Facet Author A' });
+    await expect(authorAChip).toHaveClass(/active/);
+    await authorAChip.click();
+    await expect(searchInput).toHaveValue('');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+  });
+
+  test('invalid regex literals are excluded with warning [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-regex-fail-user';
+    const userObj = { _id: userId, username: 'RegexFail_User', displayName: 'Regex Fail User', slug: 'regex-fail-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1001,39 +1108,40 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=RegexFail_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Both items should be visible initially
-        await expect(page.locator('.pr-item')).toHaveCount(2);
-
-        // Enter invalid regex literal (unterminated character class)
-        const searchInput = page.locator('#archive-search');
-        await searchInput.fill('/[bracket/i');
-
-        // Invalid regex is excluded; query resolves to browse-all and keeps both items.
-        await expect(async () => {
-            const count = await page.locator('.pr-item').count();
-            expect(count).toBe(2);
-        }).toPass({ timeout: 5000 });
-
-        await expect(page.locator('#archive-search-status')).toContainText('Invalid regex literal');
-        await expect(page.locator('#archive-search-status .pr-status-chip.pr-status-warning')).toContainText('Invalid regex literal');
     });
 
-    test('structured field operators filter deterministically [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-field-user';
-        const userObj = { _id: userId, username: 'Field_User', displayName: 'Field User', slug: 'field-user', karma: 100 };
-        const appleUser = { _id: 'u-apple', username: 'Apple_User', displayName: 'Apple Author', slug: 'apple-user', karma: 50 };
-        const zebraUser = { _id: 'u-zebra', username: 'Zebra_User', displayName: 'Zebra Author', slug: 'zebra-user', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=RegexFail_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Both items should be visible initially
+    await expect(page.locator('.pr-item')).toHaveCount(2);
+
+    // Enter invalid regex literal (unterminated character class)
+    const searchInput = page.locator('#archive-search');
+    await searchInput.fill('/[bracket/i');
+
+    // Invalid regex is excluded; query resolves to browse-all and keeps both items.
+    await expect(async () => {
+      const count = await page.locator('.pr-item').count();
+      expect(count).toBe(2);
+    }).toPass({ timeout: 5000 });
+
+    await expect(page.locator('#archive-search-status')).toContainText('Invalid regex literal');
+    await expect(page.locator('#archive-search-status .pr-status-chip.pr-status-warning')).toContainText('Invalid regex literal');
+  });
+
+  test('structured field operators filter deterministically [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-field-user';
+    const userObj = { _id: userId, username: 'Field_User', displayName: 'Field User', slug: 'field-user', karma: 100 };
+    const appleUser = { _id: 'u-apple', username: 'Apple_User', displayName: 'Apple Author', slug: 'apple-user', karma: 50 };
+    const zebraUser = { _id: 'u-zebra', username: 'Zebra_User', displayName: 'Zebra Author', slug: 'zebra-user', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1107,31 +1215,32 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=Field_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const searchInput = page.locator('#archive-search');
-        await searchInput.fill('type:comment replyto:apple score:>10 date:2025-01-01..2025-01-31');
-
-        await expect(async () => {
-            await expect(page.locator('.pr-comment[data-id="c-field-2"]')).toHaveCount(1);
-            await expect(page.locator('.pr-comment[data-id="c-field-1"]')).toHaveCount(0);
-            await expect(page.locator('.pr-post[data-id="p-field-1"]')).toHaveCount(0);
-            await expect(page.locator('.pr-post[data-id="p-field-2"]')).toHaveCount(0);
-        }).toPass({ timeout: 5000 });
     });
 
-    test('top status line and toolbar result count report search state [PR-UARCH-39]', async ({ page }) => {
-        const userId = 'u-status-count-user';
-        const userObj = { _id: userId, username: 'StatusCount_User', displayName: 'Status Count User', slug: 'status-count-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Field_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    const searchInput = page.locator('#archive-search');
+    await searchInput.fill('type:comment replyto:apple score:>10 date:2025-01-01..2025-01-31');
+
+    await expect(async () => {
+      await expect(page.locator('.pr-comment[data-id="c-field-2"]')).toHaveCount(1);
+      await expect(page.locator('.pr-comment[data-id="c-field-1"]')).toHaveCount(0);
+      await expect(page.locator('.pr-post[data-id="p-field-1"]')).toHaveCount(0);
+      await expect(page.locator('.pr-post[data-id="p-field-2"]')).toHaveCount(0);
+    }).toPass({ timeout: 5000 });
+  });
+
+  test('top status line and toolbar result count report search state [PR-UARCH-39]', async ({ page }) => {
+    const userId = 'u-status-count-user';
+    const userObj = { _id: userId, username: 'StatusCount_User', displayName: 'Status Count User', slug: 'status-count-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1176,66 +1285,67 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=StatusCount_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const statusEl = page.locator('#archive-status');
-        const resultCountEl = page.locator('#archive-result-count');
-        await expect(statusEl).toContainText('2 search results');
-        await expect(resultCountEl).toHaveText('2 items');
-
-        await page.evaluate(() => {
-            const resultCount = document.getElementById('archive-result-count');
-            const feed = document.getElementById('archive-feed');
-            (window as any).__TEST_LOADING_SEEN__ = false;
-            if (!resultCount || !feed) return;
-            const observer = new MutationObserver(() => {
-                if (resultCount.classList.contains('is-loading') || feed.classList.contains('is-loading')) {
-                    (window as any).__TEST_LOADING_SEEN__ = true;
-                }
-            });
-            observer.observe(resultCount, { attributes: true, attributeFilter: ['class'] });
-            observer.observe(feed, { attributes: true, attributeFilter: ['class'] });
-            (window as any).__TEST_LOADING_OBSERVER__ = observer;
-        });
-
-        await page.locator('#archive-search').fill('first');
-        await expect(statusEl).toContainText('1 search result');
-        await expect(resultCountEl).toContainText('1 result');
-        await expect(resultCountEl).toContainText('ms');
-
-        await page.locator('#archive-search').fill('definitely-no-match-token');
-        await expect(statusEl).toContainText('0 search results');
-        await expect(resultCountEl).toContainText('0 results');
-
-        await page.locator('#archive-search-clear').click();
-        await expect(resultCountEl).toHaveText('2 items');
-
-        await expect.poll(() => page.evaluate(() => Boolean((window as any).__TEST_LOADING_SEEN__))).toBe(true);
-        await expect.poll(() => page.evaluate(() => {
-            const resultCount = document.getElementById('archive-result-count');
-            const feed = document.getElementById('archive-feed');
-            return Boolean(resultCount && feed && !resultCount.classList.contains('is-loading') && !feed.classList.contains('is-loading'));
-        })).toBe(true);
-
-        await page.evaluate(() => {
-            const observer = (window as any).__TEST_LOADING_OBSERVER__ as MutationObserver | undefined;
-            observer?.disconnect();
-            delete (window as any).__TEST_LOADING_OBSERVER__;
-        });
     });
 
-    test('directive-only queries keep toolbar count in items mode after canonicalization [PR-UARCH-39]', async ({ page }) => {
-        const userId = 'u-directive-count-user';
-        const userObj = { _id: userId, username: 'DirectiveCount_User', displayName: 'Directive Count User', slug: 'directive-count-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=StatusCount_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    const statusEl = page.locator('#archive-status');
+    const resultCountEl = page.locator('#archive-result-count');
+    await expect(statusEl).toContainText('2 search results');
+    await expect(resultCountEl).toHaveText('2 items');
+
+    await page.evaluate(() => {
+      const resultCount = document.getElementById('archive-result-count');
+      const feed = document.getElementById('archive-feed');
+      (window as any).__TEST_LOADING_SEEN__ = false;
+      if (!resultCount || !feed) return;
+      const observer = new MutationObserver(() => {
+        if (resultCount.classList.contains('is-loading') || feed.classList.contains('is-loading')) {
+          (window as any).__TEST_LOADING_SEEN__ = true;
+        }
+      });
+      observer.observe(resultCount, { attributes: true, attributeFilter: ['class'] });
+      observer.observe(feed, { attributes: true, attributeFilter: ['class'] });
+      (window as any).__TEST_LOADING_OBSERVER__ = observer;
+    });
+
+    await page.locator('#archive-search').fill('first');
+    await expect(statusEl).toContainText('1 search result');
+    await expect(resultCountEl).toContainText('1 result');
+    await expect(resultCountEl).toContainText('ms');
+
+    await page.locator('#archive-search').fill('definitely-no-match-token');
+    await expect(statusEl).toContainText('0 search results');
+    await expect(resultCountEl).toContainText('0 results');
+
+    await page.locator('#archive-search-clear').click();
+    await expect(resultCountEl).toHaveText('2 items');
+
+    await expect.poll(() => page.evaluate(() => Boolean((window as any).__TEST_LOADING_SEEN__))).toBe(true);
+    await expect.poll(() => page.evaluate(() => {
+      const resultCount = document.getElementById('archive-result-count');
+      const feed = document.getElementById('archive-feed');
+      return Boolean(resultCount && feed && !resultCount.classList.contains('is-loading') && !feed.classList.contains('is-loading'));
+    })).toBe(true);
+
+    await page.evaluate(() => {
+      const observer = (window as any).__TEST_LOADING_OBSERVER__ as MutationObserver | undefined;
+      observer?.disconnect();
+      delete (window as any).__TEST_LOADING_OBSERVER__;
+    });
+  });
+
+  test('directive-only queries keep toolbar count in items mode after canonicalization [PR-UARCH-39]', async ({ page }) => {
+    const userId = 'u-directive-count-user';
+    const userObj = { _id: userId, username: 'DirectiveCount_User', displayName: 'Directive Count User', slug: 'directive-count-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1280,29 +1390,30 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=DirectiveCount_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const resultCountEl = page.locator('#archive-result-count');
-        await expect(resultCountEl).toHaveText('2 items');
-
-        await page.locator('#archive-search').fill('scope:all');
-        await expect(resultCountEl).toHaveText('2 items');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
-        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
     });
 
-    test('URL restores structured query/sort/scope and canonicalizes in-query scope [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-url-search-user';
-        const userObj = { _id: userId, username: 'UrlSearch_User', displayName: 'URL Search User', slug: 'url-search-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=DirectiveCount_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    const resultCountEl = page.locator('#archive-result-count');
+    await expect(resultCountEl).toHaveText('2 items');
+
+    await page.locator('#archive-search').fill('scope:all');
+    await expect(resultCountEl).toHaveText('2 items');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+    await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
+  });
+
+  test('URL restores structured query/sort/scope and canonicalizes in-query scope [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-url-search-user';
+    const userObj = { _id: userId, username: 'UrlSearch_User', displayName: 'URL Search User', slug: 'url-search-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1365,33 +1476,34 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        const q = encodeURIComponent('scope:all type:post');
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=UrlSearch_User&q=${q}&sort=score-asc`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await expect(page.locator('#archive-sort')).toHaveValue('score-asc');
-        await expectArchiveScopeSelected(page, 'all');
-        await expect(page.locator('.pr-post[data-id="p-url-1"]')).toHaveCount(1);
-        await expect(page.locator('.pr-post[data-id="p-url-2"]')).toHaveCount(1);
-        await expect(page.locator('.pr-comment[data-id="c-url-1"]')).toHaveCount(0);
-
-        const finalUrl = page.url();
-        expect(finalUrl).toContain('scope=all');
-        expect(finalUrl).toContain('q=type%3Apost');
     });
 
-    test('scope:all context-only hits stay renderable in index expand and thread views [PR-UARCH-08]', async ({ page }) => {
-        const userId = 'u-scope-all-context';
-        const userObj = { _id: userId, username: 'ScopeAll_User', displayName: 'Scope All User', slug: 'scope-all-user', karma: 100 };
-        const otherUser = { _id: 'u-other-scope', username: 'OtherScopeUser', displayName: 'Other Scope User', slug: 'other-scope-user', karma: 50 };
+    const q = encodeURIComponent('scope:all type:post');
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=UrlSearch_User&q=${q}&sort=score-asc`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await expect(page.locator('#archive-sort')).toHaveValue('score-asc');
+    await expectArchiveScopeSelected(page, 'all');
+    await expect(page.locator('.pr-post[data-id="p-url-1"]')).toHaveCount(1);
+    await expect(page.locator('.pr-post[data-id="p-url-2"]')).toHaveCount(1);
+    await expect(page.locator('.pr-comment[data-id="c-url-1"]')).toHaveCount(0);
+
+    const finalUrl = page.url();
+    expect(finalUrl).toContain('scope=all');
+    expect(finalUrl).toContain('q=type%3Apost');
+  });
+
+  test('scope:all context-only hits stay renderable in index expand and thread views [PR-UARCH-08]', async ({ page }) => {
+    const userId = 'u-scope-all-context';
+    const userObj = { _id: userId, username: 'ScopeAll_User', displayName: 'Scope All User', slug: 'scope-all-user', karma: 100 };
+    const otherUser = { _id: 'u-other-scope', username: 'OtherScopeUser', displayName: 'Other Scope User', slug: 'other-scope-user', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -1441,48 +1553,49 @@ if (query.includes('GetCommentsByIds')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ScopeAll_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Load parent context into runtime maps.
-        await selectArchiveView(page, 'thread-full');
-        await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
-
-        // Search for context-only hit.
-        await selectArchiveScope(page, 'all');
-        await page.locator('#archive-search').fill('author:"other scope user"');
-
-        await expect(async () => {
-            await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
-            await expect(page.locator('.pr-comment[data-id="c-scope-child"]')).toHaveCount(0);
-        }).toPass({ timeout: 5000 });
-
-        // Context hit should remain actionable in index expand path.
-        await selectArchiveView(page, 'index');
-        const indexRow = page.locator('.pr-archive-index-item').first();
-        await expect(indexRow).toContainText('Parent context comment by other user');
-        await indexRow.click();
-        await expect(page.locator('.pr-index-expanded .pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
-
-        // And still render in thread mode without getting dropped.
-        await selectArchiveView(page, 'thread-full');
-        await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
     });
 
-    test('all sort modes work: date-asc, score-asc, replyTo, relevance gating [PR-UARCH-09]', async ({ page }) => {
-        const userId = 'u-sort-user';
-        const username = `Sort_User_${Date.now()}`;
-        const userObj = { _id: userId, username, displayName: 'Sort User', slug: 'sort-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Zebra Author', slug: 'other-user', karma: 50 };
-        const anotherUser = { _id: 'u-another', username: 'AnotherUser', displayName: 'Apple Author', slug: 'another-user', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ScopeAll_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Load parent context into runtime maps.
+    await selectArchiveView(page, 'thread-full');
+    await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+
+    // Search for context-only hit.
+    await selectArchiveScope(page, 'all');
+    await page.locator('#archive-search').fill('author:"other scope user"');
+
+    await expect(async () => {
+      await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+      await expect(page.locator('.pr-comment[data-id="c-scope-child"]')).toHaveCount(0);
+    }).toPass({ timeout: 5000 });
+
+    // Context hit should remain actionable in index expand path.
+    await selectArchiveView(page, 'index');
+    const indexRow = page.locator('.pr-archive-index-item').first();
+    await expect(indexRow).toContainText('Parent context comment by other user');
+    await indexRow.click();
+    await expect(page.locator('.pr-index-expanded .pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+
+    // And still render in thread mode without getting dropped.
+    await selectArchiveView(page, 'thread-full');
+    await expect(page.locator('.pr-comment[data-id="c-scope-parent"]')).toHaveCount(1);
+  });
+
+  test('all sort modes work: date-asc, score-asc, replyTo, relevance gating [PR-UARCH-09]', async ({ page }) => {
+    const userId = 'u-sort-user';
+    const username = `Sort_User_${Date.now()}`;
+    const userObj = { _id: userId, username, displayName: 'Sort User', slug: 'sort-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Zebra Author', slug: 'other-user', karma: 50 };
+    const anotherUser = { _id: 'u-another', username: 'AnotherUser', displayName: 'Apple Author', slug: 'another-user', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1554,75 +1667,76 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const sortSelect = page.locator('#archive-sort');
-        const relevanceOption = page.locator('#archive-sort option[value="relevance"]');
-
-        const relevanceInitiallyDisabled = await relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled);
-        expect(relevanceInitiallyDisabled).toBe(true);
-        const relevanceInitialTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
-        expect(relevanceInitialTitle).toContain('requires a search query');
-
-        await page.locator('#archive-search').fill('high');
-        await expect.poll(async () =>
-            relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
-        ).toBe(false);
-        const relevanceEnabledTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
-        expect(relevanceEnabledTitle).toBe('');
-
-        await sortSelect.selectOption('relevance');
-        await expect(sortSelect).toHaveValue('relevance');
-
-        await page.locator('#archive-search').fill('');
-        await expect(sortSelect).toHaveValue('date');
-        await expect.poll(async () =>
-            relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
-        ).toBe(true);
-
-        // Test date-asc (oldest first)
-        await sortSelect.selectOption('date-asc');
-        // Wait for sort to apply using polling
-        await expect(async () => {
-            const titles = await page.locator('.pr-item h2').allTextContents();
-            expect(titles[0]).toBe('Low Score Old Post');
-        }).toPass({ timeout: 5000 });
-
-        // Test score-asc (lowest karma first)
-        await sortSelect.selectOption('score-asc');
-        // Wait for sort to apply
-        const allItems = page.locator('.pr-item');
-        await expect(async () => {
-            await expect(allItems.first()).toContainText('Low Score Old Post');
-        }).toPass({ timeout: 5000 });
-
-        // Test replyTo sort (comments should order by interlocutor name: Apple before Zebra)
-        await sortSelect.selectOption('replyTo');
-        await expect(async () => {
-            const ids = await page
-                .locator('.pr-item')
-                .evaluateAll(nodes => nodes.map(n => n.getAttribute('data-id') || ''));
-            const appleIdx = ids.indexOf('c-sort-2');
-            const zebraIdx = ids.indexOf('c-sort-1');
-            expect(appleIdx).toBeGreaterThan(-1);
-            expect(zebraIdx).toBeGreaterThan(-1);
-            expect(appleIdx).toBeLessThan(zebraIdx);
-        }).toPass({ timeout: 5000 });
-        await expect(sortSelect).toHaveValue('replyTo');
     });
 
-    test('all view modes work including explicit card mode [PR-UARCH-10]', async ({ page }) => {
-        const userId = 'u-view-user';
-        const userObj = { _id: userId, username: 'View_User', displayName: 'View User', slug: 'view-user', karma: 100 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    const sortSelect = page.locator('#archive-sort');
+    const relevanceOption = page.locator('#archive-sort option[value="relevance"]');
+
+    const relevanceInitiallyDisabled = await relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled);
+    expect(relevanceInitiallyDisabled).toBe(true);
+    const relevanceInitialTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
+    expect(relevanceInitialTitle).toContain('requires a search query');
+
+    await page.locator('#archive-search').fill('high');
+    await expect.poll(async () =>
+      relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
+    ).toBe(false);
+    const relevanceEnabledTitle = await relevanceOption.evaluate(el => (el as HTMLOptionElement).title);
+    expect(relevanceEnabledTitle).toBe('');
+
+    await sortSelect.selectOption('relevance');
+    await expect(sortSelect).toHaveValue('relevance');
+
+    await page.locator('#archive-search').fill('');
+    await expect(sortSelect).toHaveValue('date');
+    await expect.poll(async () =>
+      relevanceOption.evaluate(el => (el as HTMLOptionElement).disabled)
+    ).toBe(true);
+
+    // Test date-asc (oldest first)
+    await sortSelect.selectOption('date-asc');
+    // Wait for sort to apply using polling
+    await expect(async () => {
+      const titles = await page.locator('.pr-item h2').allTextContents();
+      expect(titles[0]).toBe('Low Score Old Post');
+    }).toPass({ timeout: 5000 });
+
+    // Test score-asc (lowest karma first)
+    await sortSelect.selectOption('score-asc');
+    // Wait for sort to apply
+    const allItems = page.locator('.pr-item');
+    await expect(async () => {
+      await expect(allItems.first()).toContainText('Low Score Old Post');
+    }).toPass({ timeout: 5000 });
+
+    // Test replyTo sort (comments should order by interlocutor name: Apple before Zebra)
+    await sortSelect.selectOption('replyTo');
+    await expect(async () => {
+      const ids = await page
+        .locator('.pr-item')
+        .evaluateAll(nodes => nodes.map(n => n.getAttribute('data-id') || ''));
+      const appleIdx = ids.indexOf('c-sort-2');
+      const zebraIdx = ids.indexOf('c-sort-1');
+      expect(appleIdx).toBeGreaterThan(-1);
+      expect(zebraIdx).toBeGreaterThan(-1);
+      expect(appleIdx).toBeLessThan(zebraIdx);
+    }).toPass({ timeout: 5000 });
+    await expect(sortSelect).toHaveValue('replyTo');
+  });
+
+  test('all view modes work including explicit card mode [PR-UARCH-10]', async ({ page }) => {
+    const userId = 'u-view-user';
+    const userObj = { _id: userId, username: 'View_User', displayName: 'View User', slug: 'view-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
                 if (query.includes('UserBySlug') || query.includes('user(input:')) {
                     return { data: { user: ${JSON.stringify(userObj)} } };
                 }
@@ -1654,40 +1768,41 @@ return { data: {} };
                 }
                 return { data: {} };
             `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=View_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Test Card View (default)
-        await selectArchiveView(page, 'card');
-        await expectArchiveViewSelected(page, 'card');
-        await expect(page.locator('.pr-item')).toBeVisible();
-        await expect(page.locator('.pr-archive-index-item')).toHaveCount(0);
-
-        // Test Index View
-        await selectArchiveView(page, 'index');
-        await expectArchiveViewSelected(page, 'index');
-        await expect(page.locator('.pr-archive-index-item')).toBeVisible();
-        await expect(page.locator('.pr-archive-index-item')).toHaveCount(1);
-
-        // Test Thread View - now uses Power Reader's standard post/comment classes
-        await selectArchiveView(page, 'thread-full');
-        await expectArchiveViewSelected(page, 'thread-full');
-        await expect(page.locator('.pr-post')).toBeVisible();
     });
 
-    test('load-more expands rendered items and hides when exhausted [PR-UARCH-12]', async ({ page }) => {
-        const username = 'load-more-test';
-        await setupMockEnvironment(page, {
-            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 50;`,
-            onGraphQL: `
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=View_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    // Test Card View (default)
+    await selectArchiveView(page, 'card');
+    await expectArchiveViewSelected(page, 'card');
+    await expect(page.locator('.pr-item')).toBeVisible();
+    await expect(page.locator('.pr-archive-index-item')).toHaveCount(0);
+
+    // Test Index View
+    await selectArchiveView(page, 'index');
+    await expectArchiveViewSelected(page, 'index');
+    await expect(page.locator('.pr-archive-index-item')).toBeVisible();
+    await expect(page.locator('.pr-archive-index-item')).toHaveCount(1);
+
+    // Test Thread View - now uses Power Reader's standard post/comment classes
+    await selectArchiveView(page, 'thread-full');
+    await expectArchiveViewSelected(page, 'thread-full');
+    await expect(page.locator('.pr-post')).toBeVisible();
+  });
+
+  test('render cap is enforced without manual pagination controls [PR-UARCH-12]', async ({ page }) => {
+    const username = 'load-more-test';
+    await setupMockEnvironment(page, {
+      onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 50;`,
+      onGraphQL: `
                 const userId = 'u-load-more';
                 const userObj = { _id: userId, username: '${username}', displayName: 'Load More User' };
                 if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
                 if (query.includes('GetUserPosts')) {
-                    if (variables.before) return { data: { posts: { results: [] } } };
+                    if (variables.after) return { data: { posts: { results: [] } } };
                     
                     // Generate 60 posts to test limit (50)
                     const results = [];
@@ -1703,105 +1818,94 @@ return { data: {} };
                 }
                 if (query.includes('GetUserComments')) return { data: { comments: { results: [] } } };
             `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const loadMoreContainer = page.locator('#archive-load-more');
-        const loadMoreBtn = loadMoreContainer.locator('button');
-
-        // Initial render limit is 50.
-        await expect(page.locator('.pr-item')).toHaveCount(50, { timeout: 15000 });
-        await expect(loadMoreContainer).toBeVisible();
-        await expect(loadMoreBtn).toContainText('Load More (10 remaining)');
-
-        await loadMoreBtn.click();
-
-        // After one click, all 60 items should be rendered and load-more hidden.
-        await expect(page.locator('.pr-item')).toHaveCount(60, { timeout: 15000 });
-        await expect(loadMoreContainer).toBeHidden();
     });
 
-    /**
-     * [PR-UARCH-14] Manual Resync Recovery
-     * [PR-UARCH-15] Adaptive Batching
-     * [PR-UARCH-16] Status Line Indicators
-     * [PR-UARCH-17] Payload Optimization (implicitly verified by successful completion of fetches)
-     */
-    test('supports resync, adaptive batching and shows sync status [PR-UARCH-14][PR-UARCH-15][PR-UARCH-16][PR-UARCH-17]', async ({ page }) => {
-        const username = 'resync-test';
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            onInit: `window.__syncCount = 0; console.log('Mock init');`,
-            onGraphQL: `
-                console.log('Mock GraphQL Query:', query.substring(0, 50), 'SyncCount:', window.__syncCount, 'Variables:', JSON.stringify(variables));
-                // [PR-UARCH-17] Payload Optimization check (lite post fields in comment fetches)
-                if (query.includes('GetUserComments') && query.includes('...CommentFieldsFull')) {
-                    throw new Error('Detected unoptimized comment fields in archive query');
-                }
-                
-                if (query.includes('GetUserBySlug')) {
-                    return { data: { user: { _id: 'u-resync', username: '${username}' } } };
-                }
-                if (query.includes('GetUserPosts')) {
-                    window.__syncCount++;
-                    // In cursor pagination, window.__syncCount > 1 is the resync attempt.
-                    // The first page of resync has variables.before === null.
-                    const results = (window.__syncCount > 1 && !variables.before) ? [{ _id: 'post-new', postedAt: new Date().toISOString(), title: 'New Post', user: { displayName: 'Tester' } }] : [];
-                    console.log('Returning GetUserPosts results. Count:', results.length, 'Global SyncCount:', window.__syncCount);
-                    return { data: { posts: { results } } };
-                }
-                if (query.includes('GetUserComments')) {
-                    return { data: { comments: { results: [] } } };
-                }
-            `
-        });
+    // Render cap is 50 and there is no clickable pagination control.
+    await expect(page.locator('.pr-item')).toHaveCount(50, { timeout: 15000 });
+    await expect(page.locator('#archive-load-more')).toHaveCount(0);
+  });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+  /**
+   * [PR-UARCH-14] Manual Resync Recovery
+   * [PR-UARCH-15] Adaptive Batching
+   * [PR-UARCH-16] Status Line Indicators
+   * [PR-UARCH-17] Payload Optimization (implicitly verified by successful completion of fetches)
+   */
+  test('supports resync, adaptive batching and shows sync status [PR-UARCH-14][PR-UARCH-15][PR-UARCH-16][PR-UARCH-17]', async ({ page }) => {
+    const username = 'resync-test';
 
-        const statusEl = page.locator('#archive-status');
-        const resyncBtn = page.locator('#archive-resync');
+    await setupMockEnvironment(page, {
+      onInit: `window.__syncCount = 0; console.log('Mock init');`,
+      onGraphQL: `
+                                        if (query.includes('GetUserBySlug')) {
+                                            return { data: { user: { _id: 'u-resync', username: '${username}' } } };
+                                        }
+                                        
+                                        if (query.includes('GetUserPosts')) {
+                                            window.__syncCount++;
+                                            const results = (window.__syncCount > 1 && !variables.after) ? [{ _id: 'post-new', postedAt: new Date().toISOString(), title: 'New Post', user: { displayName: 'Tester' } }] : [];
+                                            const response = { data: { posts: { results } } };
+                                            if (window.__syncCount > 1) {
+                                                return new Promise(resolve => setTimeout(() => resolve(response), 100));
+                                            }
+                                            return response;
+                                        }
+                                        
+                                        if (query.includes('GetUserComments')) {
+                                            return { data: { comments: { results: [] } } };
+                                        }
+                                        
+                                        return { data: { posts: { results: [] }, comments: { results: [] } } };
+                                    `
+    }); await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        // Check initial status - it might already be "Sync complete" or "Up to date"
-        await expect(statusEl).not.toHaveClass(/status-error/);
-        await expect(statusEl).toHaveText(/Up to date|Sync complete|Checking|Fetching|Loaded/);
+    const statusEl = page.locator('#archive-status');
+    const resyncBtn = page.locator('#archive-resync');
 
-        // Trigger Resync
-        page.on('dialog', dialog => dialog.accept()); // Handle the confirmation dialog
-        await resyncBtn.click();
+    // Check initial status - it might already be "Sync complete" or "Up to date"
+    await expect(statusEl).not.toHaveClass(/status-error/);
+    await expect(statusEl).toHaveText(/Up to date|Sync complete|Checking|Fetching|Loaded/);
 
-        // Should briefly show syncing status or starting resync
-        // We wait for the specific text to appear first to ensure the status update has processed
-        await expect(statusEl).toContainText('Starting full resync');
-        await expect(statusEl).toHaveClass(/status-syncing/);
-        await expect(statusEl).not.toHaveClass(/status-syncing/, { timeout: 20000 });
+    // Trigger Resync
+    page.on('dialog', dialog => dialog.accept()); // Handle the confirmation dialog
+    await resyncBtn.click();
 
-        // Final state after resync should have 1 item
-        await expect(statusEl).toContainText('Sync complete');
-        await expect(statusEl).toContainText('1 total items');
-    });
+    // Should briefly show syncing status or starting resync
+    // We wait for the specific text to appear first to ensure the status update has processed
+    await expect(statusEl).toContainText('Starting full resync');
+    await expect(statusEl).toHaveClass(/status-syncing/);
+    await expect(statusEl).not.toHaveClass(/status-syncing/, { timeout: 20000 });
 
-    /**
-     * [PR-UARCH-18] Large Dataset Dialog Persistence
-     * Verifies that the "Large Dataset" dialog correctly triggers and that the choice
-     * persists across sorting/filtering changes.
-     */
-    test('Large Dataset dialog persists choice across sort changes [PR-UARCH-18]', async ({ page }) => {
-        const username = 'large-dataset-test';
+    // Final state after resync should have 1 item
+    await expect(statusEl).toContainText('Sync complete');
+    await expect(statusEl).toContainText('1 total items');
+  });
 
-        await setupMockEnvironment(page, {
-            onInit: `window.__PR_ARCHIVE_LARGE_THRESHOLD = 100;`,
-            onGraphQL: `
+  /**
+   * [PR-UARCH-18] Large Dataset Dialog Persistence
+   * Verifies that the "Large Dataset" dialog correctly triggers and that the choice
+   * persists across sorting/filtering changes.
+   */
+  test('Large Dataset dialog persists choice across sort changes [PR-UARCH-18]', async ({ page }) => {
+    const username = 'large-dataset-test';
+
+    await setupMockEnvironment(page, {
+      onInit: `window.__PR_ARCHIVE_LARGE_THRESHOLD = 100;`,
+      onGraphQL: `
                 const userId = 'u-large';
                 const userObj = { _id: userId, username: '${username}', displayName: 'Big User' };
                 
                 if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
                 if (query.includes('GetUserPosts')) {
-                    if (variables.before) return { data: { posts: { results: [] } } };
+                    if (variables.after) return { data: { posts: { results: [] } } };
                     const results = [];
                     for (let i = 0; i < 200; i++) {
                         results.push({
@@ -1816,48 +1920,49 @@ return { data: {} };
                 }
                 if (query.includes('GetUserComments')) return { data: { comments: { results: [] } } };
             `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Dialog should be visible
-        const dialog = page.locator('.pr-archive-render-dialog');
-        await expect(dialog).toBeVisible();
-        await expect(dialog).toContainText('Large Dataset Detected');
-        await expect(dialog).toContainText('200');
-
-        // Choose "Render All"
-        const renderAllBtn = page.locator('#render-all-btn');
-        await renderAllBtn.click();
-
-        // Feed should now contain items
-        await expect(dialog).toBeHidden();
-        const items = page.locator('.pr-item');
-        await expect(items.first()).toBeVisible();
-
-        // Change sort - THIS IS WHERE THE BUG IS
-        const sortSelect = page.locator('#archive-sort');
-        await sortSelect.selectOption('score-asc');
-
-        // BUG: The dialog should NOT reappear.
-        await expect(dialog).toBeHidden({ timeout: 5000 });
-
-        // Items should still be visible
-        await expect(items.first()).toBeVisible();
     });
 
-    test('[PR-UARCH-19] event handlers work after archive rerender (ReaderState identity)', async ({ page }) => {
-        // This test verifies that the ReaderState identity fix works correctly.
-        // Event listeners hold a reference to ReaderState, so after a rerender
-        // (which mutates the state in place), handlers should still work.
-        const username = 'rerender-test';
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Dialog should be visible
+    const dialog = page.locator('.pr-archive-render-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Large Dataset Detected');
+    await expect(dialog).toContainText('200');
+
+    // Choose "Render All"
+    const renderAllBtn = page.locator('#render-all-btn');
+    await renderAllBtn.click();
+
+    // Feed should now contain items
+    await expect(dialog).toBeHidden();
+    const items = page.locator('.pr-item');
+    await expect(items.first()).toBeVisible();
+
+    // Change sort - THIS IS WHERE THE BUG IS
+    const sortSelect = page.locator('#archive-sort');
+    await sortSelect.selectOption('score-asc');
+
+    // BUG: The dialog should NOT reappear.
+    await expect(dialog).toBeHidden({ timeout: 5000 });
+
+    // Items should still be visible
+    await expect(items.first()).toBeVisible();
+  });
+
+  test('[PR-UARCH-19] event handlers work after archive rerender (ReaderState identity)', async ({ page }) => {
+    // This test verifies that the ReaderState identity fix works correctly.
+    // Event listeners hold a reference to ReaderState, so after a rerender
+    // (which mutates the state in place), handlers should still work.
+    const username = 'rerender-test';
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
       const userObj = { _id: 'u-rerender', username: 'rerender-test', displayName: 'Rerender Test User', slug: 'rerender-test', karma: 100 };
       const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User' };
       
@@ -1912,57 +2017,58 @@ return { data: {} };
       }
       return { data: {} };
     `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Wait for thread view to render
-        await expect(page.locator('.pr-post')).toBeVisible();
-        await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
-
-        // Trigger a rerender by changing sort (this calls rerenderAll internally)
-        await page.locator('#archive-sort').selectOption('score');
-
-        // After rerender, verify the comment is still visible
-        const comment = page.locator('.pr-comment[data-id="c-child"]');
-        await expect(comment).toBeVisible();
-
-        // Test [r] button (load descendants) - should trigger GraphQL query
-        const rButton = comment.locator('[data-action="load-descendants"]');
-        await expect(rButton).toBeVisible();
-
-        // Test [t] button (load parents) - should be visible and clickable
-        // The key assertion is that this doesn't throw an error after rerender,
-        // which proves the ReaderState reference is still valid
-        const tButton = comment.locator('[data-action="load-parents-and-scroll"]');
-        await expect(tButton).toBeVisible();
-        await tButton.click();
-
-        // If the click didn't throw, the state reference is valid
-        // This is the main assertion - event handlers work after rerender
-
-        // Test find-parent [^] button - should also be clickable
-        const findParentBtn = comment.locator('[data-action="find-parent"]');
-        await expect(findParentBtn).toBeVisible();
-        await findParentBtn.click();
-
-        // If we get here without errors, the ReaderState identity fix is working
     });
 
-    test('[PR-UARCH-23] archive thread view populates currentUserId for authenticated actions', async ({ page }) => {
-        const userId = 'u-auth-test';
-        const userObj = { _id: userId, username: 'AuthTest_User', displayName: 'Auth Test', slug: 'auth-test-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onInit: `
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Wait for thread view to render
+    await expect(page.locator('.pr-post')).toBeVisible();
+    await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
+
+    // Trigger a rerender by changing sort (this calls rerenderAll internally)
+    await page.locator('#archive-sort').selectOption('score');
+
+    // After rerender, verify the comment is still visible
+    const comment = page.locator('.pr-comment[data-id="c-child"]');
+    await expect(comment).toBeVisible();
+
+    // Test [r] button (load descendants) - should trigger GraphQL query
+    const rButton = comment.locator('[data-action="load-descendants"]');
+    await expect(rButton).toBeVisible();
+
+    // Test [t] button (load parents) - should be visible and clickable
+    // The key assertion is that this doesn't throw an error after rerender,
+    // which proves the ReaderState reference is still valid
+    const tButton = comment.locator('[data-action="load-parents-and-scroll"]');
+    await expect(tButton).toBeVisible();
+    await tButton.click();
+
+    // If the click didn't throw, the state reference is valid
+    // This is the main assertion - event handlers work after rerender
+
+    // Test find-parent [^] button - should also be clickable
+    const findParentBtn = comment.locator('[data-action="find-parent"]');
+    await expect(findParentBtn).toBeVisible();
+    await findParentBtn.click();
+
+    // If we get here without errors, the ReaderState identity fix is working
+  });
+
+  test('[PR-UARCH-23] archive thread view populates currentUserId for authenticated actions', async ({ page }) => {
+    const userId = 'u-auth-test';
+    const userObj = { _id: userId, username: 'AuthTest_User', displayName: 'Auth Test', slug: 'auth-test-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
       window.LessWrong = {
         params: {
           currentUser: {
@@ -1973,7 +2079,7 @@ return { data: {} };
         }
       };
     `,
-            onGraphQL: `
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2002,79 +2108,79 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=AuthTest_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Wait for thread view to render
-        await expect(page.locator('.pr-comment[data-id="c-vote-test"]')).toBeVisible();
-
-        // [P1-FIX] Verify that currentUserId is populated in the ReaderState
-        // Check via window access - the archive UIHost should have set currentUserId
-        const readerStateCheck = await page.evaluate(() => {
-            // Access the archive state through the global archiveState or check DOM
-            // The vote buttons should be present and interactive if currentUserId is set
-            const comment = document.querySelector('.pr-comment[data-id="c-vote-test"]');
-            if (!comment) return { error: 'Comment not found' };
-
-            // Check if vote buttons exist and are not disabled
-            const upvoteBtn = comment.querySelector('[data-action="karma-up"]');
-            const downvoteBtn = comment.querySelector('[data-action="karma-down"]');
-
-            return {
-                hasVoteButtons: !!upvoteBtn && !!downvoteBtn,
-                upvoteDisabled: upvoteBtn?.classList.contains('disabled'),
-                downvoteDisabled: downvoteBtn?.classList.contains('disabled')
-            };
-        });
-
-        // Vote buttons should be present (currentUserId is set)
-        expect(readerStateCheck.hasVoteButtons).toBe(true);
-        // Buttons should NOT be disabled (user is authenticated)
-        expect(readerStateCheck.upvoteDisabled).toBeFalsy();
-        expect(readerStateCheck.downvoteDisabled).toBeFalsy();
     });
 
-    test('[PR-UARCH-24] thread sort mode persists through Load More', async ({ page }) => {
-        const userId = 'u-sort-persist';
-        const userObj = { _id: userId, username: 'SortPersist_User', displayName: 'Sort Persist', slug: 'sort-persist-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=AuthTest_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        // Create comments across 2 posts to test pagination
-        // Post 2 has higher score, should come first in karma sort
-        const comments = [
-            {
-                _id: 'c1',
-                postedAt: '2025-01-15T12:00:00Z',
-                baseScore: 5,
-                htmlBody: '<p>Low score comment</p>',
-                user: userObj,
-                post: { _id: 'p1', title: 'Low Karma Post', pageUrl: '...', user: otherUser },
-                parentComment: null,
-                postId: 'p1'
-            },
-            {
-                _id: 'c2',
-                postedAt: '2025-01-10T12:00:00Z',
-                baseScore: 100,
-                htmlBody: '<p>High score comment</p>',
-                user: userObj,
-                post: { _id: 'p2', title: 'High Karma Post', pageUrl: '...', user: otherUser },
-                parentComment: null,
-                postId: 'p2'
-            }
-        ];
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 item initially
-            onGraphQL: `
+    // Wait for thread view to render
+    await expect(page.locator('.pr-comment[data-id="c-vote-test"]')).toBeVisible();
+
+    // [P1-FIX] Verify that currentUserId is populated in the ReaderState
+    // Check via window access - the archive UIHost should have set currentUserId
+    const readerStateCheck = await page.evaluate(() => {
+      // Access the archive state through the global archiveState or check DOM
+      // The vote buttons should be present and interactive if currentUserId is set
+      const comment = document.querySelector('.pr-comment[data-id="c-vote-test"]');
+      if (!comment) return { error: 'Comment not found' };
+
+      // Check if vote buttons exist and are not disabled
+      const upvoteBtn = comment.querySelector('[data-action="karma-up"]');
+      const downvoteBtn = comment.querySelector('[data-action="karma-down"]');
+
+      return {
+        hasVoteButtons: !!upvoteBtn && !!downvoteBtn,
+        upvoteDisabled: upvoteBtn?.classList.contains('disabled'),
+        downvoteDisabled: downvoteBtn?.classList.contains('disabled')
+      };
+    });
+
+    // Vote buttons should be present (currentUserId is set)
+    expect(readerStateCheck.hasVoteButtons).toBe(true);
+    // Buttons should NOT be disabled (user is authenticated)
+    expect(readerStateCheck.upvoteDisabled).toBeFalsy();
+    expect(readerStateCheck.downvoteDisabled).toBeFalsy();
+  });
+
+  test('[PR-UARCH-24] thread sort mode persists through archive rerenders', async ({ page }) => {
+    const userId = 'u-sort-persist';
+    const userObj = { _id: userId, username: 'SortPersist_User', displayName: 'Sort Persist', slug: 'sort-persist-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+    // Create comments across 2 posts to test pagination
+    // Post 2 has higher score, should come first in karma sort
+    const comments = [
+      {
+        _id: 'c1',
+        postedAt: '2025-01-15T12:00:00Z',
+        baseScore: 5,
+        htmlBody: '<p>Low score comment</p>',
+        user: userObj,
+        post: { _id: 'p1', title: 'Low Karma Post', pageUrl: '...', user: otherUser },
+        parentComment: null,
+        postId: 'p1'
+      },
+      {
+        _id: 'c2',
+        postedAt: '2025-01-10T12:00:00Z',
+        baseScore: 100,
+        htmlBody: '<p>High score comment</p>',
+        user: userObj,
+        post: { _id: 'p2', title: 'High Karma Post', pageUrl: '...', user: otherUser },
+        parentComment: null,
+        postId: 'p2'
+      }
+    ];
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2086,52 +2192,52 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=SortPersist_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View
-        await selectArchiveView(page, 'thread-full');
-
-        // Select karma sort (high to low)
-        await page.locator('#archive-sort').selectOption('score');
-
-        // Wait for sort to apply and verify High Karma Post is visible
-        await expect(async () => {
-            const posts = await page.locator('.pr-post').count();
-            expect(posts).toBeGreaterThan(0);
-            // Check the visible post is High Karma (c2 with score 100)
-            const html = await page.locator('.pr-post').first().innerHTML();
-            expect(html).toContain('High Karma Post');
-        }).toPass({ timeout: 5000 });
-
-        // Verify Load More button is present (we have 2 items but limit is 1)
-        const loadMoreBtn = page.locator('#archive-load-more button');
-        await expect(loadMoreBtn).toBeVisible();
-
-        // [P2-FIX] Click Load More and verify sort is maintained
-        await loadMoreBtn.click();
-
-        await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
-
-        // After Load More, High Karma Post should still be first
-        const firstPostHtml = await page.locator('.pr-post').first().innerHTML();
-        expect(firstPostHtml).toContain('High Karma Post');
-
-        // Low Karma Post should also be visible now (2nd)
-        const secondPostHtml = await page.locator('.pr-post').nth(1).innerHTML();
-        expect(secondPostHtml).toContain('Low Karma Post');
     });
 
-    test('[PR-UARCH-25] context comments stay out of canonical items but render nested parent context in card view', async ({ page }) => {
-        const userId = 'u-context-test';
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=SortPersist_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Switch to Thread View
+    await selectArchiveView(page, 'thread-full');
+
+    // Select karma sort (high to low)
+    await page.locator('#archive-sort').selectOption('score');
+
+    // Wait for sort to apply and verify High Karma Post is visible
+    await expect(async () => {
+      const posts = await page.locator('.pr-post').count();
+      expect(posts).toBeGreaterThan(0);
+      // Check the first visible post is High Karma (c2 with score 100)
+      const html = await page.locator('.pr-post').first().innerHTML();
+      expect(html).toContain('High Karma Post');
+    }).toPass({ timeout: 5000 });
+
+    // Trigger rerender by switching away and back to thread view.
+    await selectArchiveView(page, 'card');
+    await expectArchiveViewSelected(page, 'card');
+    await selectArchiveView(page, 'thread-full');
+    await expectArchiveViewSelected(page, 'thread-full');
+
+    // Sort selection and ordering should remain stable across rerenders.
+    await expect(page.locator('#archive-sort')).toHaveValue('score');
+    await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
+
+    const firstPostHtml = await page.locator('.pr-post').first().innerHTML();
+    expect(firstPostHtml).toContain('High Karma Post');
+    const secondPostHtml = await page.locator('.pr-post').nth(1).innerHTML();
+    expect(secondPostHtml).toContain('Low Karma Post');
+    await expect(page.locator('#archive-load-more')).toHaveCount(0);
+  });
+
+  test('[PR-UARCH-25] context comments stay out of canonical items but render nested parent context in card view', async ({ page }) => {
+    const userId = 'u-context-test';
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 const userObj = { _id: '${userId}', username: 'ContextTest_User', displayName: 'Context Test', slug: 'context-test-user', karma: 100 };
 const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
 
@@ -2187,55 +2293,56 @@ if (query.includes('GetCommentsByIds')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=ContextTest_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Step 1: Switch to Thread View - this loads parent context
-        await selectArchiveView(page, 'thread-full');
-
-        // Wait for thread view to render with context
-        await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
-        await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
-
-        // Step 2: Switch to Card View - context parent should render above child (nested)
-        await selectArchiveView(page, 'card');
-
-        // Wait for card view to render
-        await expect(page.locator('.pr-archive-item')).toHaveCount(1);
-
-        const parentInCard = page.locator('.pr-archive-item .pr-comment[data-id="c-parent"]');
-        await expect(parentInCard).toBeVisible();
-        await expect(parentInCard).toContainText('Parent context comment by other user');
-        await expect(parentInCard.locator('.pr-replies .pr-comment[data-id="c-child"]')).toHaveCount(1);
-
-        // Step 3: Switch to Index View - context should also NOT appear here
-        await selectArchiveView(page, 'index');
-
-        // Wait for index view to render
-        await expect(page.locator('.pr-archive-index-item')).toBeVisible();
-
-        // Verify index remains canonical-only (no context-only parent row leakage)
-        const indexItems = await page.locator('.pr-archive-index-item').allTextContents();
-        const allIndexText = indexItems.join(' ');
-
-        // Should contain the child comment
-        expect(allIndexText).toContain('Child comment by target user');
-
-        // Should NOT contain the parent context comment
-        expect(allIndexText).not.toContain('Parent context comment by other user');
     });
 
-    test('[PR-UARCH-38] archive link previews dismiss when mouse leaves trigger', async ({ page }) => {
-        const userId = 'u-preview-test';
-        const userObj = { _id: userId, username: 'PreviewTest_User', displayName: 'Preview Test', slug: 'preview-test-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ContextTest_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Step 1: Switch to Thread View - this loads parent context
+    await selectArchiveView(page, 'thread-full');
+
+    // Wait for thread view to render with context
+    await expect(page.locator('.pr-comment[data-id="c-parent"]')).toBeVisible();
+    await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
+
+    // Step 2: Switch to Card View - context parent should render above child (nested)
+    await selectArchiveView(page, 'card');
+
+    // Wait for card view to render
+    await expect(page.locator('.pr-archive-item')).toHaveCount(1);
+
+    const parentInCard = page.locator('.pr-archive-item .pr-comment[data-id="c-parent"]');
+    await expect(parentInCard).toBeVisible();
+    await expect(parentInCard).toContainText('Parent context comment by other user');
+    await expect(parentInCard.locator('.pr-replies .pr-comment[data-id="c-child"]')).toHaveCount(1);
+
+    // Step 3: Switch to Index View - context should also NOT appear here
+    await selectArchiveView(page, 'index');
+
+    // Wait for index view to render
+    await expect(page.locator('.pr-archive-index-item')).toBeVisible();
+
+    // Verify index remains canonical-only (no context-only parent row leakage)
+    const indexItems = await page.locator('.pr-archive-index-item').allTextContents();
+    const allIndexText = indexItems.join(' ');
+
+    // Should contain the child comment
+    expect(allIndexText).toContain('Child comment by target user');
+
+    // Should NOT contain the parent context comment
+    expect(allIndexText).not.toContain('Parent context comment by other user');
+  });
+
+  test('[PR-UARCH-38] archive link previews dismiss when mouse leaves trigger', async ({ page }) => {
+    const userId = 'u-preview-test';
+    const userObj = { _id: userId, username: 'PreviewTest_User', displayName: 'Preview Test', slug: 'preview-test-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2267,57 +2374,57 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=PreviewTest_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        const authorLink = page.locator('.pr-post .pr-author').first();
-        await expect(authorLink).toBeVisible();
-        await authorLink.hover();
-
-        const preview = page.locator('.pr-preview-overlay.author-preview');
-        await expect(preview).toBeVisible({ timeout: 10000 });
-
-        await page.mouse.move(0, 0);
-        await expect(preview).not.toBeVisible({ timeout: 5000 });
     });
 
-    test('[PR-UARCH-26] Load More preserves link previews and post action buttons', async ({ page }) => {
-        const userId = 'u-hooks-test';
-        const userObj = { _id: userId, username: 'HooksTest_User', displayName: 'Hooks Test', slug: 'hooks-test-user', karma: 100 };
-        const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=PreviewTest_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        // Create comments with links that should have link previews
-        const comments = [
-            {
-                _id: 'c1',
-                postedAt: '2025-01-10T12:00:00Z',
-                baseScore: 10,
-                htmlBody: '<p>Check out <a href="https://example.com">this link</a></p>',
-                user: userObj,
-                post: { _id: 'p1', title: 'Post 1', pageUrl: '...', user: otherUser },
-                parentComment: null,
-                postId: 'p1'
-            },
-            {
-                _id: 'c2',
-                postedAt: '2025-01-09T12:00:00Z',
-                baseScore: 5,
-                htmlBody: '<p>Another <a href="https://test.com">link here</a></p>',
-                user: userObj,
-                post: { _id: 'p2', title: 'Post 2', pageUrl: '...', user: otherUser },
-                parentComment: null,
-                postId: 'p2'
-            }
-        ];
+    const authorLink = page.locator('.pr-post .pr-author').first();
+    await expect(authorLink).toBeVisible();
+    await authorLink.hover();
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onInit: `window.__PR_RENDER_LIMIT_OVERRIDE = 1;`, // Only render 1 initially
-            onGraphQL: `
+    const preview = page.locator('.pr-preview-overlay.author-preview');
+    await expect(preview).toBeVisible({ timeout: 10000 });
+
+    await page.mouse.move(0, 0);
+    await expect(preview).not.toBeVisible({ timeout: 5000 });
+  });
+
+  test('[PR-UARCH-26] archive rerenders preserve link previews and post action buttons', async ({ page }) => {
+    const userId = 'u-hooks-test';
+    const userObj = { _id: userId, username: 'HooksTest_User', displayName: 'Hooks Test', slug: 'hooks-test-user', karma: 100 };
+    const otherUser = { _id: 'u-other', username: 'OtherUser', displayName: 'Other User', karma: 50 };
+
+    // Create comments with links that should have link previews
+    const comments = [
+      {
+        _id: 'c1',
+        postedAt: '2025-01-10T12:00:00Z',
+        baseScore: 10,
+        htmlBody: '<p>Check out <a href="https://example.com">this link</a></p>',
+        user: userObj,
+        post: { _id: 'p1', title: 'Post 1', pageUrl: '...', user: otherUser },
+        parentComment: null,
+        postId: 'p1'
+      },
+      {
+        _id: 'c2',
+        postedAt: '2025-01-09T12:00:00Z',
+        baseScore: 5,
+        htmlBody: '<p>Another <a href="https://test.com">link here</a></p>',
+        user: userObj,
+        post: { _id: 'p2', title: 'Post 2', pageUrl: '...', user: otherUser },
+        parentComment: null,
+        postId: 'p2'
+      }
+    ];
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2329,50 +2436,48 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=HooksTest_User', { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        // Switch to Thread View (has post action buttons and link previews)
-        await selectArchiveView(page, 'thread-full');
-
-        // Wait for initial render
-        await expect(page.locator('.pr-post')).toHaveCount(1);
-
-        // Hover over a link to verify link previews are working initially
-        const firstLink = page.locator('.pr-post a[href="https://example.com"]');
-        await firstLink.hover();
-
-        // Verify Load More button is present
-        const loadMoreBtn = page.locator('#archive-load-more button');
-        await expect(loadMoreBtn).toBeVisible();
-
-        // [P2-FIX] Click Load More and verify UI hooks are reinitialized
-        await loadMoreBtn.click();
-
-        // Verify both posts are now visible
-        await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
-
-        // Verify link previews still work after Load More
-        const secondLink = page.locator('.pr-post a[href="https://test.com"]');
-        await expect(secondLink).toBeVisible();
-        await secondLink.hover();
-
-        // If we get here without errors, link previews and post action buttons are working
-        // The main assertion is that no errors occur (which would happen if hooks weren't reinitialized)
     });
 
-    test('[PR-UARCH-42] clear button clears query and keeps scope/sort URL state in sync', async ({ page }) => {
-        const userId = 'u-clear-search';
-        const username = 'ClearSearch_User';
-        const userObj = { _id: userId, username, displayName: 'Clear Search User', slug: 'clear-search-user', karma: 100 };
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=HooksTest_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    // Switch to Thread View (has post action buttons and link previews)
+    await selectArchiveView(page, 'thread-full');
+
+    // Wait for initial render
+    await expect(page.locator('.pr-post')).toHaveCount(2);
+
+    // Hover over a link to verify link previews are working initially
+    const firstLink = page.locator('.pr-post a[href="https://example.com"]');
+    await firstLink.hover();
+
+    // Trigger rerender by changing sort.
+    await page.locator('#archive-sort').selectOption('date-asc');
+    await expect(page.locator('#archive-sort')).toHaveValue('date-asc');
+
+    // Verify posts remain visible and hooks remain attached.
+    await expect(page.locator('.pr-post')).toHaveCount(2, { timeout: 10000 });
+    expect(await page.locator('.pr-post-action').count()).toBeGreaterThan(0);
+
+    // Verify link previews still work after rerender
+    const secondLink = page.locator('.pr-post a[href="https://test.com"]');
+    await expect(secondLink).toBeVisible();
+    await secondLink.hover();
+
+    await expect(page.locator('#archive-load-more')).toHaveCount(0);
+  });
+
+  test('[PR-UARCH-42] clear button clears query and keeps scope/sort URL state in sync', async ({ page }) => {
+    const userId = 'u-clear-search';
+    const username = 'ClearSearch_User';
+    const userObj = { _id: userId, username, displayName: 'Clear Search User', slug: 'clear-search-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2417,33 +2522,34 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=optimizer&sort=date`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await expect(page.locator('#archive-search')).toHaveValue('optimizer');
-        await expect(page.locator('#archive-search-clear')).toBeVisible();
-        await expect(page.locator('.pr-item')).toHaveCount(1);
-
-        await page.locator('#archive-search-clear').click();
-
-        await expect(page.locator('#archive-search')).toHaveValue('');
-        await expect.poll(async () => page.url()).not.toContain('q=');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('sort')).toBe('date');
-        await expect(page.locator('.pr-item')).toHaveCount(2);
     });
 
-    test('[PR-UARCH-43] keyboard shortcuts focus search and escape clears then blurs', async ({ page }) => {
-        const userId = 'u-keyboard-search';
-        const username = 'KeyboardSearch_User';
-        const userObj = { _id: userId, username, displayName: 'Keyboard Search User', slug: 'keyboard-search-user', karma: 100 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=optimizer&sort=date`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await expect(page.locator('#archive-search')).toHaveValue('optimizer');
+    await expect(page.locator('#archive-search-clear')).toBeVisible();
+    await expect(page.locator('.pr-item')).toHaveCount(1);
+
+    await page.locator('#archive-search-clear').click();
+
+    await expect(page.locator('#archive-search')).toHaveValue('');
+    await expect.poll(async () => page.url()).not.toContain('q=');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('sort')).toBe('date');
+    await expect(page.locator('.pr-item')).toHaveCount(2);
+  });
+
+  test('[PR-UARCH-43] keyboard shortcuts focus search and escape clears then blurs', async ({ page }) => {
+    const userId = 'u-keyboard-search';
+    const username = 'KeyboardSearch_User';
+    const userObj = { _id: userId, username, displayName: 'Keyboard Search User', slug: 'keyboard-search-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2475,39 +2581,40 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await page.locator('#archive-status').click();
-        await page.keyboard.press('/');
-        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
-
-        const searchInput = page.locator('#archive-search');
-        await searchInput.fill('foo');
-        await page.keyboard.press('/');
-        await expect(searchInput).toHaveValue('foo/');
-
-        await page.keyboard.press('Escape');
-        await expect(searchInput).toHaveValue('');
-        await expect.poll(async () => page.url()).not.toContain('q=');
-        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
-
-        await page.keyboard.press('Escape');
-        await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).not.toBe('archive-search');
     });
 
-    test('[PR-UARCH-44] reset restores query-driven scope directives after manual scope selection', async ({ page }) => {
-        const userId = 'u-reset-scope';
-        const username = 'ResetScope_User';
-        const userObj = { _id: userId, username, displayName: 'Reset Scope User', slug: 'reset-scope-user', karma: 100 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await page.locator('#archive-status').click();
+    await page.keyboard.press('/');
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
+
+    const searchInput = page.locator('#archive-search');
+    await searchInput.fill('foo');
+    await page.keyboard.press('/');
+    await expect(searchInput).toHaveValue('foo/');
+
+    await page.keyboard.press('Escape');
+    await expect(searchInput).toHaveValue('');
+    await expect.poll(async () => page.url()).not.toContain('q=');
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).toBe('archive-search');
+
+    await page.keyboard.press('Escape');
+    await expect.poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.id || '')).not.toBe('archive-search');
+  });
+
+  test('[PR-UARCH-44] reset restores query-driven scope directives after manual scope selection', async ({ page }) => {
+    const userId = 'u-reset-scope';
+    const username = 'ResetScope_User';
+    const userObj = { _id: userId, username, displayName: 'Reset Scope User', slug: 'reset-scope-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2539,34 +2646,35 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await selectArchiveScope(page, 'all');
-        await expectArchiveScopeSelected(page, 'all');
-
-        await page.locator('#archive-reset-filters').click();
-        await expectArchiveScopeSelected(page, 'authored');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBeNull();
-
-        await page.locator('#archive-search').fill('scope:all');
-
-        await expectArchiveScopeSelected(page, 'all');
-        await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
     });
 
-    test('[PR-UARCH-45] scope/view controls support ArrowUp and ArrowDown keyboard navigation', async ({ page }) => {
-        const userId = 'u-keyboard-arrows';
-        const username = 'KeyboardArrow_User';
-        const userObj = { _id: userId, username, displayName: 'Keyboard Arrow User', slug: 'keyboard-arrow-user', karma: 100 };
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
 
-        await setupMockEnvironment(page, {
-            mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-            testMode: true,
-            onGraphQL: `
+    await selectArchiveScope(page, 'all');
+    await expectArchiveScopeSelected(page, 'all');
+
+    await page.locator('#archive-reset-filters').click();
+    await expectArchiveScopeSelected(page, 'authored');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBeNull();
+
+    await page.locator('#archive-search').fill('scope:all');
+
+    await expectArchiveScopeSelected(page, 'all');
+    await expect.poll(async () => new URL(page.url()).searchParams.get('scope')).toBe('all');
+  });
+
+  test('[PR-UARCH-45] scope/view controls support horizontal arrow keyboard navigation', async ({ page }) => {
+    const userId = 'u-keyboard-arrows';
+    const username = 'KeyboardArrow_User';
+    const userObj = { _id: userId, username, displayName: 'Keyboard Arrow User', slug: 'keyboard-arrow-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
   return { data: { user: ${JSON.stringify(userObj)} } };
 }
@@ -2598,22 +2706,24 @@ if (query.includes('GetUserComments')) {
 }
 return { data: {} };
 `
-        });
-
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
-        await page.evaluate(scriptContent);
-        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-
-        await page.locator('#archive-scope [data-value="authored"]').focus();
-        await page.keyboard.press('ArrowDown');
-        await expectArchiveScopeSelected(page, 'all');
-        await page.keyboard.press('ArrowUp');
-        await expectArchiveScopeSelected(page, 'authored');
-
-        await page.locator('#archive-view [data-value="card"]').focus();
-        await page.keyboard.press('ArrowDown');
-        await expectArchiveViewSelected(page, 'index');
-        await page.keyboard.press('ArrowUp');
-        await expectArchiveViewSelected(page, 'card');
     });
+
+    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await page.locator('#archive-scope [data-value="authored"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expectArchiveScopeSelected(page, 'all');
+    await page.keyboard.press('ArrowLeft');
+    await expectArchiveScopeSelected(page, 'authored');
+
+    await page.locator('#archive-view [data-value="card"]').focus();
+    await page.keyboard.press('ArrowRight');
+    await expectArchiveViewSelected(page, 'index');
+    await page.keyboard.press('ArrowLeft');
+    await expectArchiveViewSelected(page, 'card');
+  });
 });
+

@@ -66,6 +66,7 @@ For architecture notes and longer-term direction, see [ARCH_USER_ARCHIVE.md](./A
 - Adaptive cursor ingestion with retry-friendly sync behavior.
 - Offline-first IndexedDB cache plus incremental watermark-based updates.
 - Card, index, and thread modes (`thread-full` and `thread-placeholder`).
+- No bottom-of-list "Load More" controls in archive result feeds; rendering uses the active render cap and rerenders.
 - Structured archive search with:
   - Plain terms and quoted phrases.
   - Regex literals (`/pattern/flags`).

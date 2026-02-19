@@ -83,6 +83,9 @@ export const COMMENT_FIELDS_CORE = /* GraphQL */ `
       _id
       postedAt
       baseScore
+      htmlBody
+      contents { markdown }
+      voteCount
       afExtendedScore
       pageUrl
       parentCommentId
@@ -336,13 +339,13 @@ export const GET_THREAD_COMMENTS = /* GraphQL */ `
 `;
 
 export const GET_USER_POSTS = /* GraphQL */ `
-  query GetUserPosts($userId: String!, $limit: Int, $before: String) {
+  query GetUserPosts($userId: String!, $limit: Int, $after: String) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "newest"
-          before: $before
+          sortedBy: "oldest"
+          after: $after
         }
       },
       limit: $limit
@@ -356,13 +359,13 @@ export const GET_USER_POSTS = /* GraphQL */ `
 `;
 
 export const GET_USER_COMMENTS = /* GraphQL */ `
-  query GetUserComments($userId: String!, $limit: Int, $before: String) {
+  query GetUserComments($userId: String!, $limit: Int, $after: String) {
     comments(
       selector: {
         allRecentComments: {
           userId: $userId
-          before: $before
-          sortBy: "newest"
+          after: $after
+          sortBy: "oldest"
         }
       },
       limit: $limit
@@ -465,6 +468,8 @@ export type ParentCommentRef = {
   _id: string;
   postedAt?: string;
   baseScore?: number;
+  htmlBody?: string | null;
+  contents?: { markdown: string | null } | null;
   afExtendedScore?: any;
   pageUrl?: string | null;
   parentCommentId: string | null;

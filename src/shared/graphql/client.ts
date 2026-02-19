@@ -6,6 +6,7 @@ export interface GraphQLQueryOptions {
     allowPartialData?: boolean;
     toleratedErrorPatterns?: Array<string | RegExp>;
     operationName?: string;
+    timeout?: number;
 }
 
 function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): boolean {
@@ -32,14 +33,14 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function makeRequest(url: string, data: string): Promise<{ status: number; responseText: string }> {
+function makeRequest(url: string, data: string, timeout: number = 30000): Promise<{ status: number; responseText: string }> {
     return new Promise((resolve, reject) => {
         GM_xmlhttpRequest({
             method: 'POST',
             url,
             headers: { 'Content-Type': 'application/json' },
             data,
-            timeout: 30000,
+            timeout,
             onload: (response: any) => resolve(response),
             onerror: (err: any) => reject(err),
             ontimeout: () => reject(new Error('Request timed out')),
@@ -59,7 +60,7 @@ export async function queryGraphQL<TData = any, TVariables = any>(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
-            const response = await makeRequest(url, data);
+            const response = await makeRequest(url, data, options.timeout);
 
             if (response.status === 429 || response.status >= 500) {
                 if (attempt < maxAttempts - 1) {

@@ -4,7 +4,7 @@ const MAX_HIGHLIGHT_TERMS = 20;
 const MIN_HIGHLIGHT_TERM_LEN = 3;
 const TOKEN_SEPARATOR_UNICODE_PATTERN = '[^\\p{L}\\p{N}]+';
 const TOKEN_SEPARATOR_ASCII_PATTERN = '[^A-Za-z0-9]+';
-const APOSTROPHE_FLEX_PATTERN = "['’]*";
+const APOSTROPHE_FLEX_PATTERN = "['’]?";
 
 const escapeRegex = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -61,6 +61,9 @@ export const extractHighlightTerms = (query: string): string[] => {
     .slice(0, MAX_HIGHLIGHT_TERMS);
 };
 
+let cachedPatternSignature: string | null = null;
+let cachedPattern: RegExp | null = null;
+
 export const highlightTermsInContainer = (
   container: HTMLElement,
   terms: readonly string[]
@@ -83,7 +86,14 @@ export const highlightTermsInContainer = (
     return;
   }
 
-  const pattern = buildHighlightRegex(stableTerms);
+  let pattern: RegExp | null;
+  if (cachedPatternSignature === signature) {
+    pattern = cachedPattern;
+  } else {
+    pattern = buildHighlightRegex(stableTerms);
+    cachedPatternSignature = signature;
+    cachedPattern = pattern;
+  }
   if (!pattern) {
     container.setAttribute('data-pr-highlighted-terms', signature);
     return;

@@ -22,13 +22,133 @@ import {
   cancelHoverTimeout,
   isElementFullyVisible,
 } from '../utils/preview';
+import { withForcedLayout } from '../utils/dom';
+
+/**
+ * Setup link previews using event delegation on a container.
+ * More efficient for large lists (Archive).
+ */
+export const setupLinkPreviewsDelegated = (container: HTMLElement, comments: Comment[]): void => {
+  if ((container as any).__PR_PREVIEWS_DELEGATED__) return;
+  (container as any).__PR_PREVIEWS_DELEGATED__ = true;
+
+  container.addEventListener('mouseover', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target || target.dataset.previewAttached) return;
+
+    // 1. Post titles
+    const postHeader = target.closest('.pr-post-header h2') as HTMLElement;
+    if (postHeader) {
+      const headerDiv = postHeader.closest('.pr-post-header');
+      const postId = headerDiv?.getAttribute('data-post-id');
+      if (postId) {
+        setupHoverPreview(postHeader, createPostPreviewFetcher(postId), {
+          type: 'post',
+          targetGetter: () => {
+            const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
+            if (!post) return null;
+            const body = post.querySelector('.pr-post-body-container') as HTMLElement;
+            const collapsed = post.querySelector('.pr-post-body-container.collapsed');
+            if (!body || collapsed) return null;
+            return [post];
+          }
+        });
+        // Manually trigger the hover logic for the first time since mouseover already happened
+        // Note: setupHoverPreview adds its own listeners, so we just need to ensure 
+        // the next movement triggers it or wait for the system to catch it.
+      }
+      return;
+    }
+
+    // 2. Authors
+    const authorLink = target.closest('.pr-author') as HTMLElement;
+    if (authorLink) {
+      const userId = authorLink.getAttribute('data-author-id');
+      if (userId) {
+        setupHoverPreview(authorLink, createAuthorPreviewFetcher(userId), { type: 'author' });
+      }
+      return;
+    }
+
+    // 3. Parent links
+    const parentLink = target.closest('.pr-find-parent') as HTMLElement;
+    if (parentLink) {
+      const comment = parentLink.closest('.pr-comment');
+      const parentId = comment?.getAttribute('data-parent-id');
+      if (parentId) {
+        setupHoverPreview(parentLink, createCommentPreviewFetcher(parentId, comments), {
+          type: 'comment',
+          targetGetter: () => document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement
+        });
+      } else {
+        const postId = comment?.getAttribute('data-post-id');
+        if (postId) {
+          setupHoverPreview(parentLink, createPostPreviewFetcher(postId), {
+            type: 'post',
+            targetGetter: () => {
+              const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
+              if (!post) return null;
+              const header = post.querySelector('.pr-post-header') as HTMLElement;
+              const body = post.querySelector('.pr-post-body-container') as HTMLElement;
+              const collapsed = post.querySelector('.pr-post-body-container.collapsed');
+              const targets: HTMLElement[] = [];
+
+              if (header) targets.push(header);
+              if (body && !collapsed) targets.push(body);
+              const stickyHeader = document.querySelector(`.pr-sticky-header.visible .pr-post-header[data-post-id="${postId}"]`) as HTMLElement;
+              if (stickyHeader) targets.push(stickyHeader);
+              
+              return targets.length > 0 ? targets : null;
+            }
+          });
+        }
+      }
+      return;
+    }
+
+    // 4. Body links
+    const bodyLink = target.closest('.pr-comment-body a, .pr-post-body a') as HTMLAnchorElement;
+    if (bodyLink) {
+      const href = bodyLink.getAttribute('href');
+      if (href) {
+        if (isCommentUrl(href)) {
+          const id = extractCommentIdFromUrl(href);
+          if (id) setupHoverPreview(bodyLink, createCommentPreviewFetcher(id, comments), { type: 'comment' });
+        } else if (isPostUrl(href)) {
+          const id = extractPostIdFromUrl(href);
+          if (id) setupHoverPreview(bodyLink, createPostPreviewFetcher(id), { type: 'post' });
+        } else if (isAuthorUrl(href)) {
+          const slug = extractAuthorSlugFromUrl(href);
+          if (slug) setupHoverPreview(bodyLink, createAuthorBySlugPreviewFetcher(slug), { type: 'author' });
+        } else if (isWikiUrl(href)) {
+          const slug = extractWikiSlugFromUrl(href);
+          if (slug) setupHoverPreview(bodyLink, createWikiPreviewFetcher(slug), { type: 'wiki' });
+        }
+      }
+      return;
+    }
+
+    // 5. Expanders and Placeholders
+    const expander = target.closest('.pr-expand, .pr-placeholder-bar') as HTMLElement;
+    if (expander) {
+      const comment = expander.closest('.pr-comment');
+      const commentId = comment?.getAttribute('data-id');
+      if (commentId) {
+        setupHoverPreview(expander, createCommentPreviewFetcher(commentId, comments), {
+          type: 'comment',
+          targetGetter: () => document.querySelector(`.pr-comment[data-id="${commentId}"]`) as HTMLElement
+        });
+      }
+    }
+  });
+};
 
 /**
  * Setup link previews for posts, comments, and wiki links
  */
-export const setupLinkPreviews = (comments: Comment[]): void => {
+export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | Document = document): void => {
   // Post titles & Headers
-  const postHeaders = document.querySelectorAll('.pr-post-header') as NodeListOf<HTMLElement>;
+  const postHeaders = container.querySelectorAll('.pr-post-header') as NodeListOf<HTMLElement>;
   postHeaders.forEach(header => {
     const postId = header.getAttribute('data-post-id');
     if (!postId) return;
@@ -36,7 +156,7 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
     // Trigger on the h2 (which includes title and whitespace to the right)
     const titleH2 = header.querySelector('h2') as HTMLElement;
     if (titleH2) {
-      setupHoverPreview(
+        setupHoverPreview(
         titleH2,
         createPostPreviewFetcher(postId),
         {
@@ -45,20 +165,14 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
             const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
             if (!post) return null;
 
-            // Only skip preview if the post is COMPELTELY visible
+            // Only skip preview if the post is COMPLETELY visible
             const body = post.querySelector('.pr-post-body-container') as HTMLElement;
             const collapsed = post.querySelector('.pr-post-body-container.collapsed');
 
             // If collapsed, it's not "completely visible" in the sense of seeing the content
             if (!body || collapsed) return null;
 
-            // Check if both header and body (and thus the whole post) are fully visible
-            // isElementFullyVisible on the post div covers this
-            if (isElementFullyVisible(post)) {
-              return [post]; // Returns for highlight purposes
-            }
-
-            return null; // Show preview
+            return [post];
           }
         }
       );
@@ -155,13 +269,13 @@ export const setupLinkPreviews = (comments: Comment[]): void => {
       // No parent ID means top-level comment -> parent is Post
       const postId = comment?.getAttribute('data-post-id');
       if (postId) {
-        setupHoverPreview(
+          setupHoverPreview(
           link,
           createPostPreviewFetcher(postId),
           {
             type: 'post',
             targetGetter: () => {
-              const post = document.querySelector(`.pr-post[data-id="${postId}"]`);
+              const post = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
               if (!post) return null;
 
               const header = post.querySelector('.pr-post-header') as HTMLElement;
