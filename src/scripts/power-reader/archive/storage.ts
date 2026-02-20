@@ -69,7 +69,7 @@ const mergeContextPayload = <T extends ContextualItem>(existing: T, incoming: T)
   const existingBody = (existing as any).htmlBody;
   const incomingBody = (incoming as any).htmlBody;
   if ((typeof existingBody === 'string' && existingBody.trim().length > 0) &&
-      (!incomingBody || (typeof incomingBody === 'string' && incomingBody.trim().length === 0))) {
+    (!incomingBody || (typeof incomingBody === 'string' && incomingBody.trim().length === 0))) {
     merged.htmlBody = existingBody;
   }
 
@@ -238,10 +238,17 @@ const upsertContextualEntries = async (
   const store = tx.objectStore(STORE_CONTEXTUAL);
   const now = Date.now();
 
-  for (const item of dedupeById(items)) {
-    const key = contextCacheKey(username, itemType, item._id);
-    const existing = await requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>);
+  const uniqueItems = dedupeById(items);
 
+  const getPromises = uniqueItems.map(item => {
+    const key = contextCacheKey(username, itemType, item._id);
+    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
+      .then(existing => ({ item, key, existing }));
+  });
+
+  const results = await Promise.all(getPromises);
+
+  for (const { item, key, existing } of results) {
     const payload = existing
       ? mergeContextPayload(existing.payload as any, item as any)
       : item;
@@ -301,9 +308,15 @@ export const loadContextualCommentsByIds = async (
   const comments: Comment[] = [];
   const missingIds: string[] = [];
 
-  for (const id of ids) {
+  const getPromises = ids.map(id => {
     const key = contextCacheKey(username, 'comment', id);
-    const entry = await requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>);
+    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
+      .then(entry => ({ id, entry }));
+  });
+
+  const results = await Promise.all(getPromises);
+
+  for (const { id, entry } of results) {
     const isExpired = !!entry && (now - entry.updatedAt > CONTEXT_MAX_AGE_MS);
 
     if (!entry || entry.itemType !== 'comment' || isExpired) {

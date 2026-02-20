@@ -102,51 +102,50 @@ export function calculateTreeKarma(
   children: any[], // Can be Comment[] or root comments for a post
   readState: Record<string, number>,
   childrenByParentId: Map<string, any[]>,
-  cutoffDate?: string
+  cutoffDate?: string,
+  treeKarmaCache?: Map<string, number>
 ): number {
-  let hasUnread = !isRead;
-  const initialScore = Number(baseScore) || 0;
-  let maxKarma = isRead ? -Infinity : initialScore;
+  const cache = treeKarmaCache;
+  const cached = cache?.get(id);
+  if (cached !== undefined) return cached;
 
-  // Search queue for BFS traversal of the tree
-  const queue = [...children];
-  let queueIndex = 0;
+  const visited = new Set<string>();
 
-  // Track visited to prevent infinite loops (shouldn't happen in a tree but safe)
-  const visited = new Set<string>([id]);
+  const computeNodeTreeKarma = (
+    nodeId: string,
+    nodeBaseScore: number,
+    nodeIsRead: boolean,
+    nodeChildren: any[] | undefined
+  ): number => {
+    const cachedValue = cache?.get(nodeId);
+    if (cachedValue !== undefined) return cachedValue;
+    if (visited.has(nodeId)) return -Infinity;
 
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex++]!;
-    if (visited.has(current._id)) continue;
-    visited.add(current._id);
+    visited.add(nodeId);
+    let maxKarma = nodeIsRead ? -Infinity : (Number(nodeBaseScore) || 0);
 
-    // Is it read? (Explicitly or implicitly)
-    let currentIsRead = readState[current._id] === 1;
-    // Check cutoff (ignore if sentinel value)
-    if (!currentIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && current.postedAt < cutoffDate) {
-      currentIsRead = true;
-    }
+    const descendants = nodeChildren ?? childrenByParentId.get(nodeId) ?? [];
+    for (const child of descendants) {
+      let childIsRead = readState[child._id] === 1;
+      if (!childIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && child.postedAt < cutoffDate) {
+        childIsRead = true;
+      }
 
-    if (!currentIsRead) {
-      hasUnread = true;
-      const score = Number(current.baseScore) || 0;
-      if (score > maxKarma) {
-        maxKarma = score;
+      const childKarma = computeNodeTreeKarma(
+        child._id,
+        Number(child.baseScore) || 0,
+        childIsRead,
+        childrenByParentId.get(child._id)
+      );
+      if (childKarma > maxKarma) {
+        maxKarma = childKarma;
       }
     }
 
-    // Add descendants
-    const descendants = childrenByParentId.get(current._id);
-    if (descendants) {
-      for (const d of descendants) {
-        queue.push(d);
-      }
-    }
-  }
+    visited.delete(nodeId);
+    cache?.set(nodeId, maxKarma);
+    return maxKarma;
+  };
 
-  if (!hasUnread) {
-    return -Infinity;
-  }
-
-  return maxKarma;
+  return computeNodeTreeKarma(id, baseScore, isRead, children);
 }

@@ -2,10 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.688] - 2026-02-20
+## [1.2.690] - 2026-02-20
 
-### Changed
-- **AI Studio Adaptive Model Selection**: The automation now uses **Gemini 3 Flash** for the initial fast response and automatically switches to **Gemini 3.1 Pro Preview** immediately after the response is received, enabling high-quality follow-up chats for the user.
+### Fixed
+- **Archive Card View Regression ([PR-UARCH-29])**: Restored "header only" rendering for contextual parents in Card View. Even if full parent body content is available (e.g. via eager preloading), the Card View now correctly collapses these parents into metadata-only stubs to maintain a compact, feed-like experience.
+- **UI Refinement**: Removed solid borders and white backgrounds from contextual and read comments to match the borderless appearance of contextual posts, resulting in a cleaner and more consistent threaded view.
+
+## [1.2.689] - 2026-02-20
+
+## [1.2.688] - 2026-02-20
 
 ## [1.2.687] - 2026-02-20
 

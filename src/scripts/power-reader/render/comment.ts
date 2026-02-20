@@ -7,83 +7,12 @@ import type { Comment, NamesAttachedReactionsScore } from '../../../shared/graph
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
 import { getScoreColor, getRecencyColor } from '../utils/colors';
-import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
+import { isRead, getReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
-import { sanitizeHtml } from '../utils/sanitize';
 import { renderMetadata } from './components/metadata';
-import { renderBody } from './components/body';
-
-/**
- * Highlight quotes in the comment body based on reactions
- */
-export const highlightQuotes = (html: string, extendedScore: NamesAttachedReactionsScore | null): string => {
-  const safeHtml = sanitizeHtml(html);
-  if (!extendedScore || !extendedScore.reacts) return safeHtml;
-
-  // Collect all quotes
-  const quotesToHighlight: string[] = [];
-  Object.values(extendedScore.reacts).forEach(users => {
-    users.forEach(u => {
-      if (u.quotes) {
-        u.quotes.forEach(q => {
-          if (q.quote && q.quote.trim().length > 0) {
-            quotesToHighlight.push(q.quote);
-          }
-        });
-      }
-    });
-  });
-
-  if (quotesToHighlight.length === 0) return safeHtml;
-
-  // Sort quotes by length descending to process longest first
-  const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(safeHtml, 'text/html');
-
-  const replaceTextNode = (node: Text, quote: string): void => {
-    const text = node.nodeValue || '';
-    if (!text.includes(quote)) return;
-
-    const parts = text.split(quote);
-    if (parts.length <= 1) return;
-
-    const fragment = doc.createDocumentFragment();
-    parts.forEach((part, index) => {
-      if (part) {
-        fragment.appendChild(doc.createTextNode(part));
-      }
-      if (index < parts.length - 1) {
-        const span = doc.createElement('span');
-        span.className = 'pr-highlight';
-        span.title = 'Reacted content';
-        span.textContent = quote;
-        fragment.appendChild(span);
-      }
-    });
-
-    node.parentNode?.replaceChild(fragment, node);
-  };
-
-  uniqueQuotes.forEach((quote) => {
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
-    const nodes: Text[] = [];
-    let node = walker.nextNode();
-    while (node) {
-      const textNode = node as Text;
-      if (!textNode.parentElement?.classList.contains('pr-highlight')) {
-        nodes.push(textNode);
-      }
-      node = walker.nextNode();
-    }
-
-    nodes.forEach(textNode => replaceTextNode(textNode, quote));
-  });
-
-  return doc.body.innerHTML;
-};
+import { renderBody, highlightQuotes } from './components/body';
+export { highlightQuotes };
 
 const getContextType = (comment: Comment): string | undefined =>
   (comment as any).contextType;
@@ -101,6 +30,135 @@ const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = 
   `;
 };
 
+export type RenderReadTracking = {
+  readState: Record<string, 1>;
+  cutoff: string | undefined;
+};
+
+export type RenderDescendantMetrics = {
+  allDescendantsLoadedById: Map<string, boolean>;
+  unreadDescendantCountById: Map<string, number>;
+};
+
+export const buildRenderDescendantMetrics = (
+  state: ReaderState,
+  commentIds: Iterable<string>,
+  readState: Record<string, 1>,
+  includeUnreadCounts: boolean
+): RenderDescendantMetrics => {
+  const allDescendantsLoadedById = new Map<string, boolean>();
+  const unreadDescendantCountById = new Map<string, number>();
+
+  const computeAllDescendantsLoaded = (rootId: string): void => {
+    if (allDescendantsLoadedById.has(rootId)) return;
+
+    const stack: Array<{ id: string; expanded: boolean }> = [{ id: rootId, expanded: false }];
+    const inProgress = new Set<string>();
+
+    while (stack.length > 0) {
+      const frame = stack.pop()!;
+      if (allDescendantsLoadedById.has(frame.id)) continue;
+
+      if (!frame.expanded) {
+        if (inProgress.has(frame.id)) {
+          allDescendantsLoadedById.set(frame.id, true);
+          inProgress.delete(frame.id);
+          continue;
+        }
+        inProgress.add(frame.id);
+        stack.push({ id: frame.id, expanded: true });
+
+        const comment = state.commentById.get(frame.id);
+        const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
+        if (directChildrenCount > 0) {
+          const loadedChildren = state.childrenByParentId.get(frame.id) || [];
+          for (const child of loadedChildren) {
+            if (!allDescendantsLoadedById.has(child._id)) {
+              stack.push({ id: child._id, expanded: false });
+            }
+          }
+        }
+        continue;
+      }
+
+      const comment = state.commentById.get(frame.id);
+      const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
+      if (directChildrenCount <= 0) {
+        allDescendantsLoadedById.set(frame.id, true);
+        inProgress.delete(frame.id);
+        continue;
+      }
+
+      const loadedChildren = state.childrenByParentId.get(frame.id) || [];
+      let loaded = loadedChildren.length >= directChildrenCount;
+      if (loaded) {
+        for (const child of loadedChildren) {
+          if (!(allDescendantsLoadedById.get(child._id) ?? true)) {
+            loaded = false;
+            break;
+          }
+        }
+      }
+      allDescendantsLoadedById.set(frame.id, loaded);
+      inProgress.delete(frame.id);
+    }
+  };
+
+  const computeUnreadDescendantCount = (rootId: string): void => {
+    if (unreadDescendantCountById.has(rootId)) return;
+
+    const stack: Array<{ id: string; expanded: boolean }> = [{ id: rootId, expanded: false }];
+    const inProgress = new Set<string>();
+
+    while (stack.length > 0) {
+      const frame = stack.pop()!;
+      if (unreadDescendantCountById.has(frame.id)) continue;
+
+      if (!frame.expanded) {
+        if (inProgress.has(frame.id)) {
+          unreadDescendantCountById.set(frame.id, 0);
+          inProgress.delete(frame.id);
+          continue;
+        }
+        inProgress.add(frame.id);
+        stack.push({ id: frame.id, expanded: true });
+
+        const children = state.childrenByParentId.get(frame.id) || [];
+        for (const child of children) {
+          if (!unreadDescendantCountById.has(child._id)) {
+            stack.push({ id: child._id, expanded: false });
+          }
+        }
+        continue;
+      }
+
+      const children = state.childrenByParentId.get(frame.id) || [];
+      let count = 0;
+      for (const child of children) {
+        if (!isRead(child._id, readState, child.postedAt)) {
+          count += 1;
+        }
+        count += unreadDescendantCountById.get(child._id) ?? 0;
+      }
+
+      unreadDescendantCountById.set(frame.id, count);
+      inProgress.delete(frame.id);
+    }
+  };
+
+  for (const id of commentIds) {
+    computeAllDescendantsLoaded(id);
+    if (includeUnreadCounts) {
+      computeUnreadDescendantCount(id);
+    }
+  }
+
+  return {
+    allDescendantsLoadedById,
+    unreadDescendantCountById
+  };
+};
+
 /**
  * Render a comment tree recursively
  * Uses indexed children lookup for O(n) instead of O(n²)
@@ -110,17 +168,23 @@ export const renderCommentTree = (
   state: ReaderState,
   allComments: Comment[],
   allCommentIds?: Set<string>,
-  childrenByParentId?: Map<string, Comment[]>
+  childrenByParentId?: Map<string, Comment[]>,
+  descendantMetrics?: RenderDescendantMetrics,
+  readTrackingInputs?: RenderReadTracking,
+  treeKarmaCache?: Map<string, number>
 ): string => {
   const idSet = allCommentIds ?? new Set(allComments.map(c => c._id));
   const childrenIndex = childrenByParentId ?? state.childrenByParentId;
+  const tracking = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
+  const metrics = descendantMetrics ?? buildRenderDescendantMetrics(state, idSet, tracking.readState, !state.isArchiveMode);
+  const sharedTreeKarmaCache = treeKarmaCache ?? new Map<string, number>();
   // Use indexed children lookup
   const replies = childrenIndex.get(comment._id) ?? [];
   // Filter to only include comments that are in the current render set
   const visibleReplies = replies.filter(r => idSet.has(r._id));
 
   // [PR-READ-07] Check for implicit read based on cutoff
-  const { readState, cutoff } = getReadTrackingInputs(state.isArchiveMode);
+  const { readState, cutoff } = tracking;
   
   const isImplicitlyRead = (item: { postedAt?: string }) => {
     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
@@ -136,7 +200,8 @@ export const renderCommentTree = (
         childrenIndex.get(r._id) || [],
         readState,
         childrenIndex,
-        cutoff
+        cutoff,
+        sharedTreeKarmaCache
       );
     });
 
@@ -150,10 +215,10 @@ export const renderCommentTree = (
   }
 
   const repliesHtml = visibleReplies.length > 0
-    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet, childrenIndex)).join('')}</div>`
+    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet, childrenIndex, metrics, tracking, sharedTreeKarmaCache)).join('')}</div>`
     : '';
 
-  return renderComment(comment, state, repliesHtml);
+  return renderComment(comment, state, repliesHtml, metrics, tracking);
 };
 
 /**
@@ -217,16 +282,24 @@ const renderContextPlaceholder = (
   `;
 };
 
-export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
+export const renderComment = (
+  comment: Comment,
+  state: ReaderState,
+  repliesHtml: string = '',
+  descendantMetrics?: RenderDescendantMetrics,
+  readTrackingInputs?: RenderReadTracking
+): string => {
   const ct = getContextType(comment);
   if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml, state);
   if (ct === 'stub') return renderContextPlaceholder(comment, state, repliesHtml);
 
-  const { readState } = getReadTrackingInputs(state.isArchiveMode);
+  const { readState } = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
   // In archive mode, we ignore the local read state entirely to prevent collapsing context or greying out text
   const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
   const commentIsRead = !state.isArchiveMode && (ct === 'fetched' || isLocallyRead);
-  const unreadDescendantCount = state.isArchiveMode ? Infinity : getUnreadDescendantCount(comment._id, state, readState);
+  const unreadDescendantCount = state.isArchiveMode
+    ? Infinity
+    : (descendantMetrics?.unreadDescendantCountById.get(comment._id) ?? getUnreadDescendantCount(comment._id, state, readState));
 
   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
   // Exception: Never collapse if forceVisible is set (e.g. via Trace to Root)
@@ -293,7 +366,7 @@ export const renderComment = (comment: Comment, state: ReaderState, repliesHtml:
   if (totalChildren <= 0) {
     rDisabled = true;
     rTooltip = 'No replies to load';
-  } else if (hasAllDescendantsLoaded(comment._id, state)) {
+  } else if ((descendantMetrics?.allDescendantsLoadedById.get(comment._id) ?? hasAllDescendantsLoaded(comment._id, state))) {
     rDisabled = true;
     rTooltip = 'All replies already loaded in current feed';
   } else {

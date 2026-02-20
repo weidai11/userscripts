@@ -82,10 +82,14 @@ export const sortSearchDocs = (
       sorted.sort(compareReplyTo);
       return sorted;
     case 'relevance':
+      const precomputedScores = new Map<string, number>();
+      sorted.forEach(doc => {
+        const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;
+        precomputedScores.set(doc.id, computeRelevanceScore(signals));
+      });
+
       sorted.sort((a, b) => {
-        const aSignals = relevanceSignalsById.get(a.id) || EMPTY_SIGNALS;
-        const bSignals = relevanceSignalsById.get(b.id) || EMPTY_SIGNALS;
-        const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);
+        const scoreCmp = (precomputedScores.get(b.id) || 0) - (precomputedScores.get(a.id) || 0);
         if (scoreCmp !== 0) return scoreCmp;
 
         const dateCmp = b.postedAtMs - a.postedAtMs;

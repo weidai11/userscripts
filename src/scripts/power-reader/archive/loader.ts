@@ -32,6 +32,7 @@ const INITIAL_PAGE_SIZE = 100;
 const MIN_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 1000;
 const TARGET_FETCH_TIME_MS = 2500; // Target ~2.5s per batch
+const CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS = 2;
 const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
     allowPartialData: true,
     toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
@@ -112,6 +113,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
     archiveUsername?: string
 ): Promise<T[]> {
     let allItems: T[] = [];
+    const itemIndexById = new Map<string, number>();
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor: string | null = afterDate ? afterDate.toISOString() : null;
@@ -213,29 +215,30 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 Logger.debug(`Adaptive batching: ${key} batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
             }
 
-            allItems = [...allItems, ...results];
-
-            // Deduplicate by ID just in case
-            const uniqueItems = new Map<string, T>();
-            allItems.forEach(item => uniqueItems.set(item._id, item));
-            allItems = Array.from(uniqueItems.values());
+            for (const item of results) {
+                const existingIndex = itemIndexById.get(item._id);
+                if (existingIndex === undefined) {
+                    itemIndexById.set(item._id, allItems.length);
+                    allItems.push(item);
+                } else {
+                    // Keep latest payload for duplicate IDs without rebuilding the full collection.
+                    allItems[existingIndex] = item;
+                }
+            }
 
             if (onProgress) onProgress(allItems.length);
 
             if (hasMore) {
-                if (rawResults.length < prevLimit) {
+                // Update cursor to the timestamp of the last item in the batch.
+                // We intentionally avoid stopping early on short non-empty batches.
+                // Some partial-response paths may return fewer items than requested
+                // before the true end of collection.
+                const nextCursor = getCursorTimestampFromBatch(rawResults);
+                if (!nextCursor || nextCursor === afterCursor) {
+                    Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
                     hasMore = false;
                 } else {
-                    // Update cursor to the timestamp of the last item in the batch
-                    // The server's $gt filter ensures we don't get duplicates,
-                    // and it's safer than risking an infinite loop on identical timestamps.
-                    const nextCursor = getCursorTimestampFromBatch(rawResults);
-                    if (!nextCursor || nextCursor === afterCursor) {
-                        Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
-                        hasMore = false;
-                    } else {
-                        afterCursor = nextCursor;
-                    }
+                    afterCursor = nextCursor;
                 }
             }
         } catch (e) {
@@ -317,24 +320,45 @@ export const fetchCommentsByIds = async (commentIds: string[], username?: string
     }
 
     let networkResults: Comment[] = [];
+    const failedIds = new Set<string>();
 
     for (const chunk of chunks) {
-        try {
-            const response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
-                GET_COMMENTS_BY_IDS,
-                { commentIds: chunk },
-                ARCHIVE_PARTIAL_QUERY_OPTIONS
-            );
-            if (response.comments?.results) {
-                const valid = response.comments.results.filter(isValidArchiveItem);
-                if (valid.length !== response.comments.results.length) {
-                    Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
+        let response: { comments: { results: Comment[] } } | null = null;
+        let lastError: unknown = null;
+
+        for (let attempt = 1; attempt <= CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS; attempt++) {
+            try {
+                response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
+                    GET_COMMENTS_BY_IDS,
+                    { commentIds: chunk },
+                    ARCHIVE_PARTIAL_QUERY_OPTIONS
+                );
+                break;
+            } catch (e) {
+                lastError = e;
+                if (attempt < CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS) {
+                    Logger.warn(`Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying.`, e);
                 }
-                networkResults = [...networkResults, ...valid];
             }
-        } catch (e) {
-            Logger.error('Failed to fetch context comments chunk:', e);
         }
+
+        if (!response) {
+            chunk.forEach(id => failedIds.add(id));
+            Logger.error('Failed to fetch context comments chunk after retries:', lastError);
+            continue;
+        }
+
+        if (response.comments?.results) {
+            const valid = response.comments.results.filter(isValidArchiveItem);
+            if (valid.length !== response.comments.results.length) {
+                Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
+            }
+            networkResults = [...networkResults, ...valid];
+        }
+    }
+
+    if (failedIds.size > 0) {
+        Logger.warn(`Context fetch: ${failedIds.size} IDs failed to load after retries and were skipped.`);
     }
 
     // Persist fetched context for future sessions.

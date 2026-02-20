@@ -45,19 +45,24 @@ export const attachHotkeyListeners = (state: ReaderState, abortSignal?: AbortSig
     // Expand logic for comments too
     if (key === '+' || key === '=') {
       // Check if under mouse is a comment
-      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
-      const comment = elementUnderMouse?.closest('.pr-comment');
-      if (comment) action = 'expand';
+      if (state.lastMousePos && typeof state.lastMousePos.x === 'number') {
+        const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+        const comment = elementUnderMouse?.closest('.pr-comment');
+        if (comment) action = 'expand';
+      }
     } else if (key === '-') {
-      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
-      const comment = elementUnderMouse?.closest('.pr-comment');
-      if (comment) action = 'collapse';
+      if (state.lastMousePos && typeof state.lastMousePos.x === 'number') {
+        const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+        const comment = elementUnderMouse?.closest('.pr-comment');
+        if (comment) action = 'collapse';
+      }
     }
 
 
     if (!action) return;
 
     // Find the item under the mouse
+    if (!state.lastMousePos || typeof state.lastMousePos.x !== 'number') return;
     const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
     if (!elementUnderMouse) return;
 
@@ -77,7 +82,7 @@ export const attachHotkeyListeners = (state: ReaderState, abortSignal?: AbortSig
         // But wait, the event listener listens on [data-action].
         // We need a target that has the data-action. 
         // Use the collapse/expand toggle if available
-        button = prItem.querySelector(`.pr-collapse, .pr-expand`) as HTMLElement;
+        button = prItem.querySelector(`.pr-${action}`) as HTMLElement;
       }
 
       if (!button) {

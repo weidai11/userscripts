@@ -185,8 +185,11 @@ export const handleScrollToNextPost = (target: HTMLElement): void => {
     if (!postId) return;
     const currentPost = document.querySelector(`.pr-post[data-id="${postId}"]`);
     if (!currentPost) return;
-    const nextPost = currentPost.nextElementSibling as HTMLElement;
-    if (nextPost && nextPost.classList.contains('pr-post')) {
+    let nextPost: Element | null = currentPost.nextElementSibling;
+    while (nextPost && !nextPost.matches('.pr-post')) {
+        nextPost = nextPost.nextElementSibling;
+    }
+    if (nextPost) {
         const header = nextPost.querySelector('.pr-post-header') as HTMLElement;
         if (header) smartScrollTo(header, true);
     }

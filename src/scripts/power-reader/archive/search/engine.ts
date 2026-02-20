@@ -18,6 +18,8 @@ import type {
 } from './types';
 
 const DEFAULT_BUDGET_MS = 150;
+const BUDGET_CHECK_INTERVAL = 1024;
+const EMPTY_POSTINGS = new Uint32Array(0);
 
 const createEmptySignals = (): RelevanceSignals => ({
   tokenHits: 0,
@@ -74,7 +76,7 @@ const getTokenPostingIntersection = (
   let result: Uint32Array | null = null;
   for (const token of tokens) {
     const postings = index.get(token);
-    if (!postings) return new Uint32Array(0);
+    if (!postings) return EMPTY_POSTINGS;
 
     if (result === null) {
       result = postings;
@@ -112,6 +114,7 @@ const tryApplyAppendOnlyPatch = (
     }
   }
 
+  if (upserts.length === 0) return true;
   appendItemsToCorpusIndex(index, source, upserts);
   return true;
 };
@@ -199,6 +202,8 @@ const executeAgainstCorpus = (
   const deferredStageAClauses: SearchClause[] = [];
 
   const budgetExceeded = (): boolean => budgetMs > 0 && (Date.now() - startMs) > budgetMs;
+  const shouldCheckBudget = (iteration: number): boolean =>
+    (iteration & (BUDGET_CHECK_INTERVAL - 1)) === 0 && budgetExceeded();
 
   let candidateOrdinals: Uint32Array | null = null;
 
@@ -217,7 +222,7 @@ const executeAgainstCorpus = (
         if (termTokens.length === 0) {
           const results: number[] = [];
           for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-            if (budgetExceeded()) {
+            if (shouldCheckBudget(ordinal)) {
               partialResults = true;
               break;
             }
@@ -295,7 +300,7 @@ const executeAgainstCorpus = (
         const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;
 
         for (let i = 0; i < scanLimit; i++) {
-          if (budgetExceeded()) {
+          if (shouldCheckBudget(i)) {
             partialResults = true;
             break;
           }
@@ -338,7 +343,7 @@ const executeAgainstCorpus = (
       const filtered: number[] = [];
       let clauseComplete = true;
       for (let i = 0; i < candidateOrdinals.length; i++) {
-        if (budgetExceeded()) {
+        if (shouldCheckBudget(i)) {
           partialResults = true;
           clauseComplete = false;
           break;
@@ -365,7 +370,7 @@ const executeAgainstCorpus = (
   if (hasPositiveContent && candidateOrdinals) {
     stageBApplied = true;
     for (let i = 0; i < candidateOrdinals.length; i++) {
-      if (budgetExceeded()) {
+      if (shouldCheckBudget(i)) {
         partialResults = true;
         break;
       }
@@ -403,7 +408,7 @@ const executeAgainstCorpus = (
     // Phrase-only/regex-only paths still need stage-B matching against full corpus.
     stageBApplied = true;
     for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-      if (budgetExceeded()) {
+      if (shouldCheckBudget(ordinal)) {
         partialResults = true;
         break;
       }
@@ -449,7 +454,7 @@ const executeAgainstCorpus = (
   if (plan.negations.length > 0) {
     const filtered: number[] = [];
     for (let i = 0; i < finalOrdinals.length; i++) {
-      if (budgetExceeded()) {
+      if (shouldCheckBudget(i)) {
         partialResults = true;
         break;
       }

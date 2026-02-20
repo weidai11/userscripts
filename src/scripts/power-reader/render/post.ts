@@ -5,9 +5,9 @@
 
 import type { Comment, Post, NamesAttachedReactionsScore } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
-import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
+import { isRead, getReadTrackingInputs } from '../utils/storage';
 import { renderPostHeader, escapeHtml } from '../utils/rendering';
-import { renderCommentTree } from './comment';
+import { buildRenderDescendantMetrics, renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
 import { Logger } from '../utils/logger';
 import { renderPostBody as renderSharedPostBody } from './components/body';
@@ -141,29 +141,36 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
   };
 
-  rootComments.forEach((c: any) => {
+  const treeKarmaCache = new Map<string, number>();
+  const treeKarmaById = new Map<string, number>();
+  rootComments.forEach(c => {
     const isItemRead = !state.isArchiveMode && (readState[c._id] === 1 || isImplicitlyRead(c));
-    c.treeKarma = calculateTreeKarma(
+    const treeKarma = calculateTreeKarma(
       c._id,
       c.baseScore || 0,
       isItemRead,
       visibleChildrenByParentId.get(c._id) || [],
       readState,
       visibleChildrenByParentId,
-      cutoff
+      cutoff,
+      treeKarmaCache
     );
+    treeKarmaById.set(c._id, treeKarma);
   });
 
   // Sort root comments by Tree-Karma descending, then by date descending
   rootComments.sort((a, b) => {
-    const tkA = (a as any).treeKarma || -Infinity;
-    const tkB = (b as any).treeKarma || -Infinity;
+    const tkA = treeKarmaById.get(a._id) ?? -Infinity;
+    const tkB = treeKarmaById.get(b._id) ?? -Infinity;
     if (tkA !== tkB) return tkB - tkA;
     return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
   });
 
+  const descendantMetrics = buildRenderDescendantMetrics(state, commentSet, readState, !state.isArchiveMode);
+  const readTracking = { readState, cutoff };
+
   const commentsHtml = rootComments.map(c =>
-    renderCommentTree(c, state, commentsWithPlaceholders, commentSet, visibleChildrenByParentId)
+    renderCommentTree(c, state, commentsWithPlaceholders, commentSet, visibleChildrenByParentId, descendantMetrics, readTracking, treeKarmaCache)
   ).join('');
 
   const isFullPost = !!(group.fullPost && group.fullPost.htmlBody);

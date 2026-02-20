@@ -406,11 +406,13 @@ return { data: {} };
     await expect(parentComment).toBeVisible();
     await expect(parentComment).toContainText('Eagerly Loaded Parent Body');
 
-    // Card view should also use the eagerly loaded parent body, not a stub placeholder.
+    // [PR-UARCH-29] Card view MUST render contextual parents as header-only stubs (placeholders)
+    // even if the body is eagerly loaded and available in cache.
     await selectArchiveView(page, 'card');
     const cardParentComment = page.locator('.pr-comment[data-id="c-parent"]');
-    await expect(cardParentComment).toContainText('Eagerly Loaded Parent Body');
-    await expect(cardParentComment).not.toHaveClass(/pr-context-placeholder/);
+    await expect(cardParentComment).toBeVisible();
+    await expect(cardParentComment).toHaveClass(/pr-context-placeholder/);
+    await expect(cardParentComment).not.toContainText('Eagerly Loaded Parent Body');
 
     // Verify that GetCommentsByIds was NOT called because it was cached
     const wasCalled = await page.evaluate(() => window.__GET_COMMENTS_BY_IDS_CALLED === true);
@@ -2333,6 +2335,7 @@ return { data: {} };
     await expect(page.locator('.pr-comment[data-id="c-child"]')).toBeVisible();
 
     // Step 2: Switch to Card View - context parent should render above child (nested)
+    // [PR-UARCH-29] Parent context in card view is header-only (pr-context-placeholder)
     await selectArchiveView(page, 'card');
 
     // Wait for card view to render
@@ -2340,7 +2343,8 @@ return { data: {} };
 
     const parentInCard = page.locator('.pr-archive-item .pr-comment[data-id="c-parent"]');
     await expect(parentInCard).toBeVisible();
-    await expect(parentInCard).toContainText('Parent context comment by other user');
+    await expect(parentInCard).toHaveClass(/pr-context-placeholder/);
+    await expect(parentInCard).not.toContainText('Parent context comment by other user');
     await expect(parentInCard.locator('.pr-replies .pr-comment[data-id="c-child"]')).toHaveCount(1);
 
     // Step 3: Switch to Index View - context should also NOT appear here

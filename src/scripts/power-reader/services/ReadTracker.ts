@@ -210,9 +210,10 @@ export class ReadTracker {
 
                 const postedAt = dateByItemId.get(id);
                 // remove if: 
-                // 1. Not in current batch AND we don't know its date (likely an orphan from previous session)
-                // 2. OR its date is strictly older than the PREVIOUS loadFrom
-                if (!postedAt || new Date(postedAt).getTime() < cleanupCutoffTime) {
+                // 1. its date is strictly older than the PREVIOUS loadFrom
+                // 2. OR it is unknown (orphan from a previous session that is not in the current batch)
+                const itemTime = postedAt ? new Date(postedAt).getTime() : 0;
+                if (!postedAt || itemTime < cleanupCutoffTime) {
                     delete readState[id];
                     removedCount++;
                 }

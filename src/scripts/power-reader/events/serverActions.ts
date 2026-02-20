@@ -48,6 +48,26 @@ import {
 
 import { getUIHost } from '../render/uiHost';
 
+const findHighestKnownAncestorId = (commentId: string, state: ReaderState): string | null => {
+    let current = state.commentById.get(commentId);
+    if (!current) return null;
+
+    let highestKnownId = current._id;
+    const visited = new Set<string>();
+
+    while (current.parentCommentId) {
+        if (visited.has(current._id)) break;
+        visited.add(current._id);
+
+        const parent = state.commentById.get(current.parentCommentId);
+        if (!parent) break;
+        highestKnownId = parent._id;
+        current = parent;
+    }
+
+    return highestKnownId;
+};
+
 /**
  * Handle expanding a read placeholder comment
  */
@@ -469,7 +489,7 @@ export const handleLoadThread = async (target: HTMLElement, state: ReaderState):
     }
 
     if (!topLevelId) {
-        topLevelId = commentId;
+        topLevelId = findHighestKnownAncestorId(commentId, state) || commentId;
     }
 
     const originalText = target.textContent;
@@ -600,7 +620,7 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
             topLevelId = findTopLevelAncestorId(commentId, state);
         }
 
-        if (!topLevelId) topLevelId = commentId;
+        if (!topLevelId) topLevelId = findHighestKnownAncestorId(commentId, state) || commentId;
 
         const res = await queryGraphQL<GetThreadCommentsQuery, GetThreadCommentsQueryVariables>(GET_THREAD_COMMENTS, {
             topLevelCommentId: topLevelId,
@@ -610,12 +630,34 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
 
         const added = getUIHost().mergeComments(fetchedComments, true);
 
-        // Update all comments (newly added and existing) in state to ensure they are visible
+        // Only reveal the requested comment and its descendants; do not uncollapse unrelated sibling subtrees.
+        const fetchedById = new Map<string, Comment>();
+        fetchedComments.forEach(c => fetchedById.set(c._id, c));
+        const resolveComment = (id: string): Comment | undefined =>
+            state.commentById.get(id) || fetchedById.get(id);
+        const isTargetSubtreeComment = (id: string): boolean => {
+            if (id === commentId) return true;
+
+            let current = resolveComment(id);
+            const visited = new Set<string>();
+            while (current?.parentCommentId) {
+                if (visited.has(current._id)) break;
+                visited.add(current._id);
+
+                if (current.parentCommentId === commentId) return true;
+                current = resolveComment(current.parentCommentId);
+            }
+            return false;
+        };
+
+        const revealedIds: string[] = [];
         fetchedComments.forEach((c) => {
+            if (!isTargetSubtreeComment(c._id)) return;
             const inState = state.commentById.get(c._id);
             if (inState) {
                 (inState as any).forceVisible = true;
                 (inState as any).justRevealed = true;
+                revealedIds.push(inState._id);
             }
         });
 
@@ -625,9 +667,11 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
         }
 
         setTimeout(() => {
-            fetchedComments.forEach((c) => {
-                const inState = state.commentById.get(c._id);
-                if (inState) (inState as any).justRevealed = false;
+            revealedIds.forEach((id) => {
+                const inState = state.commentById.get(id);
+                if (inState) {
+                    (inState as any).justRevealed = false;
+                }
             });
         }, 2000);
     } catch (err) {

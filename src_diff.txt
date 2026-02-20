@@ -1,0 +1,1192 @@
+﻿diff --git a/src/scripts/power-reader/archive/loader.ts b/src/scripts/power-reader/archive/loader.ts
+index 963c9c623e..d272529a59 100644
+--- a/src/scripts/power-reader/archive/loader.ts
++++ b/src/scripts/power-reader/archive/loader.ts
+@@ -31,8 +31,9 @@
+ const INITIAL_PAGE_SIZE = 100;
+ const MIN_PAGE_SIZE = 50;
+ const MAX_PAGE_SIZE = 1000;
+-const TARGET_FETCH_TIME_MS = 2500; // Target ~2.5s per batch
+-const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
++const TARGET_FETCH_TIME_MS = 2500; // Target ~2.5s per batch
++const CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS = 2;
++const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
+     allowPartialData: true,
+     toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
+     operationName: 'archive-sync'
+@@ -112,6 +113,7 @@
+     archiveUsername?: string
+ ): Promise<T[]> {
+     let allItems: T[] = [];
++    const itemIndexById = new Map<string, number>();
+     let hasMore = true;
+     let currentLimit = INITIAL_PAGE_SIZE;
+     let afterCursor: string | null = afterDate ? afterDate.toISOString() : null;
+@@ -213,32 +215,33 @@
+                 Logger.debug(`Adaptive batching: ${key} batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
+             }
+ 
+-            allItems = [...allItems, ...results];
+-
+-            // Deduplicate by ID just in case
+-            const uniqueItems = new Map<string, T>();
+-            allItems.forEach(item => uniqueItems.set(item._id, item));
+-            allItems = Array.from(uniqueItems.values());
+-
+-            if (onProgress) onProgress(allItems.length);
+-
+-            if (hasMore) {
+-                if (rawResults.length < prevLimit) {
+-                    hasMore = false;
+-                } else {
+-                    // Update cursor to the timestamp of the last item in the batch
+-                    // The server's $gt filter ensures we don't get duplicates,
+-                    // and it's safer than risking an infinite loop on identical timestamps.
+-                    const nextCursor = getCursorTimestampFromBatch(rawResults);
+-                    if (!nextCursor || nextCursor === afterCursor) {
+-                        Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
+-                        hasMore = false;
+-                    } else {
+-                        afterCursor = nextCursor;
+-                    }
+-                }
+-            }
+-        } catch (e) {
++            for (const item of results) {
++                const existingIndex = itemIndexById.get(item._id);
++                if (existingIndex === undefined) {
++                    itemIndexById.set(item._id, allItems.length);
++                    allItems.push(item);
++                } else {
++                    // Keep latest payload for duplicate IDs without rebuilding the full collection.
++                    allItems[existingIndex] = item;
++                }
++            }
++
++            if (onProgress) onProgress(allItems.length);
++
++            if (hasMore) {
++                // Update cursor to the timestamp of the last item in the batch.
++                // We intentionally avoid stopping early on short non-empty batches.
++                // Some partial-response paths may return fewer items than requested
++                // before the true end of collection.
++                const nextCursor = getCursorTimestampFromBatch(rawResults);
++                if (!nextCursor || nextCursor === afterCursor) {
++                    Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
++                    hasMore = false;
++                } else {
++                    afterCursor = nextCursor;
++                }
++            }
++        } catch (e) {
+             Logger.error(`Error fetching ${key} with cursor ${afterCursor}:`, e);
+             throw e;
+         }
+@@ -316,26 +319,47 @@
+         chunks.push(missingIds.slice(i, i + 50));
+     }
+ 
+-    let networkResults: Comment[] = [];
+-
+-    for (const chunk of chunks) {
+-        try {
+-            const response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
+-                GET_COMMENTS_BY_IDS,
+-                { commentIds: chunk },
+-                ARCHIVE_PARTIAL_QUERY_OPTIONS
+-            );
+-            if (response.comments?.results) {
+-                const valid = response.comments.results.filter(isValidArchiveItem);
+-                if (valid.length !== response.comments.results.length) {
+-                    Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
+-                }
+-                networkResults = [...networkResults, ...valid];
+-            }
+-        } catch (e) {
+-            Logger.error('Failed to fetch context comments chunk:', e);
+-        }
+-    }
++    let networkResults: Comment[] = [];
++    const failedIds = new Set<string>();
++
++    for (const chunk of chunks) {
++        let response: { comments: { results: Comment[] } } | null = null;
++        let lastError: unknown = null;
++
++        for (let attempt = 1; attempt <= CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS; attempt++) {
++            try {
++                response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
++                    GET_COMMENTS_BY_IDS,
++                    { commentIds: chunk },
++                    ARCHIVE_PARTIAL_QUERY_OPTIONS
++                );
++                break;
++            } catch (e) {
++                lastError = e;
++                if (attempt < CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS) {
++                    Logger.warn(`Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying.`, e);
++                }
++            }
++        }
++
++        if (!response) {
++            chunk.forEach(id => failedIds.add(id));
++            Logger.error('Failed to fetch context comments chunk after retries:', lastError);
++            continue;
++        }
++
++        if (response.comments?.results) {
++            const valid = response.comments.results.filter(isValidArchiveItem);
++            if (valid.length !== response.comments.results.length) {
++                Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
++            }
++            networkResults = [...networkResults, ...valid];
++        }
++    }
++
++    if (failedIds.size > 0) {
++        Logger.warn(`Context fetch: ${failedIds.size} IDs failed to load after retries and were skipped.`);
++    }
+ 
+     // Persist fetched context for future sessions.
+     if (username && networkResults.length > 0) {
+diff --git a/src/scripts/power-reader/archive/search/engine.ts b/src/scripts/power-reader/archive/search/engine.ts
+index 4690fc6ece..3447c41f00 100644
+--- a/src/scripts/power-reader/archive/search/engine.ts
++++ b/src/scripts/power-reader/archive/search/engine.ts
+@@ -18,6 +18,8 @@
+ } from './types';
+ 
+ const DEFAULT_BUDGET_MS = 150;
++const BUDGET_CHECK_INTERVAL = 1024;
++const EMPTY_POSTINGS = new Uint32Array(0);
+ 
+ const createEmptySignals = (): RelevanceSignals => ({
+   tokenHits: 0,
+@@ -74,7 +76,7 @@
+   let result: Uint32Array | null = null;
+   for (const token of tokens) {
+     const postings = index.get(token);
+-    if (!postings) return new Uint32Array(0);
++    if (!postings) return EMPTY_POSTINGS;
+ 
+     if (result === null) {
+       result = postings;
+@@ -112,6 +114,7 @@
+     }
+   }
+ 
++  if (upserts.length === 0) return true;
+   appendItemsToCorpusIndex(index, source, upserts);
+   return true;
+ };
+@@ -199,6 +202,8 @@
+   const deferredStageAClauses: SearchClause[] = [];
+ 
+   const budgetExceeded = (): boolean => budgetMs > 0 && (Date.now() - startMs) > budgetMs;
++  const shouldCheckBudget = (iteration: number): boolean =>
++    (iteration & (BUDGET_CHECK_INTERVAL - 1)) === 0 && budgetExceeded();
+ 
+   let candidateOrdinals: Uint32Array | null = null;
+ 
+@@ -217,7 +222,7 @@
+         if (termTokens.length === 0) {
+           const results: number[] = [];
+           for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+-            if (budgetExceeded()) {
++            if (shouldCheckBudget(ordinal)) {
+               partialResults = true;
+               break;
+             }
+@@ -295,7 +300,7 @@
+         const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;
+ 
+         for (let i = 0; i < scanLimit; i++) {
+-          if (budgetExceeded()) {
++          if (shouldCheckBudget(i)) {
+             partialResults = true;
+             break;
+           }
+@@ -338,7 +343,7 @@
+       const filtered: number[] = [];
+       let clauseComplete = true;
+       for (let i = 0; i < candidateOrdinals.length; i++) {
+-        if (budgetExceeded()) {
++        if (shouldCheckBudget(i)) {
+           partialResults = true;
+           clauseComplete = false;
+           break;
+@@ -365,7 +370,7 @@
+   if (hasPositiveContent && candidateOrdinals) {
+     stageBApplied = true;
+     for (let i = 0; i < candidateOrdinals.length; i++) {
+-      if (budgetExceeded()) {
++      if (shouldCheckBudget(i)) {
+         partialResults = true;
+         break;
+       }
+@@ -403,7 +408,7 @@
+     // Phrase-only/regex-only paths still need stage-B matching against full corpus.
+     stageBApplied = true;
+     for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+-      if (budgetExceeded()) {
++      if (shouldCheckBudget(ordinal)) {
+         partialResults = true;
+         break;
+       }
+@@ -449,7 +454,7 @@
+   if (plan.negations.length > 0) {
+     const filtered: number[] = [];
+     for (let i = 0; i < finalOrdinals.length; i++) {
+-      if (budgetExceeded()) {
++      if (shouldCheckBudget(i)) {
+         partialResults = true;
+         break;
+       }
+diff --git a/src/scripts/power-reader/archive/search/ranker.ts b/src/scripts/power-reader/archive/search/ranker.ts
+index a008b3079a..8cf9819727 100644
+--- a/src/scripts/power-reader/archive/search/ranker.ts
++++ b/src/scripts/power-reader/archive/search/ranker.ts
+@@ -82,10 +82,14 @@
+       sorted.sort(compareReplyTo);
+       return sorted;
+     case 'relevance':
++      const precomputedScores = new Map<string, number>();
++      sorted.forEach(doc => {
++        const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;
++        precomputedScores.set(doc.id, computeRelevanceScore(signals));
++      });
++
+       sorted.sort((a, b) => {
+-        const aSignals = relevanceSignalsById.get(a.id) || EMPTY_SIGNALS;
+-        const bSignals = relevanceSignalsById.get(b.id) || EMPTY_SIGNALS;
+-        const scoreCmp = computeRelevanceScore(bSignals) - computeRelevanceScore(aSignals);
++        const scoreCmp = (precomputedScores.get(b.id) || 0) - (precomputedScores.get(a.id) || 0);
+         if (scoreCmp !== 0) return scoreCmp;
+ 
+         const dateCmp = b.postedAtMs - a.postedAtMs;
+diff --git a/src/scripts/power-reader/archive/search/worker.ts b/src/scripts/power-reader/archive/search/worker.ts
+index 0f232f84d2..3b6e922ede 100644
+--- a/src/scripts/power-reader/archive/search/worker.ts
++++ b/src/scripts/power-reader/archive/search/worker.ts
+@@ -33,7 +33,15 @@
+     for (const [key, ts] of cancelledRequests) {
+       if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);
+     }
+-    if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();
++    if (cancelledRequests.size > CANCEL_MAX) {
++      const newestFirst = Array.from(cancelledRequests.entries())
++        .sort((a, b) => b[1] - a[1])
++        .slice(0, CANCEL_MAX);
++      cancelledRequests.clear();
++      for (const [key, ts] of newestFirst) {
++        cancelledRequests.set(key, ts);
++      }
++    }
+   }
+ };
+ 
+@@ -46,6 +54,8 @@
+ 
+ let authoredItems: ArchiveItem[] = [];
+ let contextItems: ArchiveItem[] = [];
++let authoredItemsById = new Map<string, ArchiveItem>();
++let contextItemsById = new Map<string, ArchiveItem>();
+ 
+ const post = (message: SearchWorkerResponse): void => {
+   self.postMessage(message);
+@@ -66,20 +76,33 @@
+ const setCorpusItems = (source: ArchiveCorpusName, items: ArchiveItem[]): void => {
+   if (source === 'authored') {
+     authoredItems = items;
++    authoredItemsById = new Map<string, ArchiveItem>();
++    for (const item of items) authoredItemsById.set(item._id, item);
+     runtime.setAuthoredItems(authoredItems, indexVersion);
+     return;
+   }
+   contextItems = items;
++  contextItemsById = new Map<string, ArchiveItem>();
++  for (const item of items) contextItemsById.set(item._id, item);
+   runtime.setContextItems(contextItems);
+ };
+ 
+ const applyPatch = (source: ArchiveCorpusName, upserts: ArchiveItem[], deletes: string[]): void => {
+-  const base = source === 'authored' ? authoredItems : contextItems;
+-  const byId = new Map<string, ArchiveItem>();
+-  for (const item of base) byId.set(item._id, item);
++  if (upserts.length === 0 && deletes.length === 0) return;
++
++  const byId = source === 'authored' ? authoredItemsById : contextItemsById;
+   for (const id of deletes) byId.delete(id);
+   for (const item of upserts) byId.set(item._id, item);
+-  setCorpusItems(source, Array.from(byId.values()));
++
++  const nextItems = Array.from(byId.values());
++  if (source === 'authored') {
++    authoredItems = nextItems;
++    runtime.setAuthoredItems(authoredItems, indexVersion);
++    return;
++  }
++
++  contextItems = nextItems;
++  runtime.setContextItems(contextItems);
+ };
+ 
+ const handleFullStart = (message: Extract<SearchWorkerRequest, { kind: 'index.full.start' }>): void => {
+diff --git a/src/scripts/power-reader/archive/storage.ts b/src/scripts/power-reader/archive/storage.ts
+index b1f086fb53..bc542a173e 100644
+--- a/src/scripts/power-reader/archive/storage.ts
++++ b/src/scripts/power-reader/archive/storage.ts
+@@ -69,7 +69,7 @@
+   const existingBody = (existing as any).htmlBody;
+   const incomingBody = (incoming as any).htmlBody;
+   if ((typeof existingBody === 'string' && existingBody.trim().length > 0) &&
+-      (!incomingBody || (typeof incomingBody === 'string' && incomingBody.trim().length === 0))) {
++    (!incomingBody || (typeof incomingBody === 'string' && incomingBody.trim().length === 0))) {
+     merged.htmlBody = existingBody;
+   }
+ 
+@@ -238,10 +238,17 @@
+   const store = tx.objectStore(STORE_CONTEXTUAL);
+   const now = Date.now();
+ 
+-  for (const item of dedupeById(items)) {
++  const uniqueItems = dedupeById(items);
++
++  const getPromises = uniqueItems.map(item => {
+     const key = contextCacheKey(username, itemType, item._id);
+-    const existing = await requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>);
+-
++    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
++      .then(existing => ({ item, key, existing }));
++  });
++
++  const results = await Promise.all(getPromises);
++
++  for (const { item, key, existing } of results) {
+     const payload = existing
+       ? mergeContextPayload(existing.payload as any, item as any)
+       : item;
+@@ -301,9 +308,15 @@
+   const comments: Comment[] = [];
+   const missingIds: string[] = [];
+ 
+-  for (const id of ids) {
++  const getPromises = ids.map(id => {
+     const key = contextCacheKey(username, 'comment', id);
+-    const entry = await requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>);
++    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
++      .then(entry => ({ id, entry }));
++  });
++
++  const results = await Promise.all(getPromises);
++
++  for (const { id, entry } of results) {
+     const isExpired = !!entry && (now - entry.updatedAt > CONTEXT_MAX_AGE_MS);
+ 
+     if (!entry || entry.itemType !== 'comment' || isExpired) {
+diff --git a/src/scripts/power-reader/archive/uiHost.ts b/src/scripts/power-reader/archive/uiHost.ts
+index a9c1c1e27b..c888c06487 100644
+--- a/src/scripts/power-reader/archive/uiHost.ts
++++ b/src/scripts/power-reader/archive/uiHost.ts
+@@ -15,6 +15,7 @@
+ export class ArchiveUIHost implements UIHost {
+     private archiveState: ArchiveState;
+     private readerState: ReaderState;
++    private canonicalItemIndexById = new Map<string, number>();
+     private feedContainer: HTMLElement | null = null;
+     private renderCallback: (() => void | Promise<void>) | null = null;
+     private searchStateRevision = 0;
+@@ -24,6 +25,7 @@
+         this.archiveState = archiveState;
+         this.feedContainer = feedContainer;
+         this.renderCallback = renderCallback || null;
++        this.rebuildCanonicalItemIndex();
+         this.readerState = this.syncReaderState();
+     }
+ 
+@@ -68,9 +70,16 @@
+       this.searchStateRevision += 1;
+     }
+ 
+-    private bumpCanonicalStateRevision(): void {
++  private bumpCanonicalStateRevision(): void {
+       this.canonicalStateRevision += 1;
+     }
++
++  private rebuildCanonicalItemIndex(): void {
++    this.canonicalItemIndexById.clear();
++    this.archiveState.items.forEach((item, index) => {
++      this.canonicalItemIndexById.set(item._id, index);
++    });
++  }
+ 
+     /**
+      * Update the container reference if it changes (e.g. after re-render of parent)
+@@ -85,22 +94,32 @@
+    */
+   private syncItemToCanonical(item: Post | Comment): void {
+     const id = item._id;
+-
+-    // Check if item already exists to avoid O(N) findIndex search
+-    const exists = this.archiveState.itemById.has(id);
+-
+-    // Update ArchiveState.itemById (upsert)
+-    this.archiveState.itemById.set(id, item);
+-
+-    if (exists) {
+-        // Only perform O(N) scan if we know we need to replace an existing reference
+-        const existingIndex = this.archiveState.items.findIndex(i => i._id === id);
+-        if (existingIndex >= 0) {
+-            this.archiveState.items[existingIndex] = item;
+-        }
++
++    // Check if item already exists to avoid O(N) findIndex search
++    const exists = this.archiveState.itemById.has(id);
++
++    // Update ArchiveState.itemById (upsert)
++    this.archiveState.itemById.set(id, item);
++
++    if (exists) {
++        const existingIndex = this.canonicalItemIndexById.get(id);
++        if (existingIndex !== undefined) {
++            this.archiveState.items[existingIndex] = item;
++        } else {
++            // Repair stale index map without paying O(N) on every merge.
++            this.rebuildCanonicalItemIndex();
++            const repairedIndex = this.canonicalItemIndexById.get(id);
++            if (repairedIndex !== undefined) {
++              this.archiveState.items[repairedIndex] = item;
++            } else {
++              this.archiveState.items.push(item);
++              this.canonicalItemIndexById.set(id, this.archiveState.items.length - 1);
++            }
++        }
+     } else {
+         // Fast path for new items
+         this.archiveState.items.push(item);
++        this.canonicalItemIndexById.set(id, this.archiveState.items.length - 1);
+     }
+ 
+     this.bumpCanonicalStateRevision();
+@@ -113,6 +132,7 @@
+     this.archiveState.items.sort((a, b) => {
+       return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
+     });
++    this.rebuildCanonicalItemIndex();
+   }
+ 
+   private upsertReaderComment(comment: Comment): void {
+diff --git a/src/scripts/power-reader/events/domActions.ts b/src/scripts/power-reader/events/domActions.ts
+index 5430c070c7..df6b643c8c 100644
+--- a/src/scripts/power-reader/events/domActions.ts
++++ b/src/scripts/power-reader/events/domActions.ts
+@@ -180,17 +180,20 @@
+ /**
+  * Handle scroll to next post
+  */
+-export const handleScrollToNextPost = (target: HTMLElement): void => {
+-    const postId = getPostIdFromTarget(target);
+-    if (!postId) return;
+-    const currentPost = document.querySelector(`.pr-post[data-id="${postId}"]`);
+-    if (!currentPost) return;
+-    const nextPost = currentPost.nextElementSibling as HTMLElement;
+-    if (nextPost && nextPost.classList.contains('pr-post')) {
+-        const header = nextPost.querySelector('.pr-post-header') as HTMLElement;
+-        if (header) smartScrollTo(header, true);
+-    }
+-};
++export const handleScrollToNextPost = (target: HTMLElement): void => {
++    const postId = getPostIdFromTarget(target);
++    if (!postId) return;
++    const currentPost = document.querySelector(`.pr-post[data-id="${postId}"]`);
++    if (!currentPost) return;
++    let nextPost: Element | null = currentPost.nextElementSibling;
++    while (nextPost && !(nextPost as HTMLElement).classList.contains('pr-post')) {
++        nextPost = nextPost.nextElementSibling;
++    }
++    if (nextPost) {
++        const header = nextPost.querySelector('.pr-post-header') as HTMLElement;
++        if (header) smartScrollTo(header, true);
++    }
++};
+ 
+ /**
+  * Handle scroll to post top (header)
+diff --git a/src/scripts/power-reader/events/hotkeys.ts b/src/scripts/power-reader/events/hotkeys.ts
+index 16dc3836b6..1d05d54325 100644
+--- a/src/scripts/power-reader/events/hotkeys.ts
++++ b/src/scripts/power-reader/events/hotkeys.ts
+@@ -45,19 +45,24 @@
+     // Expand logic for comments too
+     if (key === '+' || key === '=') {
+       // Check if under mouse is a comment
+-      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+-      const comment = elementUnderMouse?.closest('.pr-comment');
+-      if (comment) action = 'expand';
++      if (state.lastMousePos && typeof state.lastMousePos.x === 'number') {
++        const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
++        const comment = elementUnderMouse?.closest('.pr-comment');
++        if (comment) action = 'expand';
++      }
+     } else if (key === '-') {
+-      const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+-      const comment = elementUnderMouse?.closest('.pr-comment');
+-      if (comment) action = 'collapse';
++      if (state.lastMousePos && typeof state.lastMousePos.x === 'number') {
++        const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
++        const comment = elementUnderMouse?.closest('.pr-comment');
++        if (comment) action = 'collapse';
++      }
+     }
+ 
+ 
+     if (!action) return;
+ 
+     // Find the item under the mouse
++    if (!state.lastMousePos || typeof state.lastMousePos.x !== 'number') return;
+     const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
+     if (!elementUnderMouse) return;
+ 
+@@ -77,7 +82,7 @@
+         // But wait, the event listener listens on [data-action].
+         // We need a target that has the data-action. 
+         // Use the collapse/expand toggle if available
+-        button = prItem.querySelector(`.pr-collapse, .pr-expand`) as HTMLElement;
++        button = prItem.querySelector(`.pr-${action}`) as HTMLElement;
+       }
+ 
+       if (!button) {
+diff --git a/src/scripts/power-reader/events/serverActions.ts b/src/scripts/power-reader/events/serverActions.ts
+index b12d3aab45..f673a4246e 100644
+--- a/src/scripts/power-reader/events/serverActions.ts
++++ b/src/scripts/power-reader/events/serverActions.ts
+@@ -46,12 +46,32 @@
+     markAncestorChainForceVisible,
+ } from './stateOps';
+ 
+-import { getUIHost } from '../render/uiHost';
+-
+-/**
+- * Handle expanding a read placeholder comment
+- */
+-export const handleExpandPlaceholder = (target: HTMLElement, state: ReaderState): void => {
++import { getUIHost } from '../render/uiHost';
++
++const findHighestKnownAncestorId = (commentId: string, state: ReaderState): string | null => {
++    let current = state.commentById.get(commentId);
++    if (!current) return null;
++
++    let highestKnownId = current._id;
++    const visited = new Set<string>();
++
++    while (current.parentCommentId) {
++        if (visited.has(current._id)) break;
++        visited.add(current._id);
++
++        const parent = state.commentById.get(current.parentCommentId);
++        if (!parent) break;
++        highestKnownId = parent._id;
++        current = parent;
++    }
++
++    return highestKnownId;
++};
++
++/**
++ * Handle expanding a read placeholder comment
++ */
++export const handleExpandPlaceholder = (target: HTMLElement, state: ReaderState): void => {
+     const commentEl = target.closest('.pr-comment') as HTMLElement;
+     if (!commentEl) return;
+ 
+@@ -468,9 +488,9 @@
+         }
+     }
+ 
+-    if (!topLevelId) {
+-        topLevelId = commentId;
+-    }
++    if (!topLevelId) {
++        topLevelId = findHighestKnownAncestorId(commentId, state) || commentId;
++    }
+ 
+     const originalText = target.textContent;
+     target.textContent = '[...]';
+@@ -600,7 +620,7 @@
+             topLevelId = findTopLevelAncestorId(commentId, state);
+         }
+ 
+-        if (!topLevelId) topLevelId = commentId;
++        if (!topLevelId) topLevelId = findHighestKnownAncestorId(commentId, state) || commentId;
+ 
+         const res = await queryGraphQL<GetThreadCommentsQuery, GetThreadCommentsQueryVariables>(GET_THREAD_COMMENTS, {
+             topLevelCommentId: topLevelId,
+@@ -610,26 +630,50 @@
+ 
+         const added = getUIHost().mergeComments(fetchedComments, true);
+ 
+-        // Update all comments (newly added and existing) in state to ensure they are visible
+-        fetchedComments.forEach((c) => {
+-            const inState = state.commentById.get(c._id);
+-            if (inState) {
+-                (inState as any).forceVisible = true;
+-                (inState as any).justRevealed = true;
+-            }
+-        });
++        // Only reveal the requested comment and its descendants; do not uncollapse unrelated sibling subtrees.
++        const fetchedById = new Map<string, Comment>();
++        fetchedComments.forEach(c => fetchedById.set(c._id, c));
++        const resolveComment = (id: string): Comment | undefined =>
++            state.commentById.get(id) || fetchedById.get(id);
++        const isTargetSubtreeComment = (id: string): boolean => {
++            if (id === commentId) return true;
++
++            let current = resolveComment(id);
++            const visited = new Set<string>();
++            while (current?.parentCommentId) {
++                if (visited.has(current._id)) break;
++                visited.add(current._id);
++
++                if (current.parentCommentId === commentId) return true;
++                current = resolveComment(current.parentCommentId);
++            }
++            return false;
++        };
++
++        const revealedIds: string[] = [];
++        fetchedComments.forEach((c) => {
++            if (!isTargetSubtreeComment(c._id)) return;
++            const inState = state.commentById.get(c._id);
++            if (inState) {
++                (inState as any).forceVisible = true;
++                (inState as any).justRevealed = true;
++                revealedIds.push(inState._id);
++            }
++        });
+ 
+         Logger.info(`Load descendants for ${commentId}: ${fetchedComments.length} fetched, ${added} new`);
+         if ((added > 0 || fetchedComments.length > 0) && comment.postId) {
+             getUIHost().rerenderPostGroup(comment.postId, commentId);
+         }
+ 
+-        setTimeout(() => {
+-            fetchedComments.forEach((c) => {
+-                const inState = state.commentById.get(c._id);
+-                if (inState) (inState as any).justRevealed = false;
+-            });
+-        }, 2000);
++        setTimeout(() => {
++            revealedIds.forEach((id) => {
++                const inState = state.commentById.get(id);
++                if (inState) {
++                    (inState as any).justRevealed = false;
++                }
++            });
++        }, 2000);
+     } catch (err) {
+         Logger.error('Failed to load descendants', err);
+     } finally {
+diff --git a/src/scripts/power-reader/render/comment.ts b/src/scripts/power-reader/render/comment.ts
+index d3e196f9f9..b84c77eba2 100644
+--- a/src/scripts/power-reader/render/comment.ts
++++ b/src/scripts/power-reader/render/comment.ts
+@@ -7,83 +7,12 @@
+ import type { ReaderState } from '../state';
+ import { CONFIG } from '../config';
+ import { getScoreColor, getRecencyColor } from '../utils/colors';
+-import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
++import { isRead, getReadTrackingInputs } from '../utils/storage';
+ import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
+ import { escapeHtml } from '../utils/rendering';
+-import { sanitizeHtml } from '../utils/sanitize';
+ import { renderMetadata } from './components/metadata';
+-import { renderBody } from './components/body';
+-
+-/**
+- * Highlight quotes in the comment body based on reactions
+- */
+-export const highlightQuotes = (html: string, extendedScore: NamesAttachedReactionsScore | null): string => {
+-  const safeHtml = sanitizeHtml(html);
+-  if (!extendedScore || !extendedScore.reacts) return safeHtml;
+-
+-  // Collect all quotes
+-  const quotesToHighlight: string[] = [];
+-  Object.values(extendedScore.reacts).forEach(users => {
+-    users.forEach(u => {
+-      if (u.quotes) {
+-        u.quotes.forEach(q => {
+-          if (q.quote && q.quote.trim().length > 0) {
+-            quotesToHighlight.push(q.quote);
+-          }
+-        });
+-      }
+-    });
+-  });
+-
+-  if (quotesToHighlight.length === 0) return safeHtml;
+-
+-  // Sort quotes by length descending to process longest first
+-  const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
+-
+-  const parser = new DOMParser();
+-  const doc = parser.parseFromString(safeHtml, 'text/html');
+-
+-  const replaceTextNode = (node: Text, quote: string): void => {
+-    const text = node.nodeValue || '';
+-    if (!text.includes(quote)) return;
+-
+-    const parts = text.split(quote);
+-    if (parts.length <= 1) return;
+-
+-    const fragment = doc.createDocumentFragment();
+-    parts.forEach((part, index) => {
+-      if (part) {
+-        fragment.appendChild(doc.createTextNode(part));
+-      }
+-      if (index < parts.length - 1) {
+-        const span = doc.createElement('span');
+-        span.className = 'pr-highlight';
+-        span.title = 'Reacted content';
+-        span.textContent = quote;
+-        fragment.appendChild(span);
+-      }
+-    });
+-
+-    node.parentNode?.replaceChild(fragment, node);
+-  };
+-
+-  uniqueQuotes.forEach((quote) => {
+-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+-    const nodes: Text[] = [];
+-    let node = walker.nextNode();
+-    while (node) {
+-      const textNode = node as Text;
+-      if (!textNode.parentElement?.classList.contains('pr-highlight')) {
+-        nodes.push(textNode);
+-      }
+-      node = walker.nextNode();
+-    }
+-
+-    nodes.forEach(textNode => replaceTextNode(textNode, quote));
+-  });
+-
+-  return doc.body.innerHTML;
+-};
++import { renderBody, highlightQuotes } from './components/body';
++export { highlightQuotes };
+ 
+ const getContextType = (comment: Comment): string | undefined =>
+   (comment as any).contextType;
+@@ -101,6 +30,135 @@
+   `;
+ };
+ 
++export type RenderReadTracking = {
++  readState: Record<string, 1>;
++  cutoff: string | undefined;
++};
++
++export type RenderDescendantMetrics = {
++  allDescendantsLoadedById: Map<string, boolean>;
++  unreadDescendantCountById: Map<string, number>;
++};
++
++export const buildRenderDescendantMetrics = (
++  state: ReaderState,
++  commentIds: Iterable<string>,
++  readState: Record<string, 1>,
++  includeUnreadCounts: boolean
++): RenderDescendantMetrics => {
++  const allDescendantsLoadedById = new Map<string, boolean>();
++  const unreadDescendantCountById = new Map<string, number>();
++
++  const computeAllDescendantsLoaded = (rootId: string): void => {
++    if (allDescendantsLoadedById.has(rootId)) return;
++
++    const stack: Array<{ id: string; expanded: boolean }> = [{ id: rootId, expanded: false }];
++    const inProgress = new Set<string>();
++
++    while (stack.length > 0) {
++      const frame = stack.pop()!;
++      if (allDescendantsLoadedById.has(frame.id)) continue;
++
++      if (!frame.expanded) {
++        if (inProgress.has(frame.id)) {
++          allDescendantsLoadedById.set(frame.id, true);
++          inProgress.delete(frame.id);
++          continue;
++        }
++        inProgress.add(frame.id);
++        stack.push({ id: frame.id, expanded: true });
++
++        const comment = state.commentById.get(frame.id);
++        const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
++        if (directChildrenCount > 0) {
++          const loadedChildren = state.childrenByParentId.get(frame.id) || [];
++          for (const child of loadedChildren) {
++            if (!allDescendantsLoadedById.has(child._id)) {
++              stack.push({ id: child._id, expanded: false });
++            }
++          }
++        }
++        continue;
++      }
++
++      const comment = state.commentById.get(frame.id);
++      const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
++      if (directChildrenCount <= 0) {
++        allDescendantsLoadedById.set(frame.id, true);
++        inProgress.delete(frame.id);
++        continue;
++      }
++
++      const loadedChildren = state.childrenByParentId.get(frame.id) || [];
++      let loaded = loadedChildren.length >= directChildrenCount;
++      if (loaded) {
++        for (const child of loadedChildren) {
++          if (!(allDescendantsLoadedById.get(child._id) ?? true)) {
++            loaded = false;
++            break;
++          }
++        }
++      }
++      allDescendantsLoadedById.set(frame.id, loaded);
++      inProgress.delete(frame.id);
++    }
++  };
++
++  const computeUnreadDescendantCount = (rootId: string): void => {
++    if (unreadDescendantCountById.has(rootId)) return;
++
++    const stack: Array<{ id: string; expanded: boolean }> = [{ id: rootId, expanded: false }];
++    const inProgress = new Set<string>();
++
++    while (stack.length > 0) {
++      const frame = stack.pop()!;
++      if (unreadDescendantCountById.has(frame.id)) continue;
++
++      if (!frame.expanded) {
++        if (inProgress.has(frame.id)) {
++          unreadDescendantCountById.set(frame.id, 0);
++          inProgress.delete(frame.id);
++          continue;
++        }
++        inProgress.add(frame.id);
++        stack.push({ id: frame.id, expanded: true });
++
++        const children = state.childrenByParentId.get(frame.id) || [];
++        for (const child of children) {
++          if (!unreadDescendantCountById.has(child._id)) {
++            stack.push({ id: child._id, expanded: false });
++          }
++        }
++        continue;
++      }
++
++      const children = state.childrenByParentId.get(frame.id) || [];
++      let count = 0;
++      for (const child of children) {
++        if (!isRead(child._id, readState, child.postedAt)) {
++          count += 1;
++        }
++        count += unreadDescendantCountById.get(child._id) ?? 0;
++      }
++
++      unreadDescendantCountById.set(frame.id, count);
++      inProgress.delete(frame.id);
++    }
++  };
++
++  for (const id of commentIds) {
++    computeAllDescendantsLoaded(id);
++    if (includeUnreadCounts) {
++      computeUnreadDescendantCount(id);
++    }
++  }
++
++  return {
++    allDescendantsLoadedById,
++    unreadDescendantCountById
++  };
++};
++
+ /**
+  * Render a comment tree recursively
+  * Uses indexed children lookup for O(n) instead of O(n┬▓)
+@@ -110,17 +168,23 @@
+   state: ReaderState,
+   allComments: Comment[],
+   allCommentIds?: Set<string>,
+-  childrenByParentId?: Map<string, Comment[]>
++  childrenByParentId?: Map<string, Comment[]>,
++  descendantMetrics?: RenderDescendantMetrics,
++  readTrackingInputs?: RenderReadTracking,
++  treeKarmaCache?: Map<string, number>
+ ): string => {
+   const idSet = allCommentIds ?? new Set(allComments.map(c => c._id));
+   const childrenIndex = childrenByParentId ?? state.childrenByParentId;
++  const tracking = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
++  const metrics = descendantMetrics ?? buildRenderDescendantMetrics(state, idSet, tracking.readState, !state.isArchiveMode);
++  const sharedTreeKarmaCache = treeKarmaCache ?? new Map<string, number>();
+   // Use indexed children lookup
+   const replies = childrenIndex.get(comment._id) ?? [];
+   // Filter to only include comments that are in the current render set
+   const visibleReplies = replies.filter(r => idSet.has(r._id));
+ 
+   // [PR-READ-07] Check for implicit read based on cutoff
+-  const { readState, cutoff } = getReadTrackingInputs(state.isArchiveMode);
++  const { readState, cutoff } = tracking;
+   
+   const isImplicitlyRead = (item: { postedAt?: string }) => {
+     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
+@@ -136,7 +200,8 @@
+         childrenIndex.get(r._id) || [],
+         readState,
+         childrenIndex,
+-        cutoff
++        cutoff,
++        sharedTreeKarmaCache
+       );
+     });
+ 
+@@ -150,10 +215,10 @@
+   }
+ 
+   const repliesHtml = visibleReplies.length > 0
+-    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet, childrenIndex)).join('')}</div>`
++    ? `<div class="pr-replies">${visibleReplies.map(r => renderCommentTree(r, state, allComments, idSet, childrenIndex, metrics, tracking, sharedTreeKarmaCache)).join('')}</div>`
+     : '';
+ 
+-  return renderComment(comment, state, repliesHtml);
++  return renderComment(comment, state, repliesHtml, metrics, tracking);
+ };
+ 
+ /**
+@@ -217,16 +282,24 @@
+   `;
+ };
+ 
+-export const renderComment = (comment: Comment, state: ReaderState, repliesHtml: string = ''): string => {
++export const renderComment = (
++  comment: Comment,
++  state: ReaderState,
++  repliesHtml: string = '',
++  descendantMetrics?: RenderDescendantMetrics,
++  readTrackingInputs?: RenderReadTracking
++): string => {
+   const ct = getContextType(comment);
+   if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml, state);
+   if (ct === 'stub') return renderContextPlaceholder(comment, state, repliesHtml);
+ 
+-  const { readState } = getReadTrackingInputs(state.isArchiveMode);
++  const { readState } = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
+   // In archive mode, we ignore the local read state entirely to prevent collapsing context or greying out text
+   const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
+   const commentIsRead = !state.isArchiveMode && (ct === 'fetched' || isLocallyRead);
+-  const unreadDescendantCount = state.isArchiveMode ? Infinity : getUnreadDescendantCount(comment._id, state, readState);
++  const unreadDescendantCount = state.isArchiveMode
++    ? Infinity
++    : (descendantMetrics?.unreadDescendantCountById.get(comment._id) ?? getUnreadDescendantCount(comment._id, state, readState));
+ 
+   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
+   // Exception: Never collapse if forceVisible is set (e.g. via Trace to Root)
+@@ -293,7 +366,7 @@
+   if (totalChildren <= 0) {
+     rDisabled = true;
+     rTooltip = 'No replies to load';
+-  } else if (hasAllDescendantsLoaded(comment._id, state)) {
++  } else if ((descendantMetrics?.allDescendantsLoadedById.get(comment._id) ?? hasAllDescendantsLoaded(comment._id, state))) {
+     rDisabled = true;
+     rTooltip = 'All replies already loaded in current feed';
+   } else {
+diff --git a/src/scripts/power-reader/render/index.ts b/src/scripts/power-reader/render/index.ts
+index fd0623a309..ea32928924 100644
+--- a/src/scripts/power-reader/render/index.ts
++++ b/src/scripts/power-reader/render/index.ts
+@@ -153,6 +153,7 @@
+ 
+   // [PR-SORT-02] Top-Level Sorting
+   let groupsList = Array.from(postGroups.values());
++  const treeKarmaCache = new Map<string, number>();
+ 
+   // Calculate Tree-Karma for all groups BEFORE filtering.
+   // This provides a definitive "has unread content" signal.
+@@ -172,7 +173,8 @@
+       rootCommentsOfPost,
+       readState,
+       state.childrenByParentId,
+-      cutoff
++      cutoff,
++      treeKarmaCache
+     );
+     (g as any).postedAt = post.postedAt || new Date().toISOString();
+ 
+diff --git a/src/scripts/power-reader/render/post.ts b/src/scripts/power-reader/render/post.ts
+index 1a178cfc59..6bf0e9bb1a 100644
+--- a/src/scripts/power-reader/render/post.ts
++++ b/src/scripts/power-reader/render/post.ts
+@@ -5,9 +5,9 @@
+ 
+ import type { Comment, Post, NamesAttachedReactionsScore } from '../../../shared/graphql/queries';
+ import type { ReaderState } from '../state';
+-import { getReadState, isRead, getLoadFrom, getReadTrackingInputs } from '../utils/storage';
++import { isRead, getReadTrackingInputs } from '../utils/storage';
+ import { renderPostHeader, escapeHtml } from '../utils/rendering';
+-import { renderCommentTree } from './comment';
++import { buildRenderDescendantMetrics, renderCommentTree } from './comment';
+ import { calculateTreeKarma } from '../utils/scoring';
+ import { Logger } from '../utils/logger';
+ import { renderPostBody as renderSharedPostBody } from './components/body';
+@@ -141,29 +141,36 @@
+     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
+   };
+ 
+-  rootComments.forEach((c: any) => {
++  const treeKarmaCache = new Map<string, number>();
++  const treeKarmaById = new Map<string, number>();
++  rootComments.forEach(c => {
+     const isItemRead = !state.isArchiveMode && (readState[c._id] === 1 || isImplicitlyRead(c));
+-    c.treeKarma = calculateTreeKarma(
++    const treeKarma = calculateTreeKarma(
+       c._id,
+       c.baseScore || 0,
+       isItemRead,
+       visibleChildrenByParentId.get(c._id) || [],
+       readState,
+       visibleChildrenByParentId,
+-      cutoff
++      cutoff,
++      treeKarmaCache
+     );
++    treeKarmaById.set(c._id, treeKarma);
+   });
+ 
+   // Sort root comments by Tree-Karma descending, then by date descending
+   rootComments.sort((a, b) => {
+-    const tkA = (a as any).treeKarma || -Infinity;
+-    const tkB = (b as any).treeKarma || -Infinity;
++    const tkA = treeKarmaById.get(a._id) ?? -Infinity;
++    const tkB = treeKarmaById.get(b._id) ?? -Infinity;
+     if (tkA !== tkB) return tkB - tkA;
+     return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
+   });
+ 
++  const descendantMetrics = buildRenderDescendantMetrics(state, commentSet, readState, !state.isArchiveMode);
++  const readTracking = { readState, cutoff };
++
+   const commentsHtml = rootComments.map(c =>
+-    renderCommentTree(c, state, commentsWithPlaceholders, commentSet, visibleChildrenByParentId)
++    renderCommentTree(c, state, commentsWithPlaceholders, commentSet, visibleChildrenByParentId, descendantMetrics, readTracking, treeKarmaCache)
+   ).join('');
+ 
+   const isFullPost = !!(group.fullPost && group.fullPost.htmlBody);
+diff --git a/src/scripts/power-reader/services/ReadTracker.ts b/src/scripts/power-reader/services/ReadTracker.ts
+index 6feac0ac8c..70dd92be13 100644
+--- a/src/scripts/power-reader/services/ReadTracker.ts
++++ b/src/scripts/power-reader/services/ReadTracker.ts
+@@ -212,7 +212,8 @@
+                 // remove if: 
+                 // 1. Not in current batch AND we don't know its date (likely an orphan from previous session)
+                 // 2. OR its date is strictly older than the PREVIOUS loadFrom
+-                if (!postedAt || new Date(postedAt).getTime() < cleanupCutoffTime) {
++                // If date is unknown, preserve the entry; we cannot safely classify it as stale.
++                if (postedAt && new Date(postedAt).getTime() < cleanupCutoffTime) {
+                     delete readState[id];
+                     removedCount++;
+                 }
+diff --git a/src/scripts/power-reader/utils/scoring.ts b/src/scripts/power-reader/utils/scoring.ts
+index 475ac8c978..2152e137c8 100644
+--- a/src/scripts/power-reader/utils/scoring.ts
++++ b/src/scripts/power-reader/utils/scoring.ts
+@@ -102,51 +102,50 @@
+   children: any[], // Can be Comment[] or root comments for a post
+   readState: Record<string, number>,
+   childrenByParentId: Map<string, any[]>,
+-  cutoffDate?: string
++  cutoffDate?: string,
++  treeKarmaCache?: Map<string, number>
+ ): number {
+-  let hasUnread = !isRead;
+-  const initialScore = Number(baseScore) || 0;
+-  let maxKarma = isRead ? -Infinity : initialScore;
+-
+-  // Search queue for BFS traversal of the tree
+-  const queue = [...children];
+-  let queueIndex = 0;
+-
+-  // Track visited to prevent infinite loops (shouldn't happen in a tree but safe)
+-  const visited = new Set<string>([id]);
+-
+-  while (queueIndex < queue.length) {
+-    const current = queue[queueIndex++]!;
+-    if (visited.has(current._id)) continue;
+-    visited.add(current._id);
+-
+-    // Is it read? (Explicitly or implicitly)
+-    let currentIsRead = readState[current._id] === 1;
+-    // Check cutoff (ignore if sentinel value)
+-    if (!currentIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && current.postedAt < cutoffDate) {
+-      currentIsRead = true;
+-    }
+-
+-    if (!currentIsRead) {
+-      hasUnread = true;
+-      const score = Number(current.baseScore) || 0;
+-      if (score > maxKarma) {
+-        maxKarma = score;
++  const cache = treeKarmaCache;
++  const cached = cache?.get(id);
++  if (cached !== undefined) return cached;
++
++  const visited = new Set<string>();
++
++  const computeNodeTreeKarma = (
++    nodeId: string,
++    nodeBaseScore: number,
++    nodeIsRead: boolean,
++    nodeChildren: any[] | undefined
++  ): number => {
++    const cachedValue = cache?.get(nodeId);
++    if (cachedValue !== undefined) return cachedValue;
++    if (visited.has(nodeId)) return -Infinity;
++
++    visited.add(nodeId);
++    let maxKarma = nodeIsRead ? -Infinity : (Number(nodeBaseScore) || 0);
++
++    const descendants = nodeChildren ?? childrenByParentId.get(nodeId) ?? [];
++    for (const child of descendants) {
++      let childIsRead = readState[child._id] === 1;
++      if (!childIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && child.postedAt < cutoffDate) {
++        childIsRead = true;
+       }
+-    }
+ 
+-    // Add descendants
+-    const descendants = childrenByParentId.get(current._id);
+-    if (descendants) {
+-      for (const d of descendants) {
+-        queue.push(d);
++      const childKarma = computeNodeTreeKarma(
++        child._id,
++        Number(child.baseScore) || 0,
++        childIsRead,
++        childrenByParentId.get(child._id)
++      );
++      if (childKarma > maxKarma) {
++        maxKarma = childKarma;
+       }
+     }
+-  }
+ 
+-  if (!hasUnread) {
+-    return -Infinity;
+-  }
++    visited.delete(nodeId);
++    cache?.set(nodeId, maxKarma);
++    return maxKarma;
++  };
+ 
+-  return maxKarma;
++  return computeNodeTreeKarma(id, baseScore, isRead, children);
+ }

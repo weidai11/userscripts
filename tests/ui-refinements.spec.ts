@@ -48,7 +48,7 @@ test.describe('Power Reader UI Refinements', () => {
         await expect(help).not.toHaveAttribute('open');
     });
 
-    test('read comment border is light', async ({ page }) => {
+    test('read comment border is removed', async ({ page }) => {
         await initPowerReader(page, {
             comments: [{
                 _id: 'c1', postId: 'p1',
@@ -67,9 +67,9 @@ test.describe('Power Reader UI Refinements', () => {
         await comment.evaluate(el => el.classList.add('read'));
 
         const readComment = page.locator('.pr-comment.read');
-        const border = await readComment.evaluate(el => window.getComputedStyle(el).borderColor);
+        const borderWidth = await readComment.evaluate(el => window.getComputedStyle(el).borderWidth);
 
-        // rgb(238, 238, 238) is #eee
-        expect(border).toBe('rgb(238, 238, 238)');
+        // border: none results in 0px border width
+        expect(borderWidth).toBe('0px');
     });
 });

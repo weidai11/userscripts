@@ -557,11 +557,11 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
   const inlineParent = comment.parentComment;
   const inlineParentHasBody = typeof inlineParent?.htmlBody === 'string'
     && inlineParent.htmlBody.trim().length > 0;
-  const parentComment = inlineParentHasBody && inlineParent
+  const parentCommentRaw = inlineParentHasBody && inlineParent
     ? parentRefToFetchedContext(inlineParent, comment)
     : (parentFromState || (inlineParent ? parentRefToStub(inlineParent, comment) : null));
 
-  if (!parentComment || parentComment._id === comment._id) {
+  if (!parentCommentRaw || parentCommentRaw._id === comment._id) {
     const headerHtml = renderPostHeader(placeholderPostForTopLevelComment(comment, state), { state });
     const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
     return `
@@ -572,7 +572,9 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
     `;
   }
 
-  // In card view, show immediate parent context with the current comment nested under it.
+  // [PR-UARCH-29] In card view, show immediate parent context with the current comment nested under it.
+  // Contextual parents in card view are ALWAYS rendered as header-only stubs to keep the feed compact.
+  const parentComment = { ...parentCommentRaw, contextType: 'stub' } as Comment;
   const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
   return `<div class="pr-archive-item">${renderComment(parentComment, state, nestedCommentHtml)}</div>`;
 };

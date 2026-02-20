@@ -33,7 +33,14 @@ const noteCancel = (id: string): void => {
     for (const [key, ts] of cancelledRequests) {
       if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);
     }
-    if (cancelledRequests.size > CANCEL_MAX) cancelledRequests.clear();
+    if (cancelledRequests.size > CANCEL_MAX) {
+      const oldestFirst = Array.from(cancelledRequests.entries())
+        .sort((a, b) => a[1] - b[1]);
+      const overflow = oldestFirst.length - CANCEL_MAX;
+      for (let i = 0; i < overflow; i++) {
+        cancelledRequests.delete(oldestFirst[i][0]);
+      }
+    }
   }
 };
 
@@ -46,6 +53,8 @@ let fullBatch: FullBatchState | null = null;
 
 let authoredItems: ArchiveItem[] = [];
 let contextItems: ArchiveItem[] = [];
+let authoredItemsById = new Map<string, ArchiveItem>();
+let contextItemsById = new Map<string, ArchiveItem>();
 
 const post = (message: SearchWorkerResponse): void => {
   self.postMessage(message);
@@ -66,20 +75,33 @@ const emitSchemaError = (message: SearchWorkerRequest, scope: { batchId?: string
 const setCorpusItems = (source: ArchiveCorpusName, items: ArchiveItem[]): void => {
   if (source === 'authored') {
     authoredItems = items;
+    authoredItemsById = new Map<string, ArchiveItem>();
+    for (const item of items) authoredItemsById.set(item._id, item);
     runtime.setAuthoredItems(authoredItems, indexVersion);
     return;
   }
   contextItems = items;
+  contextItemsById = new Map<string, ArchiveItem>();
+  for (const item of items) contextItemsById.set(item._id, item);
   runtime.setContextItems(contextItems);
 };
 
 const applyPatch = (source: ArchiveCorpusName, upserts: ArchiveItem[], deletes: string[]): void => {
-  const base = source === 'authored' ? authoredItems : contextItems;
-  const byId = new Map<string, ArchiveItem>();
-  for (const item of base) byId.set(item._id, item);
+  if (upserts.length === 0 && deletes.length === 0) return;
+
+  const byId = source === 'authored' ? authoredItemsById : contextItemsById;
   for (const id of deletes) byId.delete(id);
   for (const item of upserts) byId.set(item._id, item);
-  setCorpusItems(source, Array.from(byId.values()));
+
+  const nextItems = Array.from(byId.values());
+  if (source === 'authored') {
+    authoredItems = nextItems;
+    runtime.setAuthoredItems(authoredItems, indexVersion);
+    return;
+  }
+
+  contextItems = nextItems;
+  runtime.setContextItems(contextItems);
 };
 
 const handleFullStart = (message: Extract<SearchWorkerRequest, { kind: 'index.full.start' }>): void => {

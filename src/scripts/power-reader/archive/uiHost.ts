@@ -15,6 +15,7 @@ import { saveContextualItems } from './storage';
 export class ArchiveUIHost implements UIHost {
     private archiveState: ArchiveState;
     private readerState: ReaderState;
+    private canonicalItemIndexById = new Map<string, number>();
     private feedContainer: HTMLElement | null = null;
     private renderCallback: (() => void | Promise<void>) | null = null;
     private searchStateRevision = 0;
@@ -24,6 +25,7 @@ export class ArchiveUIHost implements UIHost {
         this.archiveState = archiveState;
         this.feedContainer = feedContainer;
         this.renderCallback = renderCallback || null;
+        this.rebuildCanonicalItemIndex();
         this.readerState = this.syncReaderState();
     }
 
@@ -68,9 +70,16 @@ export class ArchiveUIHost implements UIHost {
       this.searchStateRevision += 1;
     }
 
-    private bumpCanonicalStateRevision(): void {
+  private bumpCanonicalStateRevision(): void {
       this.canonicalStateRevision += 1;
     }
+
+  private rebuildCanonicalItemIndex(): void {
+    this.canonicalItemIndexById.clear();
+    this.archiveState.items.forEach((item, index) => {
+      this.canonicalItemIndexById.set(item._id, index);
+    });
+  }
 
     /**
      * Update the container reference if it changes (e.g. after re-render of parent)
@@ -93,14 +102,25 @@ export class ArchiveUIHost implements UIHost {
     this.archiveState.itemById.set(id, item);
 
     if (exists) {
-        // Only perform O(N) scan if we know we need to replace an existing reference
-        const existingIndex = this.archiveState.items.findIndex(i => i._id === id);
-        if (existingIndex >= 0) {
+        const existingIndex = this.canonicalItemIndexById.get(id);
+        if (existingIndex !== undefined) {
             this.archiveState.items[existingIndex] = item;
+        } else {
+            // Index map miss should be rare; repair only this key to avoid repeated full rebuilds in bulk loops.
+            const scannedIndex = this.archiveState.items.findIndex(i => i._id === id);
+            if (scannedIndex >= 0) {
+              this.archiveState.items[scannedIndex] = item;
+              this.canonicalItemIndexById.set(id, scannedIndex);
+            } else {
+              // Keep canonical structures coherent even if itemById and items drift.
+              this.archiveState.items.push(item);
+              this.canonicalItemIndexById.set(id, this.archiveState.items.length - 1);
+            }
         }
     } else {
         // Fast path for new items
         this.archiveState.items.push(item);
+        this.canonicalItemIndexById.set(id, this.archiveState.items.length - 1);
     }
 
     this.bumpCanonicalStateRevision();
@@ -113,6 +133,7 @@ export class ArchiveUIHost implements UIHost {
     this.archiveState.items.sort((a, b) => {
       return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
     });
+    this.rebuildCanonicalItemIndex();
   }
 
   private upsertReaderComment(comment: Comment): void {

@@ -460,8 +460,9 @@ export const STYLES = `
     color: #707070;
   }
 
-  .pr-comment.read {
-    border-color: #eee;
+  .pr-comment.read, .pr-comment.context {
+    border: none;
+    background: transparent;
   }
 
   .pr-comment.rejected {

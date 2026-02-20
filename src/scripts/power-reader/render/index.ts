@@ -153,6 +153,7 @@ export const buildPostGroups = (
 
   // [PR-SORT-02] Top-Level Sorting
   let groupsList = Array.from(postGroups.values());
+  const treeKarmaCache = new Map<string, number>();
 
   // Calculate Tree-Karma for all groups BEFORE filtering.
   // This provides a definitive "has unread content" signal.
@@ -172,7 +173,8 @@ export const buildPostGroups = (
       rootCommentsOfPost,
       readState,
       state.childrenByParentId,
-      cutoff
+      cutoff,
+      treeKarmaCache
     );
     (g as any).postedAt = post.postedAt || new Date().toISOString();
 
