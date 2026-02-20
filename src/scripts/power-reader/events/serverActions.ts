@@ -251,8 +251,10 @@ export const handleLoadPost = async (
     try {
         const post = await fetchAndRenderPost(postId, state);
         if (post) {
-            // Remove data-action to prevent re-loading
-            titleLink.removeAttribute('data-action');
+            // Rerender usually drops load-post automatically for full posts;
+            // keep a defensive cleanup in case a custom render path leaves it behind.
+            const updatedTitleLink = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-title[data-action="load-post"]`) as HTMLElement;
+            if (updatedTitleLink) updatedTitleLink.removeAttribute('data-action');
         } else {
             contentEl.innerHTML = '<div class="pr-info" style="color: red;">Failed to load post content.</div>';
         }
@@ -271,6 +273,27 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
     const eBtn = postEl.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
     const isFromSticky = !!target.closest('.pr-sticky-header');
     const container = postEl.querySelector('.pr-post-body-container') as HTMLElement;
+    const scrollBehavior: ScrollBehavior = (window as any).__PR_TEST_MODE__ ? 'auto' : 'smooth';
+
+    const getVisibleViewportTop = (): number => {
+        const stickyHeader = document.getElementById('pr-sticky-header');
+        if (!stickyHeader || !stickyHeader.classList.contains('visible')) return 0;
+        return Math.max(0, stickyHeader.getBoundingClientRect().bottom);
+    };
+
+    const alignCollapsedBodyBottomToVisibleTop = (postBodyContainer: HTMLElement): void => {
+        const visibleTop = getVisibleViewportTop();
+        const bottom = postBodyContainer.getBoundingClientRect().bottom;
+        // If collapse pulled the body entirely above the user-visible viewport,
+        // scroll so the body's bottom edge aligns with the visible top edge.
+        if (bottom >= visibleTop) return;
+
+        const targetTop = window.scrollY + bottom - visibleTop;
+        window.scrollTo({
+            top: Math.max(0, targetTop),
+            behavior: scrollBehavior
+        });
+    };
 
     // If container doesn't exist, we need to load the post body first
     if (!container) {
@@ -306,10 +329,10 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
                 const freshPostEl = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
                 const postHeader = freshPostEl?.querySelector('.pr-post-header') as HTMLElement;
                 if (postHeader) {
-                    const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+                    const newHeaderTop = postHeader.getBoundingClientRect().top + window.scrollY;
                     window.scrollTo({
                         top: newHeaderTop,
-                        behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+                        behavior: scrollBehavior
                     });
                 }
             }
@@ -344,15 +367,19 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
         if (readMoreBtn) readMoreBtn.style.display = 'block';
 
         if (eBtn) eBtn.title = 'Expand post body';
+
+        if (!isFromSticky) {
+            alignCollapsedBodyBottomToVisibleTop(container);
+        }
     }
 
     if (isFromSticky) {
         const postHeader = postEl.querySelector('.pr-post-header') as HTMLElement;
         if (postHeader) {
-            const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+            const newHeaderTop = postHeader.getBoundingClientRect().top + window.scrollY;
             window.scrollTo({
                 top: newHeaderTop,
-                behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
+                behavior: scrollBehavior
             });
         }
     }

@@ -14,11 +14,37 @@ export type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote };
 export type KarmaVote = 'smallUpvote' | 'smallDownvote' | 'bigUpvote' | 'bigDownvote' | 'neutral';
 export type AgreementVote = 'agree' | 'disagree' | 'neutral';
 
-const LOGIN_URL = `${window.location.origin}/auth/auth0`;
+const LOGIN_URL = `${window.location.origin}/login`;
 
 const openLoginPage = (): void => {
   const opened = window.open(LOGIN_URL, '_blank', 'noopener,noreferrer');
   if (opened) opened.opener = null;
+};
+
+const isAuthRelatedError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /log\s*in|not\s+logged|unauthori[sz]ed|forbidden|\bauth(?:entication|orization)?\b/i.test(message);
+};
+
+const handleVoteFailure = (
+  error: unknown,
+  isLoggedIn: boolean,
+  actionLabel: string
+): null => {
+  if (!isLoggedIn) {
+    Logger.info(`${actionLabel} failed while user auth state is unknown/logged-out; opening login page`);
+    openLoginPage();
+    return null;
+  }
+
+  if (isAuthRelatedError(error)) {
+    Logger.info(`${actionLabel} rejected due to auth; opening login page`);
+    openLoginPage();
+    return null;
+  }
+
+  Logger.error(`${actionLabel} failed:`, error);
+  return null;
 };
 
 /**
@@ -32,12 +58,6 @@ export async function castKarmaVote(
   documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
   Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
-  if (!isLoggedIn) {
-    Logger.info('Not logged in, opening auth page');
-    openLoginPage();
-    return null;
-  }
-
   try {
     if (documentType === 'post') {
       const response = await queryGraphQL<VotePostMutation, VotePostMutationVariables>(VOTE_POST_MUTATION, {
@@ -56,8 +76,7 @@ export async function castKarmaVote(
 
     return response;
   } catch (e) {
-    Logger.error('Vote failed:', e);
-    return null;
+    return handleVoteFailure(e, isLoggedIn, 'Vote');
   }
 }
 
@@ -72,11 +91,6 @@ export async function castAgreementVote(
   currentKarma: KarmaVote = 'neutral',
   documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
-  if (!isLoggedIn) {
-    openLoginPage();
-    return null;
-  }
-
   // Agreement votes use the extendedVote argument with standard vote type strings
   const agreementValue = voteType === 'agree' ? 'smallUpvote' :
     voteType === 'disagree' ? 'smallDownvote' :
@@ -100,28 +114,23 @@ export async function castAgreementVote(
 
     return response;
   } catch (e) {
-    Logger.error('Agreement vote failed:', e);
-    return null;
+    return handleVoteFailure(e, isLoggedIn, 'Agreement vote');
   }
 }
 
 /**
- * Cast a reaction vote on a comment
+ * Cast a reaction vote on a comment (or post)
  * Supports both simple reactions and quoted (inline) reactions.
  */
 export async function castReactionVote(
-  commentId: string,
+  documentId: string,
   reactionName: string,
   isLoggedIn: boolean,
   currentKarma: KarmaVote | null = 'neutral',
   currentExtendedVote: CurrentUserExtendedVote | null = {},
-  quote: string | null = null
+  quote: string | null = null,
+  documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
-  if (!isLoggedIn) {
-    openLoginPage();
-    return null;
-  }
-
   // 1. Get existing reacts list
   const existingReacts = currentExtendedVote?.reacts || [];
 
@@ -176,16 +185,23 @@ export async function castReactionVote(
   };
 
   try {
+    if (documentType === 'post') {
+      const response = await queryGraphQL<VotePostMutation, VotePostMutationVariables>(VOTE_POST_MUTATION, {
+        documentId: documentId,
+        voteType: currentKarma || 'neutral',
+        extendedVote: extendedVotePayload,
+      });
+      return response as unknown as VoteResponse;
+    }
+
     const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_COMMENT_MUTATION, {
-      documentId: commentId,
-      voteType: currentKarma || 'neutral', // Need to pass current karma to preserve it
+      documentId: documentId,
+      voteType: currentKarma || 'neutral',
       extendedVote: extendedVotePayload,
     });
-
     return response;
   } catch (e) {
-    Logger.error('Reaction vote failed:', e);
-    return null;
+    return handleVoteFailure(e, isLoggedIn, 'Reaction vote');
   }
 }
 

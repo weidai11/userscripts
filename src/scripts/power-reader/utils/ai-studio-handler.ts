@@ -20,9 +20,9 @@ export async function handleAIStudio() {
     Logger.info('AI Studio: Automation triggered.');
 
     try {
-        // 1. Wait for the model selector and ensure "Flash 3" is selected
-        GM_setValue('ai_studio_status', 'Configuring AI model...');
-        await automateModelSelection();
+        // 1. Initial selection: Flash 3 for fast response
+        GM_setValue('ai_studio_status', 'Selecting Flash 3...');
+        await selectModel('gemini-3-flash-preview', 'Flash 3');
 
         // 2. Disable Grounding (Search) but enable URL context
         await automateDisableSearch();
@@ -34,14 +34,18 @@ export async function handleAIStudio() {
         await injectPrompt(payload);
 
         // 4. Auto-Run
-        await sleep(500);
+        await sleep(1000);
         GM_setValue('ai_studio_status', 'Submitting prompt...');
         await automateRun();
 
         // 5. Wait for Response to complete
         const responseText = await waitForResponse();
 
-        // 6. Return Payload
+        // 6. Switch to 3.1 Pro for subsequent user chat
+        GM_setValue('ai_studio_status', 'Switching to 3.1 Pro...');
+        await selectModel('gemini-3.1-pro-preview', '3.1 Pro Preview');
+
+        // 7. Return Payload
         GM_setValue('ai_studio_status', 'Response received!');
         GM_setValue('ai_studio_response_payload', {
             text: responseText,
@@ -74,15 +78,17 @@ export async function handleAIStudio() {
             window.addEventListener('mousemove', markInteracted, { once: true, capture: true });
         }, { once: true });
 
-        setTimeout(() => {
+        const checkClose = () => {
             // Only close if no return interaction AND it's not currently the active tab
             if (!hasInteracted && document.visibilityState !== 'visible') {
                 Logger.info('AI Studio: Idle and backgrounded. Closing tab.');
                 window.close();
             } else if (!hasInteracted) {
                 Logger.info('AI Studio: 5m reached but tab is currently visible. Postponing close.');
+                setTimeout(checkClose, 60 * 1000);
             }
-        }, 5 * 60 * 1000);
+        };
+        setTimeout(checkClose, 5 * 60 * 1000);
 
     } catch (error) {
         Logger.error('AI Studio: Automation failed', error);
@@ -121,14 +127,19 @@ async function waitForElement(selector: string, timeout: number = 30000): Promis
     });
 }
 
-async function automateModelSelection() {
+async function selectModel(idPart: string, namePart: string) {
     const modelCard = await waitForElement('button.model-selector-card');
-    if (modelCard.innerText.includes('Flash 3') || modelCard.innerText.includes('Gemini 3 Flash')) {
+    const currentModel = modelCard.innerText;
+    const loweredModel = currentModel.toLowerCase();
+    const loweredName = namePart.toLowerCase();
+    const isFlash3 = namePart === 'Flash 3' && (loweredModel.includes('flash 3') || loweredModel.includes('gemini 3 flash'));
+    if (loweredModel.includes(loweredName) || isFlash3) {
         return;
     }
     modelCard.click();
-    const flash3Btn = await waitForElement('button[id*="gemini-3-flash-preview"]');
-    flash3Btn.click();
+    const targetModelBtn = await waitForElement(`button[id*="${idPart}"]`);
+    targetModelBtn.click();
+    await sleep(500);
 }
 
 async function automateDisableSearch() {

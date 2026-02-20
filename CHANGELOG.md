@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.688] - 2026-02-20
+
+### Changed
+- **AI Studio Adaptive Model Selection**: The automation now uses **Gemini 3 Flash** for the initial fast response and automatically switches to **Gemini 3.1 Pro Preview** immediately after the response is received, enabling high-quality follow-up chats for the user.
+
+## [1.2.687] - 2026-02-20
+
+### Changed
+- **AI Studio Model Switch**: Updated the automated model selection in AI Studio to use **Gemini 3.1 Pro Preview** as the default model.
+
 ## [1.2.686] - 2026-02-19
 
 ### Added

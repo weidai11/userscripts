@@ -42,6 +42,70 @@ test.describe('Post Action Buttons', () => {
         await expect(container).toHaveClass(/truncated/);
     });
 
+    test('[PR-POSTBTN-01] Collapsing with [e] keeps body bottom at visible viewport top when scrolled deep', async ({ page }) => {
+        const posts = [{
+            _id: 'p1',
+            title: 'Deep Scroll Post',
+            htmlBody: '<div style="height: 3000px">Very Long Body</div>',
+            postedAt: new Date().toISOString(),
+            user: { _id: 'u1', username: 'Author1' }
+        }];
+        const comments = Array.from({ length: 50 }, (_, i) => ({
+            _id: `c-${i + 1}`,
+            postId: 'p1',
+            htmlBody: `<div style="height: 120px">Comment ${i + 1}</div>`,
+            postedAt: new Date(Date.now() - i * 1000).toISOString(),
+            user: { _id: `u${i + 2}`, username: `User${i + 2}` }
+        }));
+
+        await initPowerReader(page, {
+            posts,
+            comments,
+            testMode: true,
+            scrapedReactions: [],
+        });
+
+        const post = page.locator('.pr-post[data-post-id="p1"]').first();
+        const container = post.locator('.pr-post-body-container');
+        const toggleBtn = page.locator('.pr-post[data-post-id="p1"] [data-action="toggle-post-body"]');
+
+        // Expand first.
+        await toggleBtn.click();
+        await expect(container).not.toHaveClass(/truncated/);
+
+        // Scroll deep into the expanded body so collapsing would otherwise jump it above viewport.
+        await page.evaluate(() => {
+            const body = document.querySelector('.pr-post[data-id="p1"] .pr-post-body-container') as HTMLElement;
+            const bodyTop = body.getBoundingClientRect().top + window.scrollY;
+            window.scrollTo(0, bodyTop + 3600);
+            window.dispatchEvent(new Event('scroll'));
+        });
+
+        const scrollBeforeCollapse = await page.evaluate(() => window.scrollY);
+        expect(scrollBeforeCollapse).toBeGreaterThan(1000);
+
+        // Trigger [e] through hotkey while pointer is over the post body.
+        await page.mouse.move(220, 260);
+        await page.keyboard.press('e');
+        await expect(container).toHaveClass(/truncated/);
+
+        const metrics = await page.evaluate(() => {
+            const body = document.querySelector('.pr-post[data-id="p1"] .pr-post-body-container') as HTMLElement;
+            const sticky = document.getElementById('pr-sticky-header');
+            const visibleTop = sticky && sticky.classList.contains('visible')
+                ? Math.max(0, sticky.getBoundingClientRect().bottom)
+                : 0;
+            const bottom = body.getBoundingClientRect().bottom;
+            return {
+                scrollY: window.scrollY,
+                delta: Math.abs(bottom - visibleTop),
+            };
+        });
+
+        expect(metrics.scrollY).toBeLessThan(scrollBeforeCollapse);
+        expect(metrics.delta).toBeLessThan(8);
+    });
+
     test('[PR-POSTBTN-02] Load All Comments should fetch and inject comments', async ({ page }) => {
         const posts = [{ _id: 'p1', title: 'Post 1', htmlBody: 'Body', commentCount: 10 }];
         const initialComments = [{ _id: 'c1', postId: 'p1', htmlBody: 'C1', user: { username: 'A' }, postedAt: new Date().toISOString() }];

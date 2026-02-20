@@ -9,6 +9,7 @@ import { renderPostGroup } from '../render/post';
 import { setupLinkPreviews } from '../features/linkPreviews';
 import { refreshPostActionButtons } from '../utils/dom';
 import { Logger } from '../utils/logger';
+import { getCurrentUserFromGlobals } from '../utils/currentUser';
 import { saveContextualItems } from './storage';
 
 export class ArchiveUIHost implements UIHost {
@@ -31,10 +32,10 @@ export class ArchiveUIHost implements UIHost {
     const state = createInitialState();
     state.isArchiveMode = true;
     state.archiveUsername = this.archiveState.username;
-    // [P1-FIX] Populate both username and userId for authenticated actions
-    const currentUser = (window as any).LessWrong?.params?.currentUser;
-    state.currentUsername = currentUser?.username || null;
-    state.currentUserId = currentUser?._id || null;
+    // Populate auth identity for vote/reaction actions in archive mode.
+    const currentUser = getCurrentUserFromGlobals();
+    state.currentUsername = currentUser.username;
+    state.currentUserId = currentUser.id;
 
         // Populate from archive items
         this.archiveState.items.forEach(item => {

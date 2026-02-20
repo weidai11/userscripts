@@ -18,6 +18,7 @@ import type { Comment, Post } from '../../../shared/graphql/queries';
 import { renderComment, highlightQuotes } from '../render/comment';
 import { renderReactions } from '../utils/rendering';
 import { Logger } from '../utils/logger';
+import { getCurrentUserFromGlobals } from '../utils/currentUser';
 
 type VoteKind = 'karma' | 'agreement';
 type VoteDir = 'up' | 'down';
@@ -160,6 +161,16 @@ const executeVote = async (
   state: ReaderState,
   document: any
 ): Promise<VoteResponse | null> => {
+  // Archive pages may not always pre-populate ReaderState.currentUserId.
+  // Fill from well-known globals on first interaction.
+  if (!state.currentUserId) {
+    const fallback = getCurrentUserFromGlobals();
+    if (fallback.id) {
+      state.currentUserId = fallback.id;
+      state.currentUsername = state.currentUsername || fallback.username;
+    }
+  }
+
   const isLoggedIn = !!state.currentUserId;
   const documentType: 'comment' | 'post' = state.commentById.has(documentId) ? 'comment' : 'post';
   Logger.debug(`executeVote: type=${documentType}, kind=${kind}, targetState=${targetState}, id=${documentId}`);

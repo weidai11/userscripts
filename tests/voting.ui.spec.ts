@@ -349,6 +349,6 @@ test.describe('Power Reader Voting UI', () => {
         await page.waitForFunction(() => (window as any).__OPENED_TAB !== undefined, { timeout: 15000 });
 
         const openedTab = await page.evaluate(() => (window as any).__OPENED_TAB);
-        expect(openedTab).toContain('lesswrong.com/auth/auth0');
+        expect(openedTab).toContain('lesswrong.com/login');
     });
 });

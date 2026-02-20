@@ -2069,15 +2069,14 @@ return { data: {} };
       mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
       testMode: true,
       onInit: `
-      window.LessWrong = {
-        params: {
-          currentUser: {
-            _id: '${userId}',
-            username: 'AuthTest_User',
-            displayName: 'Auth Test'
-          }
-        }
+      // Simulate archive pages where LessWrong.params.currentUser is absent.
+      // Auth identity is still available via window.currentUser.
+      window.currentUser = {
+        _id: '${userId}',
+        username: 'AuthTest_User',
+        displayName: 'Auth Test'
       };
+      window.LessWrong = {};
     `,
       onGraphQL: `
 if (query.includes('UserBySlug') || query.includes('user(input:')) {
@@ -2102,6 +2101,24 @@ if (query.includes('GetUserComments')) {
             postId: 'p1'
           }
         ]
+      }
+    }
+  };
+}
+if (query.includes('mutation Vote') || query.includes('performVoteComment')) {
+  window.__ARCHIVE_VOTE_MUTATION__ = true;
+  return {
+    data: {
+      performVoteComment: {
+        document: {
+          _id: variables.documentId,
+          baseScore: 6,
+          voteCount: 1,
+          currentUserVote: variables.voteType,
+          currentUserExtendedVote: null,
+          extendedScore: { reacts: {} },
+          afExtendedScore: { agreement: 0 }
+        }
       }
     }
   };
@@ -2145,6 +2162,14 @@ return { data: {} };
     // Buttons should NOT be disabled (user is authenticated)
     expect(readerStateCheck.upvoteDisabled).toBeFalsy();
     expect(readerStateCheck.downvoteDisabled).toBeFalsy();
+
+    // Click upvote and verify vote mutation runs instead of login redirect.
+    await page.locator('.pr-comment[data-id="c-vote-test"] [data-action="karma-up"]').click();
+    await expect.poll(async () => {
+      return await page.evaluate(() => (window as any).__ARCHIVE_VOTE_MUTATION__ === true);
+    }).toBe(true);
+    const openedTab = await page.evaluate(() => (window as any).__OPENED_TAB);
+    expect(openedTab).toBeUndefined();
   });
 
   test('[PR-UARCH-24] thread sort mode persists through archive rerenders', async ({ page }) => {

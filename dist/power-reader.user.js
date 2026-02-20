@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.686
+// @version    1.2.688
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1060,17 +1060,19 @@ dirty.indexOf("<") === -1) {
     }
     Logger.info("AI Studio: Automation triggered.");
     try {
-      GM_setValue("ai_studio_status", "Configuring AI model...");
-      await automateModelSelection();
+      GM_setValue("ai_studio_status", "Selecting Flash 3...");
+      await selectModel("gemini-3-flash-preview", "Flash 3");
       await automateDisableSearch();
       await automateEnableUrlContext();
       GM_setValue("ai_studio_status", "Injecting metadata thread...");
       const requestId = GM_getValue("ai_studio_request_id");
       await injectPrompt(payload);
-      await sleep$1(500);
+      await sleep$1(1e3);
       GM_setValue("ai_studio_status", "Submitting prompt...");
       await automateRun();
       const responseText = await waitForResponse();
+      GM_setValue("ai_studio_status", "Switching to 3.1 Pro...");
+      await selectModel("gemini-3.1-pro-preview", "3.1 Pro Preview");
       GM_setValue("ai_studio_status", "Response received!");
       GM_setValue("ai_studio_response_payload", {
         text: responseText,
@@ -1095,14 +1097,16 @@ dirty.indexOf("<") === -1) {
         window.addEventListener("keydown", markInteracted, { once: true, capture: true });
         window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
       }, { once: true });
-      setTimeout(() => {
+      const checkClose = () => {
         if (!hasInteracted && document.visibilityState !== "visible") {
           Logger.info("AI Studio: Idle and backgrounded. Closing tab.");
           window.close();
         } else if (!hasInteracted) {
           Logger.info("AI Studio: 5m reached but tab is currently visible. Postponing close.");
+          setTimeout(checkClose, 60 * 1e3);
         }
-      }, 5 * 60 * 1e3);
+      };
+      setTimeout(checkClose, 5 * 60 * 1e3);
     } catch (error) {
       Logger.error("AI Studio: Automation failed", error);
       GM_setValue("ai_studio_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
@@ -1134,14 +1138,19 @@ dirty.indexOf("<") === -1) {
       }, timeout);
     });
   }
-  async function automateModelSelection() {
+  async function selectModel(idPart, namePart) {
     const modelCard = await waitForElement("button.model-selector-card");
-    if (modelCard.innerText.includes("Flash 3") || modelCard.innerText.includes("Gemini 3 Flash")) {
+    const currentModel = modelCard.innerText;
+    const loweredModel = currentModel.toLowerCase();
+    const loweredName = namePart.toLowerCase();
+    const isFlash3 = namePart === "Flash 3" && (loweredModel.includes("flash 3") || loweredModel.includes("gemini 3 flash"));
+    if (loweredModel.includes(loweredName) || isFlash3) {
       return;
     }
     modelCard.click();
-    const flash3Btn = await waitForElement('button[id*="gemini-3-flash-preview"]');
-    flash3Btn.click();
+    const targetModelBtn = await waitForElement(`button[id*="${idPart}"]`);
+    targetModelBtn.click();
+    await sleep$1(500);
   }
   async function automateDisableSearch() {
     const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
@@ -2715,7 +2724,7 @@ dirty.indexOf("<") === -1) {
     const html2 = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.686"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.688"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6451,7 +6460,7 @@ refresh() {
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     let html2 = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.688"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -6597,7 +6606,7 @@ refresh() {
     if (!root) return;
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
+      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.688"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -6620,18 +6629,31 @@ refresh() {
       }
     });
   };
-  const LOGIN_URL = `${window.location.origin}/auth/auth0`;
+  const LOGIN_URL = `${window.location.origin}/login`;
   const openLoginPage = () => {
     const opened = window.open(LOGIN_URL, "_blank", "noopener,noreferrer");
     if (opened) opened.opener = null;
   };
-  async function castKarmaVote(documentId, voteType, isLoggedIn, currentAgreement = null, documentType = "comment") {
-    Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
+  const isAuthRelatedError = (error) => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return /log\s*in|not\s+logged|unauthori[sz]ed|forbidden|\bauth(?:entication|orization)?\b/i.test(message);
+  };
+  const handleVoteFailure = (error, isLoggedIn, actionLabel) => {
     if (!isLoggedIn) {
-      Logger.info("Not logged in, opening auth page");
+      Logger.info(`${actionLabel} failed while user auth state is unknown/logged-out; opening login page`);
       openLoginPage();
       return null;
     }
+    if (isAuthRelatedError(error)) {
+      Logger.info(`${actionLabel} rejected due to auth; opening login page`);
+      openLoginPage();
+      return null;
+    }
+    Logger.error(`${actionLabel} failed:`, error);
+    return null;
+  };
+  async function castKarmaVote(documentId, voteType, isLoggedIn, currentAgreement = null, documentType = "comment") {
+    Logger.debug(`castKarmaVote: documentId=${documentId}, type=${documentType}, isLoggedIn=${isLoggedIn}`);
     try {
       if (documentType === "post") {
         const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
@@ -6648,15 +6670,10 @@ refresh() {
       });
       return response;
     } catch (e) {
-      Logger.error("Vote failed:", e);
-      return null;
+      return handleVoteFailure(e, isLoggedIn, "Vote");
     }
   }
   async function castAgreementVote(documentId, voteType, isLoggedIn, currentKarma = "neutral", documentType = "comment") {
-    if (!isLoggedIn) {
-      openLoginPage();
-      return null;
-    }
     const agreementValue = voteType === "agree" ? "smallUpvote" : voteType === "disagree" ? "smallDownvote" : "neutral";
     try {
       if (documentType === "post") {
@@ -6674,15 +6691,10 @@ refresh() {
       });
       return response;
     } catch (e) {
-      Logger.error("Agreement vote failed:", e);
-      return null;
+      return handleVoteFailure(e, isLoggedIn, "Agreement vote");
     }
   }
-  async function castReactionVote(commentId, reactionName, isLoggedIn, currentKarma = "neutral", currentExtendedVote = {}, quote = null) {
-    if (!isLoggedIn) {
-      openLoginPage();
-      return null;
-    }
+  async function castReactionVote(documentId, reactionName, isLoggedIn, currentKarma = "neutral", currentExtendedVote = {}, quote = null, documentType = "comment") {
     const existingReacts = currentExtendedVote?.reacts || [];
     const newReacts = JSON.parse(JSON.stringify(existingReacts));
     const existingReactionIndex = newReacts.findIndex((r) => r.react === reactionName);
@@ -6716,15 +6728,22 @@ refresh() {
       reacts: newReacts
     };
     try {
+      if (documentType === "post") {
+        const response2 = await queryGraphQL(VOTE_POST_MUTATION, {
+          documentId,
+          voteType: currentKarma || "neutral",
+          extendedVote: extendedVotePayload
+        });
+        return response2;
+      }
       const response = await queryGraphQL(VOTE_COMMENT_MUTATION, {
-        documentId: commentId,
+        documentId,
         voteType: currentKarma || "neutral",
-extendedVote: extendedVotePayload
+        extendedVote: extendedVotePayload
       });
       return response;
     } catch (e) {
-      Logger.error("Reaction vote failed:", e);
-      return null;
+      return handleVoteFailure(e, isLoggedIn, "Reaction vote");
     }
   }
   function calculateNextVoteState(currentVote, direction, isHold) {
@@ -6774,6 +6793,14 @@ extendedVote: extendedVotePayload
       disagreeBtn?.classList.toggle("strong-vote", agreeState === "bigDownvote");
     });
   }
+  const getCurrentUserFromGlobals = () => {
+    const win = window;
+    const user = win.LessWrong?.params?.currentUser || win.LessWrong?.currentUser || win.currentUser || win.__CURRENT_USER__ || null;
+    return {
+      id: user?._id ?? null,
+      username: user?.username ?? null
+    };
+  };
   const ACTION_TO_VOTE = {
     "karma-up": { kind: "karma", dir: "up" },
     "karma-down": { kind: "karma", dir: "down" },
@@ -6849,6 +6876,13 @@ extendedVote: extendedVotePayload
     target.classList.remove("active-up", "active-down", "agree-active", "disagree-active", "strong-vote");
   };
   const executeVote = async (documentId, targetState, kind, state2, document2) => {
+    if (!state2.currentUserId) {
+      const fallback = getCurrentUserFromGlobals();
+      if (fallback.id) {
+        state2.currentUserId = fallback.id;
+        state2.currentUsername = state2.currentUsername || fallback.username;
+      }
+    }
     const isLoggedIn = !!state2.currentUserId;
     const documentType = state2.commentById.has(documentId) ? "comment" : "post";
     Logger.debug(`executeVote: type=${documentType}, kind=${kind}, targetState=${targetState}, id=${documentId}`);
@@ -7721,7 +7755,8 @@ currentCommentId = null;
     try {
       const post = await fetchAndRenderPost(postId, state2);
       if (post) {
-        titleLink.removeAttribute("data-action");
+        const updatedTitleLink = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-title[data-action="load-post"]`);
+        if (updatedTitleLink) updatedTitleLink.removeAttribute("data-action");
       } else {
         contentEl.innerHTML = '<div class="pr-info" style="color: red;">Failed to load post content.</div>';
       }
@@ -7738,6 +7773,22 @@ currentCommentId = null;
     const eBtn = postEl.querySelector('[data-action="toggle-post-body"]');
     const isFromSticky = !!target.closest(".pr-sticky-header");
     const container = postEl.querySelector(".pr-post-body-container");
+    const scrollBehavior = window.__PR_TEST_MODE__ ? "auto" : "smooth";
+    const getVisibleViewportTop = () => {
+      const stickyHeader2 = document.getElementById("pr-sticky-header");
+      if (!stickyHeader2 || !stickyHeader2.classList.contains("visible")) return 0;
+      return Math.max(0, stickyHeader2.getBoundingClientRect().bottom);
+    };
+    const alignCollapsedBodyBottomToVisibleTop = (postBodyContainer) => {
+      const visibleTop = getVisibleViewportTop();
+      const bottom = postBodyContainer.getBoundingClientRect().bottom;
+      if (bottom >= visibleTop) return;
+      const targetTop = window.scrollY + bottom - visibleTop;
+      window.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: scrollBehavior
+      });
+    };
     if (!container) {
       if (eBtn) eBtn.textContent = "[...]";
       try {
@@ -7765,10 +7816,10 @@ currentCommentId = null;
           const freshPostEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
           const postHeader = freshPostEl?.querySelector(".pr-post-header");
           if (postHeader) {
-            const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+            const newHeaderTop = postHeader.getBoundingClientRect().top + window.scrollY;
             window.scrollTo({
               top: newHeaderTop,
-              behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+              behavior: scrollBehavior
             });
           }
         }
@@ -7796,14 +7847,17 @@ currentCommentId = null;
       const readMoreBtn = container.querySelector(".pr-post-read-more");
       if (readMoreBtn) readMoreBtn.style.display = "block";
       if (eBtn) eBtn.title = "Expand post body";
+      if (!isFromSticky) {
+        alignCollapsedBodyBottomToVisibleTop(container);
+      }
     }
     if (isFromSticky) {
       const postHeader = postEl.querySelector(".pr-post-header");
       if (postHeader) {
-        const newHeaderTop = postHeader.getBoundingClientRect().top + window.pageYOffset;
+        const newHeaderTop = postHeader.getBoundingClientRect().top + window.scrollY;
         window.scrollTo({
           top: newHeaderTop,
-          behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+          behavior: scrollBehavior
         });
       }
     }
@@ -10331,9 +10385,9 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       const state2 = createInitialState();
       state2.isArchiveMode = true;
       state2.archiveUsername = this.archiveState.username;
-      const currentUser = window.LessWrong?.params?.currentUser;
-      state2.currentUsername = currentUser?.username || null;
-      state2.currentUserId = currentUser?._id || null;
+      const currentUser = getCurrentUserFromGlobals();
+      state2.currentUsername = currentUser.username;
+      state2.currentUserId = currentUser.id;
       this.archiveState.items.forEach((item) => {
         if ("title" in item) {
           state2.posts.push(item);
@@ -12620,7 +12674,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
+      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.688"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -14083,7 +14137,7 @@ sortCanonicalItems() {
     const state2 = getState();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.686"}</small></h1>
+      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.688"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
