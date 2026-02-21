@@ -1,3 +1,5 @@
+import { adaptForLegacy } from './legacyAdapter';
+
 declare const GM_xmlhttpRequest: any;
 
 const LOG_PREFIX = '[GraphQL Client]';
@@ -21,9 +23,12 @@ function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): bo
     });
 }
 
+function isEAF(): boolean {
+    return window.location.hostname === 'forum.effectivealtruism.org';
+}
+
 function getGraphQLEndpoint(): string {
-    const hostname = window.location.hostname;
-    if (hostname === 'forum.effectivealtruism.org') {
+    if (isEAF()) {
         return 'https://forum.effectivealtruism.org/graphql';
     }
     return 'https://www.lesswrong.com/graphql';
@@ -54,7 +59,16 @@ export async function queryGraphQL<TData = any, TVariables = any>(
     options: GraphQLQueryOptions = {}
 ): Promise<TData> {
     const url = getGraphQLEndpoint();
-    const data = JSON.stringify({ query, variables });
+
+    let effectiveQuery = query;
+    let effectiveVariables: any = variables;
+    if (isEAF()) {
+        const adapted = adaptForLegacy(query, variables);
+        effectiveQuery = adapted.query;
+        effectiveVariables = adapted.variables;
+    }
+
+    const data = JSON.stringify({ query: effectiveQuery, variables: effectiveVariables });
     const maxAttempts = 3;
     const delays = [1000, 2000];
 

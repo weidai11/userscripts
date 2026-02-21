@@ -39,6 +39,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-DATA-03.1]** **Scoped Partial Success**: Partial-success mode is allowed only via explicit opt-in per call site. In partial mode, the client MUST return `data` only when all errors match an allowlist of tolerated patterns; otherwise it MUST throw.
 - **[PR-DATA-03.2]** **Archive-Only Tolerance**: Tolerated partial-success behavior is limited to bulk archive fetch paths. Interactive and mutation paths (votes, reactions, navigation actions) MUST remain strict.
 - **[PR-DATA-04]** **UI Fallbacks**: Rendering components MUST handle missing or null field values (like `pageUrl`) gracefully, providing sensible fallbacks (e.g., `'#'` for links) to prevent UI crashes or broken interactions when the server fails to resolve specific fields.
+- **[PR-DATA-05]** **Cross-Site Query Compatibility**: Queries are written in the modern `selector`/top-level-args syntax (for codegen type safety on LW). A runtime adapter in the GraphQL client automatically rewrites them to the legacy `input`/`terms` syntax when running on EA Forum. Every query using `selector` MUST be registered in `LEGACY_ADAPTERS` (`src/shared/graphql/legacyAdapter.ts`) so it works on EAF.
 
 ---
 

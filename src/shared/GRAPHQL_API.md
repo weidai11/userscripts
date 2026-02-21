@@ -51,6 +51,12 @@ Used by older versions of the codebase and still supported by the server for bac
 
 > **Relationship**: The server internally maps the `selector` pattern to the `input` pattern. Using the modern pattern is recommended because it allows `graphql-codegen` to provide accurate types for the arguments required by specific views.
 
+### Cross-Site Compatibility
+
+As of February 2026, **LessWrong** supports both patterns, while **EA Forum** only supports the legacy `input`/`terms` pattern. The EA Forum runs an older version of ForumMagnum that predates the modern `selector` refactor (~April 2025).
+
+Our queries are written in the modern syntax (for codegen type safety on LW), and a **runtime adapter** in `src/shared/graphql/client.ts` automatically rewrites them to legacy format when running on EA Forum. See `LEGACY_ADAPTERS` in that file. When adding a new query that uses `selector`, you must also register it in the adapter so it works on EAF.
+
 ---
 
 ## Global Query Structure
