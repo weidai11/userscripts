@@ -219,48 +219,71 @@ export function setupHoverPreview(
     trackMousePos(e);
     Logger.debug('Preview mouseenter: trigger=', trigger.tagName, trigger.className, 'dataset=', JSON.stringify(trigger.dataset));
 
-    if (!isIntentionalHover()) {
-      return;
-    }
     Logger.debug('setupHoverPreview: clearing pending timeout', state.hoverTimeout);
 
-    // Check visibility for highlight and preview skipping
+    // Highlight target matches immediately (even for non-intentional hovers).
+    // Intentionality is applied only to preview popup opening.
+    let targets: HTMLElement[] | null = null;
     if (options.targetGetter) {
-      const result = await options.targetGetter();
-      if (result) {
-        const targets = Array.isArray(result) ? result : [result];
+      let leftBeforeResolve = false;
+      const trackEarlyLeave = () => {
+        leftBeforeResolve = true;
+      };
+      trigger.addEventListener('mouseleave', trackEarlyLeave, { once: true });
 
-        // 1. Highlight matches (always, regardless of visibility)
+      const result = await options.targetGetter();
+      trigger.removeEventListener('mouseleave', trackEarlyLeave);
+      if (leftBeforeResolve) {
+        return;
+      }
+
+      if (result) {
+        targets = Array.isArray(result) ? result : [result];
+
         if (targets.length > 0) {
-          targets.forEach(t => {
+          targets.forEach((t) => {
             t.classList.add('pr-parent-hover');
           });
 
           const removeHighlight = () => {
-            targets.forEach(t => t.classList.remove('pr-parent-hover'));
-            trigger.removeEventListener('mouseleave', removeHighlight);
+            // Ignore transient leave events while the pointer is still over the trigger.
+            // This avoids losing highlight during synthetic/test-driven hover sequences.
+            requestAnimationFrame(() => {
+              if (trigger.matches(':hover')) {
+                trigger.addEventListener('mouseleave', removeHighlight, { once: true });
+                return;
+              }
+              targets?.forEach((t) => t.classList.remove('pr-parent-hover'));
+            });
           };
-          trigger.addEventListener('mouseleave', removeHighlight);
+          trigger.addEventListener('mouseleave', removeHighlight, { once: true });
         }
+      }
+    }
 
-        // 2. Skip preview ONLY if fully visible
-        // SPECIAL CASE: If the target is a sticky header, we still show the preview 
-        // because the sticky header doesn't show the full post body.
+    if (!isIntentionalHover()) {
+      return;
+    }
 
-        // [PR-FIX] Force layout for ALL target containers to ensure elementFromPoint works correctly
-        const containers = new Set(targets.map(t => t.closest('.pr-post-group') || t) as HTMLElement[]);
-        const forcePromises = Array.from(containers).map(c => withForcedLayout(c, () => { /* Wake up */ }));
-        await Promise.all(forcePromises);
+    // Check visibility for preview skipping
+    if (targets && targets.length > 0) {
+      // Skip preview ONLY if fully visible
+      // SPECIAL CASE: If the target is a sticky header, we still show the preview
+      // because the sticky header doesn't show the full post body.
 
-        const allFullyVisible = targets.every(t => {
-          const isSticky = !!t.closest('.pr-sticky-header');
-          if (isSticky) return false;
-          return isElementFullyVisible(t);
-        });
+      // [PR-FIX] Force layout for ALL target containers to ensure elementFromPoint works correctly
+      const containers = new Set(targets.map(t => t.closest('.pr-post-group') || t) as HTMLElement[]);
+      const forcePromises = Array.from(containers).map(c => withForcedLayout(c, () => { /* Wake up */ }));
+      await Promise.all(forcePromises);
 
-        if (allFullyVisible) {
-          return;
-        }
+      const allFullyVisible = targets.every(t => {
+        const isSticky = !!t.closest('.pr-sticky-header');
+        if (isSticky) return false;
+        return isElementFullyVisible(t);
+      });
+
+      if (allFullyVisible) {
+        return;
       }
     }
 

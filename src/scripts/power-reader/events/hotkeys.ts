@@ -38,6 +38,7 @@ export const attachHotkeyListeners = (state: ReaderState, abortSignal?: AbortSig
       '=': 'expand', // Support = without shift
       'e': 'toggle-post-body',
       'g': 'send-to-ai-studio',
+      'm': 'send-to-arena-max',
     };
 
     let action = actionMap[key];

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.691] - 2026-02-20
+
+### Added
+- **Arena.ai Max Integration**: Added support for sending posts and comments to **Arena.ai Max** as an alternative to Google AI Studio.
+  - Trigger via new hotkey `'m'` or the `[m]` action button.
+  - Supports `Shift+M` or Shift+Click to include full descendant threads.
+  - Automated prompt injection and response capture within the Arena.ai interface, including grace period for Cloudflare verification.
+  - New AI response popup matches existing AI Studio UI for consistency.
+
 ## [1.2.690] - 2026-02-20
 
 ### Fixed

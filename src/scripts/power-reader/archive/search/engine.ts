@@ -233,7 +233,7 @@ const executeAgainstCorpus = (
           }
           matched = new Uint32Array(results);
         } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {
-          matched = corpus.tokenIndex.get(clause.valueNorm) || new Uint32Array(0);
+          matched = corpus.tokenIndex.get(clause.valueNorm) || EMPTY_POSTINGS;
         } else {
           const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);
           if (accelerated) {
@@ -259,7 +259,7 @@ const executeAgainstCorpus = (
       case 'author': {
         const nameTokens = tokenizeForIndex(clause.valueNorm);
         const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);
-        if (accelerated) {
+        if (accelerated && accelerated.length > 0) {
           const results: number[] = [];
           accelerated.forEach(ordinal => {
             const doc = corpus.docs[ordinal];
@@ -270,14 +270,26 @@ const executeAgainstCorpus = (
           });
           matched = new Uint32Array(results);
         } else {
-          matched = null;
+          const results: number[] = [];
+          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+            if (shouldCheckBudget(ordinal)) {
+              partialResults = true;
+              break;
+            }
+            const doc = corpus.docs[ordinal];
+            if (!doc.authorNameNorm.includes(clause.valueNorm)) continue;
+            results.push(ordinal);
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.authorHit = true;
+          }
+          matched = new Uint32Array(results);
         }
         break;
       }
       case 'replyto': {
         const nameTokens = tokenizeForIndex(clause.valueNorm);
         const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);
-        if (accelerated) {
+        if (accelerated && accelerated.length > 0) {
           const results: number[] = [];
           accelerated.forEach(ordinal => {
             const doc = corpus.docs[ordinal];
@@ -288,7 +300,19 @@ const executeAgainstCorpus = (
           });
           matched = new Uint32Array(results);
         } else {
-          matched = null;
+          const results: number[] = [];
+          for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+            if (shouldCheckBudget(ordinal)) {
+              partialResults = true;
+              break;
+            }
+            const doc = corpus.docs[ordinal];
+            if (!doc.replyToNorm.includes(clause.valueNorm)) continue;
+            results.push(ordinal);
+            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+            signal.replyToHit = true;
+          }
+          matched = new Uint32Array(results);
         }
         break;
       }

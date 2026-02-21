@@ -102,6 +102,7 @@ export const renderPostHeader = (
       <h2><span class="pr-post-title" data-post-id="${post._id}"${!isFullPost ? ' data-action="load-post"' : ''}>${escapedTitle}</span></h2>
       <span class="pr-post-actions">
         <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+        <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
         <span class="pr-post-action text-btn ${eDisabled ? 'disabled' : ''}" data-action="toggle-post-body" title="${eTooltip}">[e]</span>
         <span class="pr-post-action text-btn ${aDisabled ? 'disabled' : ''}" data-action="load-all-comments" title="${aTooltip}">[a]</span>
         <span class="pr-post-action text-btn ${cDisabled ? 'disabled' : ''}" data-action="scroll-to-comments" title="${cTooltip}">[c]</span>

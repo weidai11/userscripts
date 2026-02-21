@@ -141,6 +141,38 @@ test.describe('Post Action Buttons', () => {
         await expect(page.locator('.pr-comment[data-id="c2"]')).toBeVisible();
     });
 
+    test('[PR-POSTBTN-02] Load All Comments request limit scales to post.commentCount when above loadMax', async ({ page }) => {
+        const expectedLimit = 1200;
+        const posts = [{ _id: 'p1', title: 'Post 1', htmlBody: 'Body', commentCount: expectedLimit }];
+        const comments = [{
+            _id: 'c-seed',
+            postId: 'p1',
+            htmlBody: 'Seed',
+            postedAt: new Date().toISOString(),
+            user: { username: 'A' }
+        }];
+
+        await initPowerReader(page, {
+            posts,
+            comments,
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('query GetPostComments')) {
+                    window.__LAST_LOAD_ALL_LIMIT = variables.limit;
+                    return { data: { comments: { results: [] } } };
+                }
+            `
+        });
+
+        const btn = page.locator('.pr-post[data-id="p1"] [data-action="load-all-comments"]');
+        await btn.click();
+        await page.getByRole('button', { name: 'Load all descendants' }).click();
+        await expect(btn).toHaveText('[a]', { timeout: 10000 });
+
+        const actualLimit = await page.evaluate(() => (window as any).__LAST_LOAD_ALL_LIMIT);
+        expect(actualLimit).toBe(expectedLimit);
+    });
+
     test('[PR-POSTBTN-03][PR-POSTBTN-04] Scroll actions', async ({ page }) => {
         const posts = [
             { _id: 'p1', title: 'P1', htmlBody: '<div style="height: 1000px">B1</div>', commentCount: 1, postedAt: new Date().toISOString() },

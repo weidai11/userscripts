@@ -36,6 +36,12 @@ export interface ReaderState {
   currentAIRequestId: string | null;
   activeAIPopup: HTMLElement | null;
   sessionAICache: Record<string, string>;
+  postDescendantsCache: Map<string, {
+    comments: Comment[];
+    totalCount: number;
+    complete: boolean;
+    fetchedAt: number;
+  }>;
 
   // Feature flags / Modes
   isArchiveMode: boolean;
@@ -65,6 +71,7 @@ export const createInitialState = (): ReaderState => ({
   currentAIRequestId: null,
   activeAIPopup: null,
   sessionAICache: {},
+  postDescendantsCache: new Map(),
   isArchiveMode: false,
   archiveUsername: null,
 });

@@ -234,19 +234,21 @@ const upsertContextualEntries = async (
   if (items.length === 0) return;
 
   const db = await openDB();
-  const tx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
-  const store = tx.objectStore(STORE_CONTEXTUAL);
   const now = Date.now();
-
   const uniqueItems = dedupeById(items);
 
+  const readTx = db.transaction(STORE_CONTEXTUAL, 'readonly');
+  const readStore = readTx.objectStore(STORE_CONTEXTUAL);
   const getPromises = uniqueItems.map(item => {
     const key = contextCacheKey(username, itemType, item._id);
-    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
+    return requestToPromise(readStore.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
       .then(existing => ({ item, key, existing }));
   });
-
   const results = await Promise.all(getPromises);
+  await transactionToPromise(readTx);
+
+  const writeTx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
+  const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
 
   for (const { item, key, existing } of results) {
     const payload = existing
@@ -268,10 +270,10 @@ const upsertContextualEntries = async (
       updatedAt: now,
       lastAccessedAt: now
     };
-    store.put(entry);
+    writeStore.put(entry);
   }
 
-  await transactionToPromise(tx);
+  await transactionToPromise(writeTx);
 };
 
 /**
@@ -301,53 +303,98 @@ export const loadContextualCommentsByIds = async (
   if (ids.length === 0) return { comments: [], missingIds: [] };
 
   const db = await openDB();
-  const tx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
-  const store = tx.objectStore(STORE_CONTEXTUAL);
   const now = Date.now();
-
   const comments: Comment[] = [];
   const missingIds: string[] = [];
+  const staleCacheKeys = new Set<string>();
+  const touchedByKey = new Map<string, ContextualCacheEntry>();
 
-  const getPromises = ids.map(id => {
+  const readCommentsTx = db.transaction(STORE_CONTEXTUAL, 'readonly');
+  const readCommentsStore = readCommentsTx.objectStore(STORE_CONTEXTUAL);
+  const commentEntryPromises = ids.map(id => {
     const key = contextCacheKey(username, 'comment', id);
-    return requestToPromise(store.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
+    return requestToPromise(readCommentsStore.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
       .then(entry => ({ id, entry }));
   });
+  const commentEntryResults = await Promise.all(commentEntryPromises);
+  await transactionToPromise(readCommentsTx);
 
-  const results = await Promise.all(getPromises);
+  const validComments: Array<{ comment: Comment }> = [];
+  const neededPostIds = new Set<string>();
 
-  for (const { id, entry } of results) {
+  for (const { id, entry } of commentEntryResults) {
     const isExpired = !!entry && (now - entry.updatedAt > CONTEXT_MAX_AGE_MS);
 
     if (!entry || entry.itemType !== 'comment' || isExpired) {
       if (entry && isExpired) {
-        store.delete(entry.cacheKey);
+        staleCacheKeys.add(entry.cacheKey);
       }
       missingIds.push(id);
       continue;
     }
 
-    entry.lastAccessedAt = now;
-    store.put(entry);
+    const touchedCommentEntry: ContextualCacheEntry = {
+      ...entry,
+      lastAccessedAt: now
+    };
+    touchedByKey.set(touchedCommentEntry.cacheKey, touchedCommentEntry);
 
     const comment = { ...(entry.payload as Comment) } as Comment;
+    validComments.push({ comment });
     if (!comment.post && comment.postId) {
-      const postEntry = await requestToPromise(
-        store.get(contextCacheKey(username, 'post', comment.postId)) as IDBRequest<ContextualCacheEntry | undefined>
-      );
-      const postExpired = !!postEntry && (now - postEntry.updatedAt > CONTEXT_MAX_AGE_MS);
-      if (postEntry && postExpired) {
-        store.delete(postEntry.cacheKey);
-      } else if (postEntry && postEntry.itemType === 'post') {
-        postEntry.lastAccessedAt = now;
-        store.put(postEntry);
+      neededPostIds.add(comment.postId);
+    }
+  }
+
+  const postById = new Map<string, ContextualCacheEntry>();
+  if (neededPostIds.size > 0) {
+    const readPostsTx = db.transaction(STORE_CONTEXTUAL, 'readonly');
+    const readPostsStore = readPostsTx.objectStore(STORE_CONTEXTUAL);
+    const postEntryPromises = Array.from(neededPostIds).map(postId => {
+      const key = contextCacheKey(username, 'post', postId);
+      return requestToPromise(readPostsStore.get(key) as IDBRequest<ContextualCacheEntry | undefined>)
+        .then(entry => ({ postId, entry }));
+    });
+    const postEntryResults = await Promise.all(postEntryPromises);
+    await transactionToPromise(readPostsTx);
+
+    for (const { postId, entry } of postEntryResults) {
+      const isExpired = !!entry && (now - entry.updatedAt > CONTEXT_MAX_AGE_MS);
+      if (!entry || entry.itemType !== 'post' || isExpired) {
+        if (entry && isExpired) {
+          staleCacheKeys.add(entry.cacheKey);
+        }
+        continue;
+      }
+      postById.set(postId, entry);
+    }
+  }
+
+  for (const { comment } of validComments) {
+    if (!comment.post && comment.postId) {
+      const postEntry = postById.get(comment.postId);
+      if (postEntry) {
+        const touchedPostEntry: ContextualCacheEntry = {
+          ...postEntry,
+          lastAccessedAt: now
+        };
+        touchedByKey.set(touchedPostEntry.cacheKey, touchedPostEntry);
         (comment as any).post = postEntry.payload as Post;
       }
     }
     comments.push(comment);
   }
 
-  await transactionToPromise(tx);
+  if (staleCacheKeys.size > 0 || touchedByKey.size > 0) {
+    const writeTx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
+    const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
+
+    staleCacheKeys.forEach(key => writeStore.delete(key));
+    touchedByKey.forEach(entry => writeStore.put(entry));
+
+    await transactionToPromise(writeTx);
+  }
+
   return { comments: dedupeById(comments), missingIds };
 };
 
@@ -391,18 +438,22 @@ export const loadAllContextualItems = async (
  */
 export const pruneContextualCache = async (username: string): Promise<void> => {
   const db = await openDB();
-  const tx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
-  const store = tx.objectStore(STORE_CONTEXTUAL);
-  const index = store.index('username');
-  const entries = await requestToPromise(index.getAll(IDBKeyRange.only(username)) as IDBRequest<ContextualCacheEntry[]>);
+  const readTx = db.transaction(STORE_CONTEXTUAL, 'readonly');
+  const readStore = readTx.objectStore(STORE_CONTEXTUAL);
+  const entries = await requestToPromise(
+    readStore.index('username').getAll(IDBKeyRange.only(username)) as IDBRequest<ContextualCacheEntry[]>
+  );
+  await transactionToPromise(readTx);
+
   const now = Date.now();
 
   let removed = 0;
+  const keysToDelete: string[] = [];
 
   const freshEntries = entries.filter(entry => {
     const isExpired = now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
     if (isExpired) {
-      store.delete(entry.cacheKey);
+      keysToDelete.push(entry.cacheKey);
       removed++;
     }
     return !isExpired;
@@ -415,12 +466,17 @@ export const pruneContextualCache = async (username: string): Promise<void> => {
       .slice(0, overflow);
 
     toEvict.forEach(entry => {
-      store.delete(entry.cacheKey);
+      keysToDelete.push(entry.cacheKey);
       removed++;
     });
   }
 
-  await transactionToPromise(tx);
+  if (keysToDelete.length > 0) {
+    const writeTx = db.transaction(STORE_CONTEXTUAL, 'readwrite');
+    const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
+    keysToDelete.forEach(key => writeStore.delete(key));
+    await transactionToPromise(writeTx);
+  }
 
   if (removed > 0) {
     Logger.info(`Pruned ${removed} contextual cache records for ${username}`);

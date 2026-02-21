@@ -11,13 +11,14 @@ import { setUIHost } from '../render/uiHost';
 import { ArchiveUIHost } from './uiHost';
 import { attachEventListeners } from '../events/index';
 import { initAIStudioListener } from '../features/aiStudioPopup';
+import { initArenaMaxListener } from '../features/arenaMaxPopup';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupInlineReactions } from '../features/inlineReactions';
-import { setupLinkPreviews } from '../features/linkPreviews';
+
 import { initPreviewSystem } from '../utils/preview';
-import { refreshAllPostActionButtons, refreshPostActionButtons } from '../utils/dom';
+import { refreshPostActionButtons } from '../utils/dom';
 import { ArchiveSearchManager } from './search';
-import { ReadTracker } from '../services/ReadTracker';
+
 import { parseArchiveUrlState, writeArchiveUrlState } from './search/urlState';
 import { createSearchWorkerClient } from './search/workerFactory';
 import { parseStructuredQuery } from './search/parser';
@@ -1209,7 +1210,7 @@ export const initArchive = async (username: string): Promise<void> => {
         const id = node.dataset.id;
         if (!id || seenIds.has(id)) return;
         seenIds.add(id);
-        if (activeDebugRelevanceSignalsById[id]) {
+        if (activeDebugRelevanceSignalsById && activeDebugRelevanceSignalsById[id]) {
           appendExplain(node, activeDebugRelevanceSignalsById[id]);
         }
       });
@@ -1517,6 +1518,7 @@ export const initArchive = async (username: string): Promise<void> => {
     // Attach standard event listeners using the host's reader state
     attachEventListeners(uiHost.getReaderState());
     initAIStudioListener(uiHost.getReaderState());
+    initArenaMaxListener(uiHost.getReaderState());
 
     // Sticky header currently depends on main-reader singleton state (`getState()`).
     // Do not enable it in archive mode until it is wired to archive-local ReaderState.

@@ -202,18 +202,18 @@ export class ReadTracker {
             currentComments.forEach(c => dateByItemId.set(c._id, c.postedAt));
             this.postsDataGetter().forEach(p => dateByItemId.set(p._id, p.postedAt));
 
-            const cleanupCutoffTime = new Date(currentLoadFrom).getTime();
+            const cleanupCutoffTime = new Date(nextLoadFrom).getTime();
             let removedCount = 0;
 
             for (const id of Object.keys(readState)) {
                 if (dateByItemId.has(id)) continue; // Keep if in current batch regardless of date
 
                 const postedAt = dateByItemId.get(id);
-                // remove if: 
-                // 1. its date is strictly older than the PREVIOUS loadFrom
-                // 2. OR it is unknown (orphan from a previous session that is not in the current batch)
-                const itemTime = postedAt ? new Date(postedAt).getTime() : 0;
-                if (!postedAt || itemTime < cleanupCutoffTime) {
+                // remove if:
+                // 1. item is unknown in the current loaded set (orphaned), OR
+                // 2. item timestamp is older than the NEW loadFrom cutoff
+                const itemTime = postedAt ? new Date(postedAt).getTime() : NaN;
+                if (!postedAt || !Number.isFinite(itemTime) || itemTime < cleanupCutoffTime) {
                     delete readState[id];
                     removedCount++;
                 }

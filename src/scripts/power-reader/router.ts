@@ -4,11 +4,13 @@
 
 import { Logger } from './utils/logger';
 import { handleAIStudio } from './utils/ai-studio-handler';
+import { handleArenaMax } from './utils/arena-max-handler';
 
 export type RouteResult =
   | { type: 'reader'; path: 'main' | 'reset' }
   | { type: 'archive'; username: string }
   | { type: 'ai-studio' }
+  | { type: 'arena-max' }
   | { type: 'forum-injection' }
   | { type: 'skip' };
 
@@ -32,6 +34,15 @@ export const getRoute = (): RouteResult => {
       return { type: 'skip' };
     }
     return { type: 'ai-studio' };
+  }
+
+  // Arena.ai domain
+  if (host === 'arena.ai' || host === 'www.arena.ai') {
+    if (window.self !== window.top) {
+      Logger.debug('Arena.ai Router: Skipping iframe');
+      return { type: 'skip' };
+    }
+    return { type: 'arena-max' };
   }
 
   // LessWrong / EA Forum / GreaterWrong
@@ -71,4 +82,12 @@ export const getRoute = (): RouteResult => {
 export const runAIStudioMode = async (): Promise<void> => {
   Logger.info('AI Studio: Main domain detected, initializing automation...');
   await handleAIStudio();
+};
+
+/**
+ * Execute Arena Max mode
+ */
+export const runArenaMaxMode = async (): Promise<void> => {
+  Logger.info('Arena Max: Main domain detected, initializing automation...');
+  await handleArenaMax();
 };

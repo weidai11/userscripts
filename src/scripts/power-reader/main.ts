@@ -6,7 +6,7 @@
  * This is a thin bootstrap that orchestrates the modular components.
  */
 
-import { getRoute, runAIStudioMode } from './router';
+import { getRoute, runAIStudioMode, runArenaMaxMode } from './router';
 import { executeTakeover, rebuildDocument, signalReady, getRoot } from './takeover';
 import { getState } from './state';
 import {
@@ -28,6 +28,7 @@ import { PowerReaderUIHost } from './render/powerReaderHost';
 
 // Features
 import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
+import { initArenaMaxListener, setupArenaMaxKeyboard } from './features/arenaMaxPopup';
 import { setupHeaderInjection } from './features/headerInjection';
 import { initArchive } from './archive/index';
 
@@ -51,6 +52,11 @@ const initReader = async (): Promise<void> => {
 
   if (route.type === 'ai-studio') {
     await runAIStudioMode();
+    return;
+  }
+
+  if (route.type === 'arena-max') {
+    await runArenaMaxMode();
     return;
   }
 
@@ -166,6 +172,8 @@ const loadAndRender = async (): Promise<void> => {
     if (!root.dataset.listenersAttached) {
       initAIStudioListener(state);
       setupAIStudioKeyboard(state);
+      initArenaMaxListener(state);
+      setupArenaMaxKeyboard(state);
       attachEventListeners(state);
       root.dataset.listenersAttached = 'true';
     }

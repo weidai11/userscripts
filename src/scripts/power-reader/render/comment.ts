@@ -185,7 +185,7 @@ export const renderCommentTree = (
 
   // [PR-READ-07] Check for implicit read based on cutoff
   const { readState, cutoff } = tracking;
-  
+
   const isImplicitlyRead = (item: { postedAt?: string }) => {
     return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
   };
@@ -380,6 +380,7 @@ export const renderComment = (
   const controlsHtml = `
     <span class="pr-comment-controls">
       <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+      <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
       <span class="pr-comment-action text-btn ${rDisabled ? 'disabled' : ''}" data-action="load-descendants" title="${rTooltip}">[r]</span>
       <span class="pr-comment-action text-btn ${tDisabled ? 'disabled' : ''}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
       <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>

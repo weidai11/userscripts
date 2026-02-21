@@ -337,7 +337,12 @@ export const fetchCommentsByIds = async (commentIds: string[], username?: string
             } catch (e) {
                 lastError = e;
                 if (attempt < CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS) {
-                    Logger.warn(`Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying.`, e);
+                    const retryDelayMs = attempt * 500;
+                    Logger.warn(
+                        `Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying in ${retryDelayMs}ms.`,
+                        e
+                    );
+                    await new Promise(resolve => setTimeout(resolve, retryDelayMs));
                 }
             }
         }

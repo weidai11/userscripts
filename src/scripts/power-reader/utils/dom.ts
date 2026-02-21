@@ -49,7 +49,6 @@ export const refreshAllPostActionButtons = (container: HTMLElement | Document = 
 
     // Pre-calculate next sibling links for all posts in this container
     posts.forEach((post, idx) => {
-        const header = post.querySelector('.pr-post-header') as HTMLElement;
         const bodyContainer = post.querySelector('.pr-post-body-container') as HTMLElement;
         const eBtn = post.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
         const nBtn = post.querySelector('[data-action="scroll-to-next-post"]') as HTMLElement;
@@ -138,7 +137,7 @@ export const refreshAllPostActionButtons = (container: HTMLElement | Document = 
  */
 export const refreshPostActionButtons = (target?: string | HTMLElement): void => {
     let posts: NodeListOf<Element> | HTMLElement[];
-    
+
     if (target instanceof HTMLElement) {
         posts = [target];
     } else {

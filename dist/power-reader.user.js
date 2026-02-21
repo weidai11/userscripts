@@ -7,9 +7,12 @@
 // @match      https://forum.effectivealtruism.org/*
 // @match      https://www.greaterwrong.com/*
 // @match      https://aistudio.google.com/*
+// @match      https://arena.ai/*
+// @match      https://www.arena.ai/*
 // @connect    lesswrong.com
 // @connect    forum.effectivealtruism.org
 // @connect    greaterwrong.com
+// @connect    arena.ai
 // @grant      GM_addStyle
 // @grant      GM_addValueChangeListener
 // @grant      GM_deleteValue
@@ -1051,7 +1054,7 @@ dirty.indexOf("<") === -1) {
       USE_PROFILES: { html: true }
     });
   };
-  const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep$2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   async function handleAIStudio() {
     const payload = GM_getValue("ai_studio_prompt_payload");
     if (!payload) {
@@ -1066,11 +1069,11 @@ dirty.indexOf("<") === -1) {
       await automateEnableUrlContext();
       GM_setValue("ai_studio_status", "Injecting metadata thread...");
       const requestId = GM_getValue("ai_studio_request_id");
-      await injectPrompt(payload);
-      await sleep$1(1e3);
+      await injectPrompt$1(payload);
+      await sleep$2(1e3);
       GM_setValue("ai_studio_status", "Submitting prompt...");
-      await automateRun();
-      const responseText = await waitForResponse();
+      await automateRun$1();
+      const responseText = await waitForResponse$1();
       GM_setValue("ai_studio_status", "Switching to 3.1 Pro...");
       await selectModel("gemini-3.1-pro-preview", "3.1 Pro Preview");
       GM_setValue("ai_studio_status", "Response received!");
@@ -1150,7 +1153,7 @@ dirty.indexOf("<") === -1) {
     modelCard.click();
     const targetModelBtn = await waitForElement(`button[id*="${idPart}"]`);
     targetModelBtn.click();
-    await sleep$1(500);
+    await sleep$2(500);
   }
   async function automateDisableSearch() {
     const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
@@ -1175,19 +1178,19 @@ dirty.indexOf("<") === -1) {
       Logger.warn("AI Studio: URL context toggle not found.");
     }
   }
-  async function injectPrompt(payload) {
+  async function injectPrompt$1(payload) {
     const textarea = await waitForElement("textarea[aria-label='Enter a prompt']");
     textarea.value = payload;
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.focus();
     textarea.setSelectionRange(0, 0);
   }
-  async function automateRun() {
+  async function automateRun$1() {
     const runBtn = await waitForElement("ms-run-button button");
     runBtn.focus();
     runBtn.click();
   }
-  async function waitForResponse(timeoutMs = 18e4) {
+  async function waitForResponse$1(timeoutMs = 18e4) {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       let generationStarted = false;
@@ -1238,6 +1241,378 @@ dirty.indexOf("<") === -1) {
       checkCompletion();
     });
   }
+  const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const ARENA_AUTO_CLOSE_INITIAL_DELAY_MS = 5 * 60 * 1e3;
+  const ARENA_AUTO_CLOSE_RETRY_DELAY_MS = 60 * 1e3;
+  const ARENA_PROMPT_REINJECT_TIMEOUT_MS = 45e3;
+  const ARENA_PROMPT_SETTLE_DELAY_MS = 120;
+  const ARENA_PROMPT_RECHECK_DELAY_MS = 200;
+  const ARENA_SEND_ATTEMPTS = 3;
+  const ARENA_SEND_ATTEMPT_TIMEOUT_MS = 12e3;
+  const ARENA_LIKE_RESPONSE_BUTTON_SELECTOR = "button[aria-label='Like this response']";
+  const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
+    "textarea[name='message']",
+    "textarea[placeholder='Ask anything...']",
+    "textarea[placeholder^='Ask anything']"
+  ].join(", ");
+  const ARENA_TEXTAREA_CLASS_FALLBACK_SELECTORS = [
+    "textarea[class*='w-full'][class*='resize-none']",
+    "textarea[class*='bg-surface-secondary'][class*='resize-none']",
+    "textarea[class*='box-border'][class*='resize-none']"
+  ].join(", ");
+  const ARENA_RESPONSE_SELECTORS = [
+    ".prose",
+    ".markdown",
+    '[data-message-author-role="assistant"]',
+    '[data-testid*="assistant"]'
+  ].join(", ");
+  const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
+  const sharedPrefixLength = (a, b) => {
+    const max = Math.min(a.length, b.length);
+    let i = 0;
+    while (i < max && a[i] === b[i]) i++;
+    return i;
+  };
+  function isLikelyPromptEchoText(cleanText, submittedPrompt) {
+    if (!cleanText || !submittedPrompt) return false;
+    if (cleanText === submittedPrompt) return true;
+    const promptProbe = submittedPrompt.slice(0, 220);
+    const textProbe = cleanText.slice(0, 220);
+    if (promptProbe.length >= 60 && cleanText.includes(promptProbe)) return true;
+    if (textProbe.length >= 60 && submittedPrompt.includes(textProbe)) return true;
+    return sharedPrefixLength(cleanText, submittedPrompt) >= 80;
+  }
+  const isLikelyUserMessage = (message) => {
+    if (!message) return false;
+    if (message.matches('[data-message-author-role="user"], [data-testid*="user"]')) return true;
+    return !!message.closest('[data-message-author-role="user"], [data-testid*="user"]');
+  };
+  function isArenaSendButton(btn) {
+    return btn.type === "submit" || (btn.getAttribute("aria-label") || "").toLowerCase().includes("send") || !!btn.querySelector("svg.lucide-arrow-up, svg.lucide-send");
+  }
+  function isInteractableTextarea(el) {
+    if (!(el instanceof HTMLTextAreaElement)) return false;
+    if (el.disabled || el.readOnly) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    return true;
+  }
+  function isVisibleElement(el) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    return true;
+  }
+  function hasNearbySendButton(textarea) {
+    const container = textarea.closest("form") || textarea.parentElement?.parentElement || textarea.parentElement;
+    if (!container) return false;
+    const buttons = Array.from(container.querySelectorAll("button"));
+    return buttons.some((btn) => isArenaSendButton(btn));
+  }
+  function findArenaTextarea() {
+    const primaryCandidates = Array.from(document.querySelectorAll(ARENA_TEXTAREA_PRIMARY_SELECTORS)).filter(isInteractableTextarea);
+    const primaryWithSend = primaryCandidates.find(hasNearbySendButton);
+    if (primaryWithSend) return primaryWithSend;
+    const primaryVisible = primaryCandidates.find((el) => isVisibleElement(el));
+    if (primaryVisible) return primaryVisible;
+    if (primaryCandidates.length > 0) return primaryCandidates[0];
+    const fallbackCandidates = Array.from(document.querySelectorAll(ARENA_TEXTAREA_CLASS_FALLBACK_SELECTORS)).filter(isInteractableTextarea);
+    const fallbackWithSend = fallbackCandidates.find((el) => hasNearbySendButton(el) && isVisibleElement(el));
+    if (fallbackWithSend) return fallbackWithSend;
+    const fallbackVisible = fallbackCandidates.find((el) => isVisibleElement(el));
+    if (fallbackVisible) return fallbackVisible;
+    return fallbackCandidates.find(hasNearbySendButton) ?? fallbackCandidates[0] ?? null;
+  }
+  async function waitForArenaTextarea(timeout = 3e4) {
+    return new Promise((resolve, reject) => {
+      const hasLoginGate = () => window.location.href.includes("arena.ai/login") || document.body?.innerText.includes("Sign in");
+      const check = () => {
+        if (hasLoginGate()) return "LOGIN_REQUIRED";
+        return findArenaTextarea();
+      };
+      let settled = false;
+      let timeoutId = 0;
+      let pollId = 0;
+      const observer = new MutationObserver(() => {
+        evaluate();
+      });
+      const cleanup = () => {
+        observer.disconnect();
+        if (timeoutId) window.clearTimeout(timeoutId);
+        if (pollId) window.clearInterval(pollId);
+      };
+      const resolveOnce = (el) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(el);
+      };
+      const rejectOnce = (message) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(message));
+      };
+      const evaluate = () => {
+        const el = check();
+        if (el === "LOGIN_REQUIRED") {
+          rejectOnce("Login Required");
+          return;
+        }
+        if (el) {
+          resolveOnce(el);
+        }
+      };
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "style", "hidden", "aria-hidden", "disabled", "readonly", "placeholder"]
+      });
+      pollId = window.setInterval(evaluate, 250);
+      timeoutId = window.setTimeout(() => {
+        rejectOnce(`Timeout waiting for Arena textarea: ${ARENA_TEXTAREA_PRIMARY_SELECTORS} || ${ARENA_TEXTAREA_CLASS_FALLBACK_SELECTORS}`);
+      }, timeout);
+      evaluate();
+    });
+  }
+  function setTextareaValue(textarea, payload) {
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (nativeSetter) {
+      nativeSetter.call(textarea, payload);
+    } else {
+      textarea.value = payload;
+    }
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+    textarea.focus();
+    textarea.setSelectionRange(0, 0);
+  }
+  function getPayloadProbe(payload) {
+    return normalizeText(payload).slice(0, 180);
+  }
+  function textareaContainsProbe(textarea, payloadProbe) {
+    if (!textarea) return false;
+    const value = normalizeText(textarea.value || "");
+    if (!payloadProbe) return value.length > 0;
+    return value.includes(payloadProbe);
+  }
+  function findSendButtonNearTextarea(textarea) {
+    const container = textarea.closest("form") || textarea.parentElement?.parentElement || textarea.parentElement;
+    if (!container) return null;
+    const buttons = Array.from(container.querySelectorAll("button"));
+    return buttons.find((btn) => isArenaSendButton(btn)) ?? null;
+  }
+  async function ensurePromptPersisted(payload, timeoutMs = ARENA_PROMPT_REINJECT_TIMEOUT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    const payloadProbe = getPayloadProbe(payload);
+    let lastIssue = "unknown";
+    while (Date.now() < deadline) {
+      try {
+        const remaining = Math.max(250, deadline - Date.now());
+        const textarea = await waitForArenaTextarea(Math.min(4e3, remaining));
+        setTextareaValue(textarea, payload);
+        await sleep$1(ARENA_PROMPT_SETTLE_DELAY_MS);
+        const current = findArenaTextarea() ?? textarea;
+        if (textareaContainsProbe(current, payloadProbe)) {
+          return current;
+        }
+        lastIssue = "composer reset after injection";
+      } catch (error) {
+        lastIssue = error instanceof Error ? error.message : String(error);
+      }
+      await sleep$1(ARENA_PROMPT_RECHECK_DELAY_MS);
+    }
+    throw new Error(`Prompt injection did not persist (${lastIssue})`);
+  }
+  async function injectPrompt(payload) {
+    await ensurePromptPersisted(payload);
+  }
+  async function automateRun(payload) {
+    const payloadProbe = getPayloadProbe(payload);
+    let lastIssue = "send button unavailable";
+    for (let attempt = 1; attempt <= ARENA_SEND_ATTEMPTS; attempt++) {
+      const textarea = await ensurePromptPersisted(payload, ARENA_SEND_ATTEMPT_TIMEOUT_MS);
+      const runBtn = findSendButtonNearTextarea(textarea);
+      if (runBtn && !runBtn.disabled) {
+        runBtn.focus();
+        runBtn.click();
+        lastIssue = "send button click did not produce submission signal";
+      } else {
+        textarea.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          charCode: 13,
+          keyCode: 13,
+          bubbles: true,
+          ctrlKey: true,
+          metaKey: true
+        }));
+        lastIssue = runBtn ? "send button disabled" : "send button missing";
+      }
+      await sleep$1(350);
+      const current = findArenaTextarea();
+      const hasStopIcon = document.querySelector("svg.lucide-square") !== null;
+      const promptStillPresent = textareaContainsProbe(current, payloadProbe);
+      const submissionStarted = hasStopIcon || !promptStillPresent;
+      if (submissionStarted) return;
+      Logger.warn(`Arena Max: Submit attempt ${attempt} did not take, retrying...`);
+    }
+    throw new Error(`Failed to submit prompt (${lastIssue})`);
+  }
+  function getLatestArenaResponseCandidate() {
+    const assistantMessages = Array.from(
+      document.querySelectorAll('[data-message-author-role="assistant"], [data-testid*="assistant"]')
+    );
+    if (assistantMessages.length > 0) return assistantMessages[assistantMessages.length - 1];
+    const richMessages = Array.from(document.querySelectorAll(".markdown, .prose"));
+    if (richMessages.length > 0) return richMessages[richMessages.length - 1];
+    return void 0;
+  }
+  function getAllLikeResponseButtons() {
+    return Array.from(document.querySelectorAll(ARENA_LIKE_RESPONSE_BUTTON_SELECTOR));
+  }
+  function getLatestLikeResponseButton() {
+    const buttons = getAllLikeResponseButtons();
+    if (buttons.length === 0) return void 0;
+    buttons.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    return buttons[0];
+  }
+  function scoreResponseCandidatesAboveLikeButton(button) {
+    const buttonRect = button.getBoundingClientRect();
+    const allCandidates = Array.from(document.querySelectorAll(ARENA_RESPONSE_SELECTORS));
+    const uniqueCandidates = Array.from(new Set(allCandidates));
+    const scored = [];
+    for (const candidate of uniqueCandidates) {
+      if (!isVisibleElement(candidate)) continue;
+      if (candidate.contains(button) || button.contains(candidate)) continue;
+      const rect = candidate.getBoundingClientRect();
+      const verticalGap = buttonRect.top - rect.bottom;
+      if (verticalGap < -8) continue;
+      const horizontalOverlap = Math.max(
+        0,
+        Math.min(buttonRect.right, rect.right) - Math.max(buttonRect.left, rect.left)
+      );
+      const cleanTextLength = normalizeText(candidate.textContent || "").length;
+      if (cleanTextLength === 0) continue;
+      const isUser = isLikelyUserMessage(candidate);
+      const score = -Math.abs(verticalGap) + horizontalOverlap + Math.min(cleanTextLength, 500) + (isUser ? -1e3 : 0);
+      scored.push({ el: candidate, score, verticalGap, horizontalOverlap, cleanTextLength, isUser });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored;
+  }
+  async function waitForResponse(timeoutMs = 18e4) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      let generationStarted = false;
+      let sawCandidateResponseNode = false;
+      let observedResponseChange = false;
+      const submittedPrompt = normalizeText(String(GM_getValue("arena_max_prompt_payload") || ""));
+      const getMessageSignature = (message) => message ? `${message.childElementCount}:${normalizeText(message.textContent || "")}` : "";
+      const initialMessages = document.querySelectorAll(ARENA_RESPONSE_SELECTORS);
+      const initialMessageCount = initialMessages.length;
+      const initialLastSignature = getMessageSignature(getLatestArenaResponseCandidate());
+      const initialLikeButtonCount = getAllLikeResponseButtons().length;
+      const initialLatestLikeButton = getLatestLikeResponseButton();
+      const checkCompletion = () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed > timeoutMs) {
+          const hint = sawCandidateResponseNode ? "response controls never appeared" : `no response nodes found for selectors: ${ARENA_RESPONSE_SELECTORS}`;
+          return reject(new Error(`Timeout (${hint})`));
+        }
+        const hasStopIcon = document.querySelector("svg.lucide-square") !== null;
+        const latestLikeButton = getLatestLikeResponseButton();
+        const likeButtonCount = getAllLikeResponseButtons().length;
+        if (latestLikeButton) {
+          sawCandidateResponseNode = true;
+        }
+        const messages = document.querySelectorAll(ARENA_RESPONSE_SELECTORS);
+        const lastMessage = getLatestArenaResponseCandidate();
+        if (lastMessage) {
+          sawCandidateResponseNode = true;
+        }
+        const currentLastSignature = getMessageSignature(lastMessage);
+        if (messages.length !== initialMessageCount || currentLastSignature !== initialLastSignature) {
+          observedResponseChange = true;
+        }
+        if (hasStopIcon && !generationStarted) {
+          generationStarted = true;
+          GM_setValue("arena_max_status", "AI is thinking...");
+        }
+        const likeButtonChanged = likeButtonCount > initialLikeButtonCount || latestLikeButton && latestLikeButton !== initialLatestLikeButton;
+        if ((generationStarted || observedResponseChange || likeButtonChanged) && latestLikeButton) {
+          const anchoredCandidate = scoreResponseCandidatesAboveLikeButton(latestLikeButton)[0]?.el;
+          if (anchoredCandidate) {
+            const cleanText = normalizeText(anchoredCandidate.textContent || "");
+            const isPromptEcho = submittedPrompt.length > 0 && isLikelyPromptEchoText(cleanText, submittedPrompt);
+            if (cleanText.length > 0 && !isLikelyUserMessage(anchoredCandidate) && !isPromptEcho) {
+              const contentNode = anchoredCandidate.querySelector(".markdown, .prose") || anchoredCandidate;
+              return resolve(`<div class="pr-ai-text">${contentNode.innerHTML}</div>`);
+            }
+          }
+        }
+        setTimeout(checkCompletion, 250);
+      };
+      checkCompletion();
+    });
+  }
+  async function handleArenaMax() {
+    const payload = GM_getValue("arena_max_prompt_payload");
+    if (!payload) {
+      Logger.debug("Arena Max: No payload found in GM storage, skipping automation.");
+      return;
+    }
+    Logger.info("Arena Max: Automation triggered.");
+    try {
+      GM_setValue("arena_max_status", "Waiting for input field...");
+      GM_setValue("arena_max_status", "Injecting metadata thread...");
+      const requestId = GM_getValue("arena_max_request_id");
+      await injectPrompt(payload);
+      await sleep$1(1e3);
+      GM_setValue("arena_max_status", "Submitting prompt...");
+      await automateRun(payload);
+      GM_setValue("arena_max_status", "Waiting for response (or Cloudflare challenge)...");
+      const responseText = await waitForResponse();
+      GM_setValue("arena_max_status", "Response received!");
+      GM_setValue("arena_max_response_payload", {
+        text: responseText,
+        requestId,
+        includeDescendants: GM_getValue("arena_max_include_descendants", false),
+        timestamp: Date.now()
+      });
+      GM_deleteValue("arena_max_prompt_payload");
+      GM_deleteValue("arena_max_request_id");
+      GM_deleteValue("arena_max_include_descendants");
+      GM_deleteValue("arena_max_status");
+      Logger.info("Arena Max: Response sent. Tab will close in 5m if no interaction.");
+      let hasInteracted = false;
+      const markInteracted = () => {
+        if (!hasInteracted) {
+          hasInteracted = true;
+          Logger.info("Arena Max: User returned to tab. Auto-close canceled.");
+        }
+      };
+      window.addEventListener("blur", () => {
+        window.addEventListener("mousedown", markInteracted, { once: true, capture: true });
+        window.addEventListener("keydown", markInteracted, { once: true, capture: true });
+        window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
+      }, { once: true });
+      const checkClose = () => {
+        if (!hasInteracted && document.visibilityState !== "visible") {
+          Logger.info("Arena Max: Idle and backgrounded. Closing tab.");
+          window.close();
+        } else if (!hasInteracted) {
+          Logger.info("Arena Max: 5m reached but tab is currently visible. Postponing close.");
+          setTimeout(checkClose, ARENA_AUTO_CLOSE_RETRY_DELAY_MS);
+        }
+      };
+      setTimeout(checkClose, ARENA_AUTO_CLOSE_INITIAL_DELAY_MS);
+    } catch (error) {
+      Logger.error("Arena Max: Automation failed", error);
+      GM_setValue("arena_max_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   const getRoute = () => {
     const host = window.location.hostname;
     const pathname = window.location.pathname;
@@ -1252,6 +1627,13 @@ dirty.indexOf("<") === -1) {
         return { type: "skip" };
       }
       return { type: "ai-studio" };
+    }
+    if (host === "arena.ai" || host === "www.arena.ai") {
+      if (window.self !== window.top) {
+        Logger.debug("Arena.ai Router: Skipping iframe");
+        return { type: "skip" };
+      }
+      return { type: "arena-max" };
     }
     const isForumDomain = host.includes("lesswrong.com") || host.includes("forum.effectivealtruism.org") || host.includes("greaterwrong.com");
     if (!isForumDomain) {
@@ -1274,6 +1656,10 @@ dirty.indexOf("<") === -1) {
   const runAIStudioMode = async () => {
     Logger.info("AI Studio: Main domain detected, initializing automation...");
     await handleAIStudio();
+  };
+  const runArenaMaxMode = async () => {
+    Logger.info("Arena Max: Main domain detected, initializing automation...");
+    await handleArenaMax();
   };
   const STYLES = `
   html, body {
@@ -2647,6 +3033,7 @@ dirty.indexOf("<") === -1) {
     currentAIRequestId: null,
     activeAIPopup: null,
     sessionAICache: {},
+    postDescendantsCache: new Map(),
     isArchiveMode: false,
     archiveUsername: null
   });
@@ -4081,36 +4468,53 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     trigger.addEventListener("mouseenter", async (e) => {
       trackMousePos(e);
       Logger.debug("Preview mouseenter: trigger=", trigger.tagName, trigger.className, "dataset=", JSON.stringify(trigger.dataset));
-      if (!isIntentionalHover()) {
-        return;
-      }
       Logger.debug("setupHoverPreview: clearing pending timeout", state.hoverTimeout);
+      let targets = null;
       if (options.targetGetter) {
+        let leftBeforeResolve = false;
+        const trackEarlyLeave = () => {
+          leftBeforeResolve = true;
+        };
+        trigger.addEventListener("mouseleave", trackEarlyLeave, { once: true });
         const result = await options.targetGetter();
+        trigger.removeEventListener("mouseleave", trackEarlyLeave);
+        if (leftBeforeResolve) {
+          return;
+        }
         if (result) {
-          const targets = Array.isArray(result) ? result : [result];
+          targets = Array.isArray(result) ? result : [result];
           if (targets.length > 0) {
             targets.forEach((t) => {
               t.classList.add("pr-parent-hover");
             });
             const removeHighlight = () => {
-              targets.forEach((t) => t.classList.remove("pr-parent-hover"));
-              trigger.removeEventListener("mouseleave", removeHighlight);
+              requestAnimationFrame(() => {
+                if (trigger.matches(":hover")) {
+                  trigger.addEventListener("mouseleave", removeHighlight, { once: true });
+                  return;
+                }
+                targets?.forEach((t) => t.classList.remove("pr-parent-hover"));
+              });
             };
-            trigger.addEventListener("mouseleave", removeHighlight);
+            trigger.addEventListener("mouseleave", removeHighlight, { once: true });
           }
-          const containers = new Set(targets.map((t) => t.closest(".pr-post-group") || t));
-          const forcePromises = Array.from(containers).map((c) => withForcedLayout(c, () => {
-          }));
-          await Promise.all(forcePromises);
-          const allFullyVisible = targets.every((t) => {
-            const isSticky = !!t.closest(".pr-sticky-header");
-            if (isSticky) return false;
-            return isElementFullyVisible(t);
-          });
-          if (allFullyVisible) {
-            return;
-          }
+        }
+      }
+      if (!isIntentionalHover()) {
+        return;
+      }
+      if (targets && targets.length > 0) {
+        const containers = new Set(targets.map((t) => t.closest(".pr-post-group") || t));
+        const forcePromises = Array.from(containers).map((c) => withForcedLayout(c, () => {
+        }));
+        await Promise.all(forcePromises);
+        const allFullyVisible = targets.every((t) => {
+          const isSticky = !!t.closest(".pr-sticky-header");
+          if (isSticky) return false;
+          return isElementFullyVisible(t);
+        });
+        if (allFullyVisible) {
+          return;
         }
       }
       state.hoverTimeout = window.setTimeout(async () => {
@@ -5084,6 +5488,7 @@ isFullPost
       <h2><span class="pr-post-title" data-post-id="${post._id}"${!isFullPost ? ' data-action="load-post"' : ""}>${escapedTitle}</span></h2>
       <span class="pr-post-actions">
         <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+        <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
         <span class="pr-post-action text-btn ${""}" data-action="toggle-post-body" title="${eTooltip}">[e]</span>
         <span class="pr-post-action text-btn ${aDisabled ? "disabled" : ""}" data-action="load-all-comments" title="${aTooltip}">[a]</span>
         <span class="pr-post-action text-btn ${cDisabled ? "disabled" : ""}" data-action="scroll-to-comments" title="${cTooltip}">[c]</span>
@@ -5424,6 +5829,7 @@ isFullPost
     const controlsHtml = `
     <span class="pr-comment-controls">
       <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)">[g]</span>
+      <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
       <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
       <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
       <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
@@ -6189,13 +6595,13 @@ refresh() {
         const dateByItemId = new Map();
         currentComments.forEach((c) => dateByItemId.set(c._id, c.postedAt));
         this.postsDataGetter().forEach((p) => dateByItemId.set(p._id, p.postedAt));
-        const cleanupCutoffTime = new Date(currentLoadFrom).getTime();
+        const cleanupCutoffTime = new Date(nextLoadFrom).getTime();
         let removedCount = 0;
         for (const id of Object.keys(readState)) {
           if (dateByItemId.has(id)) continue;
           const postedAt = dateByItemId.get(id);
-          const itemTime = postedAt ? new Date(postedAt).getTime() : 0;
-          if (!postedAt || itemTime < cleanupCutoffTime) {
+          const itemTime = postedAt ? new Date(postedAt).getTime() : NaN;
+          if (!postedAt || !Number.isFinite(itemTime) || itemTime < cleanupCutoffTime) {
             delete readState[id];
             removedCount++;
           }
@@ -6442,6 +6848,7 @@ refresh() {
           <ul>
             <li><strong>[e]</strong> Expand/load body · <strong>[a]</strong> Load all comments</li>
             <li><strong>[c]</strong> Scroll to comments · <strong>[n]</strong> Scroll to next post</li>
+            <li><strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
             <li><strong>[−]/[+]</strong> Collapse/expand post + comments</li>
           </ul>
         </div>
@@ -6450,7 +6857,8 @@ refresh() {
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent · <strong>[−]/[+]</strong> Collapse/expand comment</li>
+            <li><strong>[^]</strong> Find parent · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
           </ul>
@@ -6475,7 +6883,8 @@ refresh() {
         <div class="pr-help-section">
           <h4>↔️ Layout · AI: <strong>g</strong> / <strong>⇧G</strong></h4>
           <ul>
-            <li><strong>g</strong>: Thread to AI · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>g</strong>: Thread to AI Studio · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>m</strong>: Thread to Arena Max · <strong>⇧M</strong>: + Descendants</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>
@@ -6626,7 +7035,7 @@ refresh() {
     if (changeBtn) {
       changeBtn.addEventListener("click", (e) => {
         e.preventDefault();
-        GM_setValue("power-reader-read-from", null);
+        setLoadFrom("");
         window.location.reload();
       });
     }
@@ -7428,7 +7837,8 @@ currentCommentId = null;
         "+": "expand",
         "=": "expand",
 "e": "toggle-post-body",
-        "g": "send-to-ai-studio"
+        "g": "send-to-ai-studio",
+        "m": "send-to-arena-max"
       };
       let action = actionMap[key];
       if (key === "+" || key === "=") {
@@ -7641,6 +8051,172 @@ currentCommentId = null;
         setTimeout(() => postHeader.classList.remove("pr-highlight-parent"), 2e3);
       }
     }
+  };
+  const POST_DESC_CACHE_TTL_MS = 10 * 60 * 1e3;
+  const dedupeCommentsById = (comments) => {
+    const byId = new Map();
+    comments.forEach((comment) => byId.set(comment._id, comment));
+    return Array.from(byId.values());
+  };
+  const getPostCommentsFromState = (state2, postId) => state2.comments.filter((comment) => comment.postId === postId);
+  const getFreshPostCacheEntry = (state2, postId) => {
+    const entry = state2.postDescendantsCache.get(postId);
+    if (!entry) return null;
+    if (Date.now() - entry.fetchedAt > POST_DESC_CACHE_TTL_MS) {
+      state2.postDescendantsCache.delete(postId);
+      return null;
+    }
+    return entry;
+  };
+  const getCachedPostComments = (state2, postId) => getFreshPostCacheEntry(state2, postId)?.comments || [];
+  const getAvailablePostComments = (state2, postId) => dedupeCommentsById([
+    ...getPostCommentsFromState(state2, postId),
+    ...getCachedPostComments(state2, postId)
+  ]);
+  const isPostCompleteInState = (state2, postId, totalCount) => totalCount >= 0 && getPostCommentsFromState(state2, postId).length >= totalCount;
+  const isPostComplete = (state2, postId, totalCount) => {
+    if (isPostCompleteInState(state2, postId, totalCount)) return true;
+    const entry = getFreshPostCacheEntry(state2, postId);
+    if (totalCount >= 0) {
+      return !!entry && entry.complete && entry.totalCount >= totalCount;
+    }
+    return !!entry && entry.complete;
+  };
+  const writePostCache = (state2, postId, comments, totalCount, complete) => {
+    state2.postDescendantsCache.set(postId, {
+      comments: dedupeCommentsById(comments),
+      totalCount,
+      complete,
+      fetchedAt: Date.now()
+    });
+  };
+  const fetchAllPostCommentsWithCache = async (state2, postId, knownTotalCount) => {
+    const totalCount = knownTotalCount;
+    if (isPostCompleteInState(state2, postId, totalCount)) {
+      const comments2 = getPostCommentsFromState(state2, postId);
+      writePostCache(state2, postId, comments2, totalCount || comments2.length, true);
+      return {
+        comments: comments2,
+        totalCount: totalCount >= 0 ? totalCount : comments2.length,
+        complete: true,
+        fromCache: true
+      };
+    }
+    const cacheEntry = getFreshPostCacheEntry(state2, postId);
+    if (cacheEntry && cacheEntry.complete && (totalCount < 0 || cacheEntry.totalCount >= totalCount)) {
+      return {
+        comments: cacheEntry.comments,
+        totalCount: cacheEntry.totalCount,
+        complete: true,
+        fromCache: true
+      };
+    }
+    const limit = Math.max(CONFIG.loadMax, totalCount > 0 ? totalCount : 0);
+    const response = await queryGraphQL(GET_POST_COMMENTS, {
+      postId,
+      limit
+    });
+    const fetchedComments = response?.comments?.results || [];
+    const comments = dedupeCommentsById(fetchedComments);
+    const complete = totalCount >= 0 ? comments.length >= totalCount : comments.length < limit;
+    const effectiveTotal = totalCount >= 0 ? totalCount : comments.length;
+    writePostCache(state2, postId, comments, effectiveTotal, complete);
+    Logger.info(`Post descendants cache update for ${postId}: ${comments.length} comments, complete=${complete}`);
+    return {
+      comments,
+      totalCount: effectiveTotal,
+      complete,
+      fromCache: false
+    };
+  };
+  const collectCommentDescendants = (comments, rootCommentId) => {
+    const childrenByParent = new Map();
+    comments.forEach((comment) => {
+      if (!comment.parentCommentId) return;
+      if (!childrenByParent.has(comment.parentCommentId)) {
+        childrenByParent.set(comment.parentCommentId, []);
+      }
+      childrenByParent.get(comment.parentCommentId).push(comment);
+    });
+    const result = [];
+    const queue = [rootCommentId];
+    const seen = new Set();
+    while (queue.length > 0) {
+      const parentId = queue.shift();
+      const children = childrenByParent.get(parentId) || [];
+      for (const child of children) {
+        if (seen.has(child._id)) continue;
+        seen.add(child._id);
+        result.push(child);
+        queue.push(child._id);
+      }
+    }
+    return result;
+  };
+  const LARGE_DESCENDANT_THRESHOLD = 100;
+  const shouldPromptForLargeDescendants = (descendantCount) => descendantCount > LARGE_DESCENDANT_THRESHOLD;
+  const OVERLAY_ID = "pr-descendant-confirm-overlay";
+  const promptLargeDescendantConfirmation = async (options) => {
+    const existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.id = OVERLAY_ID;
+      overlay.style.position = "fixed";
+      overlay.style.inset = "0";
+      overlay.style.background = "rgba(0, 0, 0, 0.5)";
+      overlay.style.display = "flex";
+      overlay.style.alignItems = "center";
+      overlay.style.justifyContent = "center";
+      overlay.style.zIndex = "100000";
+      const dialog = document.createElement("div");
+      dialog.style.width = "min(560px, 92vw)";
+      dialog.style.background = "#fff";
+      dialog.style.border = "1px solid #ddd";
+      dialog.style.borderRadius = "10px";
+      dialog.style.padding = "16px";
+      dialog.style.boxShadow = "0 8px 24px rgba(0, 0, 0, 0.25)";
+      dialog.innerHTML = `
+      <h3 style="margin: 0 0 8px 0; font-size: 18px;">Large Descendant Set</h3>
+      <p style="margin: 0 0 14px 0; line-height: 1.4;">
+        This ${options.subjectLabel} has <strong>${options.descendantCount.toLocaleString()}</strong> descendants.
+        Choose how to proceed:
+      </p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button data-choice="load_all" style="padding: 8px 12px; cursor: pointer;">Load all descendants</button>
+        <button data-choice="continue_without_loading" style="padding: 8px 12px; cursor: pointer;">Continue without loading</button>
+        <button data-choice="cancel" style="padding: 8px 12px; cursor: pointer;">Cancel</button>
+      </div>
+    `;
+      const cleanup = () => {
+        document.removeEventListener("keydown", onKeyDown, true);
+        overlay.remove();
+      };
+      const finalize = (decision) => {
+        cleanup();
+        resolve(decision);
+      };
+      const onKeyDown = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finalize("cancel");
+        }
+      };
+      dialog.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const choice = button.getAttribute("data-choice");
+          finalize(choice || "cancel");
+        });
+      });
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+          finalize("cancel");
+        }
+      });
+      document.addEventListener("keydown", onKeyDown, true);
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+    });
   };
   let activeHost = null;
   const setUIHost = (host) => {
@@ -7944,14 +8520,21 @@ currentCommentId = null;
   const handleLoadAllComments = async (target, state2) => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
+    const post = state2.postById.get(postId);
+    const totalCount = post?.commentCount ?? -1;
+    if (totalCount >= 0 && shouldPromptForLargeDescendants(totalCount)) {
+      const decision = await promptLargeDescendantConfirmation({
+        descendantCount: totalCount,
+        subjectLabel: "post"
+      });
+      if (decision === "cancel" || decision === "continue_without_loading") {
+        return;
+      }
+    }
     const originalText = target.textContent;
     target.textContent = "[...]";
     try {
-      const res = await queryGraphQL(GET_POST_COMMENTS, {
-        postId,
-        limit: CONFIG.loadMax
-      });
-      const comments = res?.comments?.results || [];
+      const { comments } = await fetchAllPostCommentsWithCache(state2, postId, totalCount);
       comments.forEach((c) => {
         c.forceVisible = true;
         c.justRevealed = true;
@@ -8206,6 +8789,7 @@ currentCommentId = null;
     }
     handleScrollToRoot(target, topLevelId);
   };
+  const popupAutoCloseScrollAttached = new WeakSet();
   const setStatusMessage = (message, color) => {
     const statusEl = document.querySelector(".pr-status");
     if (!statusEl) return;
@@ -8221,114 +8805,6 @@ currentCommentId = null;
   };
   const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-  const handleSendToAIStudio = async (state2, includeDescendants = false) => {
-    const target = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
-    if (!target) {
-      Logger.warn("AI Studio: No element found under mouse.");
-      return;
-    }
-    const itemEl = target.closest(".pr-comment, .pr-post");
-    if (!itemEl) {
-      Logger.warn("AI Studio: No comment or post found under mouse.");
-      return;
-    }
-    document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
-    itemEl.classList.add("being-summarized");
-    const id = itemEl.dataset.id;
-    if (!id) {
-      Logger.warn("AI Studio: Element has no ID.");
-      return;
-    }
-    if (!includeDescendants && state2.sessionAICache[id] && !window.PR_FORCE_AI_REGEN) {
-      Logger.info(`AI Studio: Using session-cached answer for ${id}`);
-      displayAIPopup(state2.sessionAICache[id], state2);
-      return;
-    }
-    window.PR_FORCE_AI_REGEN = false;
-    const isPost2 = itemEl.classList.contains("pr-post");
-    Logger.info(`AI Studio: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
-    try {
-      setStatusMessage("[AI Studio] Building conversation thread...", "#007bff");
-      const requestId = Math.random().toString(36).substring(2, 10);
-      const lineage = [];
-      let currentId = id;
-      let currentIsPost = isPost2;
-      while (currentId && lineage.length < 8) {
-        const item = await fetchItemMarkdown(currentId, currentIsPost, state2);
-        if (!item) break;
-        lineage.unshift(item);
-        if (currentIsPost) {
-          currentId = null;
-        } else {
-          if (item.parentCommentId) {
-            currentId = item.parentCommentId;
-            currentIsPost = false;
-          } else if (item.postId) {
-            currentId = item.postId;
-            currentIsPost = true;
-          } else {
-            currentId = null;
-          }
-        }
-      }
-      let descendants = [];
-      if (includeDescendants) {
-        if (isPost2) {
-          descendants = state2.comments.filter((c) => c.postId === id);
-        } else {
-          const found = new Set();
-          const toCheck = [id];
-          while (toCheck.length > 0) {
-            const cid = toCheck.pop();
-            const children = state2.comments.filter((c) => c.parentCommentId === cid);
-            children.forEach((c) => {
-              if (!found.has(c._id)) {
-                found.add(c._id);
-                descendants.push(c);
-                toCheck.push(c._id);
-              }
-            });
-          }
-        }
-        descendants.sort((a, b) => new Date(a.postedAt || "").getTime() - new Date(b.postedAt || "").getTime());
-        descendants = descendants.filter((d) => d._id !== id);
-      }
-      const threadXml = lineage.length > 0 ? toXml(lineage, id, descendants) : "";
-      const prefix = getAIStudioPrefix() || AI_STUDIO_PROMPT_PREFIX;
-      const finalPayload = prefix + threadXml;
-      Logger.info("AI Studio: Opening tab with deep threaded payload...");
-      state2.currentAIRequestId = requestId;
-      if (typeof GM_setValue === "function") {
-        GM_setValue("ai_studio_request_id", requestId);
-        GM_setValue("ai_studio_prompt_payload", finalPayload);
-        GM_setValue("ai_studio_include_descendants", includeDescendants);
-      }
-      if (typeof GM_openInTab === "function") {
-        GM_openInTab("https://aistudio.google.com/prompts/new_chat", { active: true });
-      }
-      setStatusMessage("[AI Studio] Opening AI Studio tab...", "#28a745");
-    } catch (error) {
-      Logger.error("AI Studio: Failed to prepare threaded payload", error);
-      alert("Failed to send thread to AI Studio. Check console.");
-    }
-  };
-  const fetchItemMarkdown = async (itemId, itemIsPost, state2) => {
-    if (itemIsPost) {
-      const p = state2.posts.find((p2) => p2._id === itemId);
-      if (p?.contents?.markdown) return p;
-    } else {
-      const c = state2.comments.find((c2) => c2._id === itemId);
-      if (c?.contents?.markdown) return c;
-    }
-    Logger.info(`AI Studio: Fetching ${itemId} source from server...`);
-    if (itemIsPost) {
-      const res = await queryGraphQL(GET_POST, { id: itemId });
-      return res?.post?.result || null;
-    } else {
-      const res = await queryGraphQL(GET_COMMENT, { id: itemId });
-      return res?.comment?.result || null;
-    }
-  };
   const toXml = (items, focalId, descendants = []) => {
     if (items.length === 0) return "";
     const item = items[0];
@@ -8344,11 +8820,9 @@ ${escapeXmlText(md)}
 </body_markdown>
 `;
     if (isFocal && descendants.length > 0) {
-      xml2 += `<descendants>
-`;
+      xml2 += "<descendants>\n";
       xml2 += descendantsToXml(descendants, focalId).split("\n").map((line) => "  " + line).join("\n") + "\n";
-      xml2 += `</descendants>
-`;
+      xml2 += "</descendants>\n";
     }
     if (remaining.length > 0) {
       xml2 += toXml(remaining, focalId, descendants).split("\n").map((line) => "  " + line).join("\n") + "\n";
@@ -8356,8 +8830,18 @@ ${escapeXmlText(md)}
     xml2 += `</${type}>`;
     return xml2;
   };
-  const descendantsToXml = (descendants, parentId) => {
-    const children = descendants.filter((d) => d.parentCommentId === parentId || parentId === d.postId && !d.parentCommentId);
+  const buildDescendantChildrenIndex = (descendants) => {
+    const byParent = new Map();
+    descendants.forEach((descendant) => {
+      const parentKey = descendant.parentCommentId || descendant.postId;
+      if (!parentKey) return;
+      if (!byParent.has(parentKey)) byParent.set(parentKey, []);
+      byParent.get(parentKey).push(descendant);
+    });
+    return byParent;
+  };
+  const descendantsToXmlWithIndex = (childrenByParent, parentId) => {
+    const children = childrenByParent.get(parentId) || [];
     if (children.length === 0) return "";
     return children.map((child) => {
       const author = child.user?.username || child.author || "unknown";
@@ -8368,24 +8852,194 @@ ${escapeXmlText(md)}
 ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   </body_markdown>
 `;
-      const grandChildrenXml = descendantsToXml(descendants, child._id);
+      const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id);
       if (grandChildrenXml) {
         xml2 += grandChildrenXml.split("\n").map((line) => "  " + line).join("\n") + "\n";
       }
-      xml2 += `</comment>`;
+      xml2 += "</comment>";
       return xml2;
     }).join("\n");
   };
-  const displayAIPopup = (text2, state2, includeDescendants = false) => {
-    if (state2.activeAIPopup) {
-      const content = state2.activeAIPopup.querySelector(".pr-ai-popup-content");
-      if (content) content.innerHTML = sanitizeHtml(text2);
-      state2.activeAIPopup.classList.toggle("pr-ai-include-descendants", includeDescendants);
-      return;
+  const descendantsToXml = (descendants, parentId) => {
+    const childrenByParent = buildDescendantChildrenIndex(descendants);
+    return descendantsToXmlWithIndex(childrenByParent, parentId);
+  };
+  const fetchItemMarkdown = async (itemId, itemIsPost, state2, providerName) => {
+    if (itemIsPost) {
+      const p = state2.posts.find((p2) => p2._id === itemId);
+      if (p?.contents?.markdown) return p;
+    } else {
+      const c = state2.commentById.get(itemId);
+      if (c?.contents?.markdown) return c;
     }
-    const popup = document.createElement("div");
-    popup.className = `pr-ai-popup${includeDescendants ? " pr-ai-include-descendants" : ""}`;
-    popup.innerHTML = `
+    Logger.info(`${providerName}: Fetching ${itemId} source from server...`);
+    if (itemIsPost) {
+      const res = await queryGraphQL(GET_POST, { id: itemId });
+      return res?.post?.result || null;
+    } else {
+      const res = await queryGraphQL(GET_COMMENT, { id: itemId });
+      return res?.comment?.result || null;
+    }
+  };
+  const createAIProviderFeature = (config) => {
+    const getCacheKey = (id) => `${config.cacheKeyPrefix}:${id}`;
+    const closePopup = (state2) => {
+      if (state2.activeAIPopup) {
+        state2.activeAIPopup.remove();
+        state2.activeAIPopup = null;
+      }
+      document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
+    };
+    const handleSend = async (state2, includeDescendants = false, focalItemId) => {
+      let itemEl = null;
+      if (focalItemId) {
+        itemEl = document.querySelector(`.pr-comment[data-id="${focalItemId}"], .pr-post[data-id="${focalItemId}"]`);
+        if (!itemEl) {
+          Logger.warn(`${config.name}: Focal item ${focalItemId} no longer in DOM.`);
+          return;
+        }
+      } else {
+        const target = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
+        if (target) {
+          itemEl = target.closest(".pr-comment, .pr-post");
+        }
+        if (!itemEl) {
+          itemEl = document.querySelector(".being-summarized.pr-comment, .being-summarized.pr-post");
+        }
+      }
+      if (!itemEl) {
+        Logger.warn(`${config.name}: No comment or post found under mouse.`);
+        return;
+      }
+      document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
+      itemEl.classList.add("being-summarized");
+      const id = itemEl.dataset.id;
+      if (!id) {
+        Logger.warn(`${config.name}: Element has no ID.`);
+        return;
+      }
+      const cacheKey = getCacheKey(id);
+      if (!includeDescendants && state2.sessionAICache[cacheKey] && !window.PR_FORCE_AI_REGEN) {
+        Logger.info(`${config.name}: Using session-cached answer for ${id}`);
+        displayPopup(state2.sessionAICache[cacheKey], state2);
+        return;
+      }
+      window.PR_FORCE_AI_REGEN = false;
+      const isPost2 = itemEl.classList.contains("pr-post");
+      Logger.info(`${config.name}: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
+      try {
+        setStatusMessage(`${config.statusTag} Building conversation thread...`, "#007bff");
+        const requestId = Math.random().toString(36).substring(2, 10);
+        const lineage = [];
+        let currentId = id;
+        let currentIsPost = isPost2;
+        while (currentId && lineage.length < 8) {
+          const item = await fetchItemMarkdown(currentId, currentIsPost, state2, config.name);
+          if (!item) break;
+          lineage.unshift(item);
+          if (currentIsPost) {
+            currentId = null;
+          } else if (item.parentCommentId) {
+            currentId = item.parentCommentId;
+            currentIsPost = false;
+          } else if (item.postId) {
+            currentId = item.postId;
+            currentIsPost = true;
+          } else {
+            currentId = null;
+          }
+        }
+        if (lineage.length === 0) {
+          throw new Error(`Unable to load source content for ${isPost2 ? "post" : "comment"} ${id}`);
+        }
+        let descendants = [];
+        if (includeDescendants) {
+          let baselineDescendants = [];
+          let fullDescendants = [];
+          let actualDescendantCount = 0;
+          let decision = "load_all";
+          let prompted = false;
+          if (isPost2) {
+            const post = state2.postById.get(id);
+            const totalCount = post?.commentCount ?? -1;
+            baselineDescendants = getAvailablePostComments(state2, id);
+            fullDescendants = baselineDescendants;
+            actualDescendantCount = totalCount >= 0 ? totalCount : baselineDescendants.length;
+            if (totalCount >= 0 && shouldPromptForLargeDescendants(actualDescendantCount)) {
+              decision = await promptLargeDescendantConfirmation({
+                descendantCount: actualDescendantCount,
+                subjectLabel: "post"
+              });
+              prompted = true;
+            }
+            if (decision === "load_all" && !isPostComplete(state2, id, totalCount)) {
+              setStatusMessage(`${config.statusTag} Loading descendants...`, "#007bff");
+              await fetchAllPostCommentsWithCache(state2, id, totalCount);
+              fullDescendants = getAvailablePostComments(state2, id);
+              actualDescendantCount = totalCount >= 0 ? totalCount : fullDescendants.length;
+            }
+          } else {
+            const focalComment = state2.commentById.get(id);
+            const postId = focalComment?.postId || itemEl.dataset.postId || "";
+            const postTotalCount = state2.postById.get(postId)?.commentCount ?? -1;
+            const baselineSource = postId ? getAvailablePostComments(state2, postId) : state2.comments;
+            baselineDescendants = collectCommentDescendants(baselineSource, id);
+            fullDescendants = baselineDescendants;
+            actualDescendantCount = baselineDescendants.length;
+            if (shouldPromptForLargeDescendants(actualDescendantCount)) {
+              decision = await promptLargeDescendantConfirmation({
+                descendantCount: actualDescendantCount,
+                subjectLabel: "comment"
+              });
+              prompted = true;
+            }
+            if (decision === "load_all" && postId && !isPostComplete(state2, postId, postTotalCount)) {
+              setStatusMessage(`${config.statusTag} Loading descendants...`, "#007bff");
+              await fetchAllPostCommentsWithCache(state2, postId, postTotalCount);
+              const mergedSource = getAvailablePostComments(state2, postId);
+              fullDescendants = collectCommentDescendants(mergedSource, id);
+              actualDescendantCount = fullDescendants.length;
+            }
+          }
+          if (!prompted && shouldPromptForLargeDescendants(actualDescendantCount)) {
+            decision = await promptLargeDescendantConfirmation({
+              descendantCount: actualDescendantCount,
+              subjectLabel: isPost2 ? "post" : "comment"
+            });
+          }
+          if (decision === "cancel") {
+            setStatusMessage(`${config.statusTag} Action canceled.`, "#dc3545");
+            return;
+          }
+          descendants = decision === "continue_without_loading" ? baselineDescendants : fullDescendants;
+          descendants.sort((a, b) => new Date(a.postedAt || "").getTime() - new Date(b.postedAt || "").getTime());
+        }
+        const threadXml = lineage.length > 0 ? toXml(lineage, id, descendants) : "";
+        const finalPayload = (config.getPromptPrefix() || config.defaultPromptPrefix) + threadXml;
+        Logger.info(`${config.name}: Opening tab with deep threaded payload...`);
+        state2.currentAIRequestId = requestId;
+        if (typeof GM_setValue === "function") {
+          GM_setValue(config.requestIdKey, requestId);
+          GM_setValue(config.promptPayloadKey, finalPayload);
+          GM_setValue(config.includeDescendantsKey, includeDescendants);
+        }
+        if (typeof GM_openInTab === "function") {
+          GM_openInTab(config.openUrl, { active: true });
+        }
+        setStatusMessage(config.openingStatusText, "#28a745");
+      } catch (error) {
+        Logger.error(`${config.name}: Failed to prepare threaded payload`, error);
+        setStatusMessage(`[${config.name}] Failed to prepare payload. Check console.`, "#dc3545");
+      }
+    };
+    const displayPopup = (text2, state2, includeDescendants = false) => {
+      if (state2.activeAIPopup) {
+        state2.activeAIPopup.remove();
+        state2.activeAIPopup = null;
+      }
+      const popup = document.createElement("div");
+      popup.className = `pr-ai-popup${includeDescendants ? " pr-ai-include-descendants" : ""}`;
+      popup.innerHTML = `
     <div class="pr-ai-popup-header">
       <h3>Summary and Potential Errors</h3>
       <div class="pr-ai-popup-actions">
@@ -8395,117 +9049,162 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     </div>
     <div class="pr-ai-popup-content"></div>
   `;
-    const popupContent = popup.querySelector(".pr-ai-popup-content");
-    if (popupContent) popupContent.innerHTML = sanitizeHtml(text2);
-    document.body.appendChild(popup);
-    state2.activeAIPopup = popup;
-    popup.querySelector(".pr-ai-popup-close")?.addEventListener("click", () => closeAIPopup(state2));
-    popup.querySelector(".pr-ai-popup-regen")?.addEventListener("click", () => {
-      window.PR_FORCE_AI_REGEN = true;
-      const isShifted = popup.classList.contains("pr-ai-include-descendants");
-      handleSendToAIStudio(state2, isShifted);
-    });
-  };
-  const closeAIPopup = (state2) => {
-    if (state2.activeAIPopup) {
-      state2.activeAIPopup.remove();
-      state2.activeAIPopup = null;
-    }
-    document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
-  };
-  const initAIStudioListener = (state2) => {
-    if (typeof GM_addValueChangeListener !== "function") {
-      Logger.debug("AI Studio: GM_addValueChangeListener not available, skipping listener setup");
-      return;
-    }
-    GM_addValueChangeListener("ai_studio_response_payload", (_key, _oldVal, newVal, remote) => {
-      if (!newVal || !remote) return;
-      const { text: text2, requestId, includeDescendants } = newVal;
-      if (requestId === state2.currentAIRequestId) {
-        Logger.info("AI Studio: Received matching response!");
-        const target = document.querySelector(".being-summarized");
-        if (target?.dataset.id) {
-          state2.sessionAICache[target.dataset.id] = text2;
+      const popupContent = popup.querySelector(".pr-ai-popup-content");
+      if (popupContent) popupContent.innerHTML = sanitizeHtml(text2);
+      document.body.appendChild(popup);
+      state2.activeAIPopup = popup;
+      popup.querySelector(".pr-ai-popup-close")?.addEventListener("click", () => closePopup(state2));
+      popup.querySelector(".pr-ai-popup-regen")?.addEventListener("click", () => {
+        window.PR_FORCE_AI_REGEN = true;
+        const isShifted = popup.classList.contains("pr-ai-include-descendants");
+        const focalId = document.querySelector(".being-summarized")?.dataset.id;
+        handleSend(state2, isShifted, focalId);
+      });
+    };
+    const initListener = (state2) => {
+      if (typeof GM_addValueChangeListener !== "function") {
+        Logger.debug(`${config.name}: GM_addValueChangeListener not available, skipping listener setup`);
+        return;
+      }
+      GM_addValueChangeListener(config.responsePayloadKey, (_key, _oldVal, newVal, remote) => {
+        if (!newVal || !remote) return;
+        const { text: text2, requestId, includeDescendants } = newVal;
+        if (requestId === state2.currentAIRequestId) {
+          Logger.info(`${config.name}: Received matching response!`);
+          const target = document.querySelector(".being-summarized");
+          if (target?.dataset.id) {
+            state2.sessionAICache[getCacheKey(target.dataset.id)] = text2;
+          }
+          displayPopup(text2, state2, !!includeDescendants);
+          setStatusMessage(`${config.name} response received.`);
+          const stickyEl = document.getElementById("pr-sticky-ai-status");
+          if (stickyEl) {
+            stickyEl.classList.remove("visible");
+            stickyEl.textContent = "";
+          }
+          window.focus();
+        } else {
+          Logger.debug(`${config.name}: Received response for different request. Ignoring.`);
         }
-        displayAIPopup(text2, state2, !!includeDescendants);
-        setStatusMessage("AI Studio response received.");
+      });
+      GM_addValueChangeListener(config.statusKey, (_key, _oldVal, newVal, remote) => {
+        if (!newVal || !remote) return;
+        Logger.debug(`${config.name} Status: ${newVal}`);
+        const statusEl = document.querySelector(".pr-status");
+        if (statusEl) setStatusMessage(`${config.statusTag} ${String(newVal)}`, "#28a745");
         const stickyEl = document.getElementById("pr-sticky-ai-status");
         if (stickyEl) {
-          stickyEl.classList.remove("visible");
-          stickyEl.textContent = "";
+          stickyEl.textContent = `AI: ${newVal}`;
+          stickyEl.classList.add("visible");
+          if (newVal === "Response received!" || newVal.startsWith("Error:")) {
+            setTimeout(() => {
+              if (stickyEl.textContent?.includes(newVal)) {
+                stickyEl.classList.remove("visible");
+              }
+            }, 5e3);
+          }
         }
-        window.focus();
-      } else {
-        Logger.debug("AI Studio: Received response for different request. Ignoring.");
-      }
-    });
-    GM_addValueChangeListener("ai_studio_status", (_key, _oldVal, newVal, remote) => {
-      if (!newVal || !remote) return;
-      Logger.debug(`AI Studio Status: ${newVal}`);
-      const statusEl = document.querySelector(".pr-status");
-      if (statusEl) setStatusMessage(`[AI Studio] ${String(newVal)}`, "#28a745");
-      const stickyEl = document.getElementById("pr-sticky-ai-status");
-      if (stickyEl) {
-        stickyEl.textContent = `AI: ${newVal}`;
-        stickyEl.classList.add("visible");
-        if (newVal === "Response received!" || newVal.startsWith("Error:")) {
-          setTimeout(() => {
-            if (stickyEl.textContent?.includes(newVal)) {
-              stickyEl.classList.remove("visible");
+      });
+      if (!popupAutoCloseScrollAttached.has(state2)) {
+        popupAutoCloseScrollAttached.add(state2);
+        let scrollThrottle = null;
+        window.addEventListener("scroll", () => {
+          if (scrollThrottle || !state2.activeAIPopup) return;
+          scrollThrottle = window.setTimeout(() => {
+            scrollThrottle = null;
+            if (!state2.activeAIPopup) return;
+            const target = document.querySelector(".being-summarized");
+            if (target) {
+              const rect = target.getBoundingClientRect();
+              const isVisible = rect.bottom > 0 && rect.top < window.innerHeight;
+              if (!isVisible) {
+                Logger.info("AI Popup: Target scrolled off-screen. Auto-closing popup.");
+                if (state2.activeAIPopup) {
+                  state2.activeAIPopup.remove();
+                  state2.activeAIPopup = null;
+                }
+                document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
+              }
             }
-          }, 5e3);
-        }
+          }, 500);
+        }, { passive: true });
       }
-    });
-    let scrollThrottle = null;
-    window.addEventListener("scroll", () => {
-      if (scrollThrottle || !state2.activeAIPopup) return;
-      scrollThrottle = window.setTimeout(() => {
-        scrollThrottle = null;
-        if (!state2.activeAIPopup) return;
-        const target = document.querySelector(".being-summarized");
-        if (target) {
-          const rect = target.getBoundingClientRect();
-          const isVisible = rect.bottom > 0 && rect.top < window.innerHeight;
-          if (!isVisible) {
-            Logger.info("AI Studio: Target scrolled off-screen. Auto-closing popup.");
-            closeAIPopup(state2);
+    };
+    const setupKeyboard = (state2) => {
+      document.addEventListener("keydown", (e) => {
+        const target = e.target;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+        const key = e.key;
+        const lowerKey = key.toLowerCase();
+        if (key === "Escape") {
+          closePopup(state2);
+          return;
+        }
+        if (e.ctrlKey || e.altKey || e.metaKey) {
+          return;
+        }
+        if (lowerKey === config.hotkey) {
+          if (state2.activeAIPopup) {
+            const elementUnderMouse = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
+            const isInPopup = !!elementUnderMouse?.closest(".pr-ai-popup");
+            const isInFocalItem = !!elementUnderMouse?.closest(".being-summarized");
+            if (isInPopup || isInFocalItem) {
+              closePopup(state2);
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+            }
           }
         }
-      }, 500);
-    }, { passive: true });
+      });
+    };
+    return {
+      handleSend,
+      displayPopup,
+      closePopup,
+      initListener,
+      setupKeyboard
+    };
   };
-  const setupAIStudioKeyboard = (state2) => {
-    document.addEventListener("keydown", (e) => {
-      const target = e.target;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-        return;
-      }
-      const key = e.key;
-      const lowerKey = key.toLowerCase();
-      if (key === "Escape") {
-        closeAIPopup(state2);
-        return;
-      }
-      if (e.ctrlKey || e.altKey || e.metaKey) {
-        return;
-      }
-      if (lowerKey === "g") {
-        if (state2.activeAIPopup) {
-          const elementUnderMouse = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
-          const isInPopup = !!elementUnderMouse?.closest(".pr-ai-popup");
-          const isInFocalItem = !!elementUnderMouse?.closest(".being-summarized");
-          if (isInPopup || isInFocalItem) {
-            closeAIPopup(state2);
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-            return;
-          }
-        }
-      }
-    });
-  };
+  const aiStudioFeature = createAIProviderFeature({
+    name: "AI Studio",
+    statusTag: "[AI Studio]",
+    openingStatusText: "[AI Studio] Opening AI Studio tab...",
+    openUrl: "https://aistudio.google.com/prompts/new_chat",
+    cacheKeyPrefix: "ai_studio",
+    hotkey: "g",
+    requestIdKey: "ai_studio_request_id",
+    promptPayloadKey: "ai_studio_prompt_payload",
+    includeDescendantsKey: "ai_studio_include_descendants",
+    responsePayloadKey: "ai_studio_response_payload",
+    statusKey: "ai_studio_status",
+    getPromptPrefix: getAIStudioPrefix,
+    defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
+  });
+  const handleSendToAIStudio = aiStudioFeature.handleSend;
+  const initAIStudioListener = aiStudioFeature.initListener;
+  const setupAIStudioKeyboard = aiStudioFeature.setupKeyboard;
+  const arenaMaxFeature = createAIProviderFeature({
+    name: "Arena Max",
+    statusTag: "[Arena]",
+    openingStatusText: "[Arena Max] Opening Arena tab...",
+    openUrl: "https://arena.ai/max",
+    cacheKeyPrefix: "arena_max",
+    hotkey: "m",
+    requestIdKey: "arena_max_request_id",
+    promptPayloadKey: "arena_max_prompt_payload",
+    includeDescendantsKey: "arena_max_include_descendants",
+    responsePayloadKey: "arena_max_response_payload",
+    statusKey: "arena_max_status",
+
+getPromptPrefix: getAIStudioPrefix,
+    defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
+  });
+  const handleSendToArenaMax = arenaMaxFeature.handleSend;
+  const initArenaMaxListener = arenaMaxFeature.initListener;
+  const setupArenaMaxKeyboard = arenaMaxFeature.setupKeyboard;
   let eventsAbort = null;
   const attachEventListeners = (state2) => {
     if (eventsAbort) {
@@ -8613,6 +9312,9 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       } else if (action === "send-to-ai-studio") {
         e.stopPropagation();
         handleSendToAIStudio(state2, e.shiftKey);
+      } else if (action === "send-to-arena-max") {
+        e.stopPropagation();
+        handleSendToArenaMax(state2, e.shiftKey);
       } else if (action === "collapse" && actionTarget.classList.contains("pr-collapse")) {
         handleCommentCollapse(actionTarget);
       } else if (action === "expand" && actionTarget.classList.contains("pr-expand")) {
@@ -9059,15 +9761,18 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   const upsertContextualEntries = async (username, itemType, items) => {
     if (items.length === 0) return;
     const db = await openDB();
-    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
-    const store = tx.objectStore(STORE_CONTEXTUAL);
     const now = Date.now();
     const uniqueItems = dedupeById(items);
+    const readTx = db.transaction(STORE_CONTEXTUAL, "readonly");
+    const readStore = readTx.objectStore(STORE_CONTEXTUAL);
     const getPromises = uniqueItems.map((item) => {
       const key = contextCacheKey(username, itemType, item._id);
-      return requestToPromise(store.get(key)).then((existing) => ({ item, key, existing }));
+      return requestToPromise(readStore.get(key)).then((existing) => ({ item, key, existing }));
     });
     const results = await Promise.all(getPromises);
+    await transactionToPromise(readTx);
+    const writeTx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+    const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
     for (const { item, key, existing } of results) {
       const payload = existing ? mergeContextPayload(existing.payload, item) : item;
       const completeness = Math.max(
@@ -9085,9 +9790,9 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
         updatedAt: now,
         lastAccessedAt: now
       };
-      store.put(entry);
+      writeStore.put(entry);
     }
-    await transactionToPromise(tx);
+    await transactionToPromise(writeTx);
   };
   const saveContextualItems = async (username, comments = [], posts = []) => {
     if (comments.length === 0 && posts.length === 0) return;
@@ -9099,44 +9804,83 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     const ids = Array.from(new Set(commentIds.filter(Boolean)));
     if (ids.length === 0) return { comments: [], missingIds: [] };
     const db = await openDB();
-    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
-    const store = tx.objectStore(STORE_CONTEXTUAL);
     const now = Date.now();
     const comments = [];
     const missingIds = [];
-    const getPromises = ids.map((id) => {
+    const staleCacheKeys = new Set();
+    const touchedByKey = new Map();
+    const readCommentsTx = db.transaction(STORE_CONTEXTUAL, "readonly");
+    const readCommentsStore = readCommentsTx.objectStore(STORE_CONTEXTUAL);
+    const commentEntryPromises = ids.map((id) => {
       const key = contextCacheKey(username, "comment", id);
-      return requestToPromise(store.get(key)).then((entry) => ({ id, entry }));
+      return requestToPromise(readCommentsStore.get(key)).then((entry) => ({ id, entry }));
     });
-    const results = await Promise.all(getPromises);
-    for (const { id, entry } of results) {
+    const commentEntryResults = await Promise.all(commentEntryPromises);
+    await transactionToPromise(readCommentsTx);
+    const validComments = [];
+    const neededPostIds = new Set();
+    for (const { id, entry } of commentEntryResults) {
       const isExpired = !!entry && now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
       if (!entry || entry.itemType !== "comment" || isExpired) {
         if (entry && isExpired) {
-          store.delete(entry.cacheKey);
+          staleCacheKeys.add(entry.cacheKey);
         }
         missingIds.push(id);
         continue;
       }
-      entry.lastAccessedAt = now;
-      store.put(entry);
+      const touchedCommentEntry = {
+        ...entry,
+        lastAccessedAt: now
+      };
+      touchedByKey.set(touchedCommentEntry.cacheKey, touchedCommentEntry);
       const comment = { ...entry.payload };
+      validComments.push({ comment });
       if (!comment.post && comment.postId) {
-        const postEntry = await requestToPromise(
-          store.get(contextCacheKey(username, "post", comment.postId))
-        );
-        const postExpired = !!postEntry && now - postEntry.updatedAt > CONTEXT_MAX_AGE_MS;
-        if (postEntry && postExpired) {
-          store.delete(postEntry.cacheKey);
-        } else if (postEntry && postEntry.itemType === "post") {
-          postEntry.lastAccessedAt = now;
-          store.put(postEntry);
+        neededPostIds.add(comment.postId);
+      }
+    }
+    const postById = new Map();
+    if (neededPostIds.size > 0) {
+      const readPostsTx = db.transaction(STORE_CONTEXTUAL, "readonly");
+      const readPostsStore = readPostsTx.objectStore(STORE_CONTEXTUAL);
+      const postEntryPromises = Array.from(neededPostIds).map((postId) => {
+        const key = contextCacheKey(username, "post", postId);
+        return requestToPromise(readPostsStore.get(key)).then((entry) => ({ postId, entry }));
+      });
+      const postEntryResults = await Promise.all(postEntryPromises);
+      await transactionToPromise(readPostsTx);
+      for (const { postId, entry } of postEntryResults) {
+        const isExpired = !!entry && now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
+        if (!entry || entry.itemType !== "post" || isExpired) {
+          if (entry && isExpired) {
+            staleCacheKeys.add(entry.cacheKey);
+          }
+          continue;
+        }
+        postById.set(postId, entry);
+      }
+    }
+    for (const { comment } of validComments) {
+      if (!comment.post && comment.postId) {
+        const postEntry = postById.get(comment.postId);
+        if (postEntry) {
+          const touchedPostEntry = {
+            ...postEntry,
+            lastAccessedAt: now
+          };
+          touchedByKey.set(touchedPostEntry.cacheKey, touchedPostEntry);
           comment.post = postEntry.payload;
         }
       }
       comments.push(comment);
     }
-    await transactionToPromise(tx);
+    if (staleCacheKeys.size > 0 || touchedByKey.size > 0) {
+      const writeTx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+      const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
+      staleCacheKeys.forEach((key) => writeStore.delete(key));
+      touchedByKey.forEach((entry) => writeStore.put(entry));
+      await transactionToPromise(writeTx);
+    }
     return { comments: dedupeById(comments), missingIds };
   };
   const loadAllContextualItems = async (username) => {
@@ -9165,16 +9909,19 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   };
   const pruneContextualCache = async (username) => {
     const db = await openDB();
-    const tx = db.transaction(STORE_CONTEXTUAL, "readwrite");
-    const store = tx.objectStore(STORE_CONTEXTUAL);
-    const index = store.index("username");
-    const entries2 = await requestToPromise(index.getAll(IDBKeyRange.only(username)));
+    const readTx = db.transaction(STORE_CONTEXTUAL, "readonly");
+    const readStore = readTx.objectStore(STORE_CONTEXTUAL);
+    const entries2 = await requestToPromise(
+      readStore.index("username").getAll(IDBKeyRange.only(username))
+    );
+    await transactionToPromise(readTx);
     const now = Date.now();
     let removed = 0;
+    const keysToDelete = [];
     const freshEntries = entries2.filter((entry) => {
       const isExpired = now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
       if (isExpired) {
-        store.delete(entry.cacheKey);
+        keysToDelete.push(entry.cacheKey);
         removed++;
       }
       return !isExpired;
@@ -9183,11 +9930,16 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       const overflow = freshEntries.length - CONTEXT_MAX_ENTRIES_PER_USER;
       const toEvict = [...freshEntries].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt).slice(0, overflow);
       toEvict.forEach((entry) => {
-        store.delete(entry.cacheKey);
+        keysToDelete.push(entry.cacheKey);
         removed++;
       });
     }
-    await transactionToPromise(tx);
+    if (keysToDelete.length > 0) {
+      const writeTx = db.transaction(STORE_CONTEXTUAL, "readwrite");
+      const writeStore = writeTx.objectStore(STORE_CONTEXTUAL);
+      keysToDelete.forEach((key) => writeStore.delete(key));
+      await transactionToPromise(writeTx);
+    }
     if (removed > 0) {
       Logger.info(`Pruned ${removed} contextual cache records for ${username}`);
     }
@@ -9418,7 +10170,12 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
         } catch (e) {
           lastError = e;
           if (attempt < CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS) {
-            Logger.warn(`Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying.`, e);
+            const retryDelayMs = attempt * 500;
+            Logger.warn(
+              `Context fetch chunk failed (attempt ${attempt}/${CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS}); retrying in ${retryDelayMs}ms.`,
+              e
+            );
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
           }
         }
       }
@@ -11183,7 +11940,7 @@ sortCanonicalItems() {
             }
             matched = new Uint32Array(results2);
           } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {
-            matched = corpus.tokenIndex.get(clause.valueNorm) || new Uint32Array(0);
+            matched = corpus.tokenIndex.get(clause.valueNorm) || EMPTY_POSTINGS;
           } else {
             const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);
             if (accelerated) {
@@ -11209,7 +11966,7 @@ sortCanonicalItems() {
         case "author": {
           const nameTokens = tokenizeForIndex(clause.valueNorm);
           const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);
-          if (accelerated) {
+          if (accelerated && accelerated.length > 0) {
             const results2 = [];
             accelerated.forEach((ordinal) => {
               const doc = corpus.docs[ordinal];
@@ -11220,14 +11977,26 @@ sortCanonicalItems() {
             });
             matched = new Uint32Array(results2);
           } else {
-            matched = null;
+            const results2 = [];
+            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+              if (shouldCheckBudget(ordinal)) {
+                partialResults = true;
+                break;
+              }
+              const doc = corpus.docs[ordinal];
+              if (!doc.authorNameNorm.includes(clause.valueNorm)) continue;
+              results2.push(ordinal);
+              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+              signal.authorHit = true;
+            }
+            matched = new Uint32Array(results2);
           }
           break;
         }
         case "replyto": {
           const nameTokens = tokenizeForIndex(clause.valueNorm);
           const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);
-          if (accelerated) {
+          if (accelerated && accelerated.length > 0) {
             const results2 = [];
             accelerated.forEach((ordinal) => {
               const doc = corpus.docs[ordinal];
@@ -11238,7 +12007,19 @@ sortCanonicalItems() {
             });
             matched = new Uint32Array(results2);
           } else {
-            matched = null;
+            const results2 = [];
+            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
+              if (shouldCheckBudget(ordinal)) {
+                partialResults = true;
+                break;
+              }
+              const doc = corpus.docs[ordinal];
+              if (!doc.replyToNorm.includes(clause.valueNorm)) continue;
+              results2.push(ordinal);
+              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
+              signal.replyToHit = true;
+            }
+            matched = new Uint32Array(results2);
           }
           break;
         }
@@ -12154,7 +12935,7 @@ sortCanonicalItems() {
     const next = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", next);
   };
-  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => {\n    if (pattern.length > 250) return true;\n    return /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || // nested quantifiers\n    /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern) || // consecutive quantifiers\n    /\\\\[1-9]/.test(pattern) || // backreferences \n    /(?:\\(.*?\\|.*?\\).*?){3,}/.test(pattern);\n  };\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const EMPTY_SIGNALS = {\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        const precomputedScores = /* @__PURE__ */ new Map();\n        sorted.forEach((doc) => {\n          const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;\n          precomputedScores.set(doc.id, computeRelevanceScore(signals));\n        });\n        sorted.sort((a, b) => {\n          const scoreCmp = (precomputedScores.get(b.id) || 0) - (precomputedScores.get(a.id) || 0);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPostingBatch = (index, token, ordinals) => {\n    if (ordinals.length === 0) return;\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.from(ordinals));\n      return;\n    }\n    const next = new Uint32Array(postings.length + ordinals.length);\n    next.set(postings);\n    next.set(ordinals, postings.length);\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    const tokenBatch = /* @__PURE__ */ new Map();\n    const authorBatch = /* @__PURE__ */ new Map();\n    const replyToBatch = /* @__PURE__ */ new Map();\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToBatch, token, ordinal);\n      }\n    }\n    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));\n    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));\n    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const BUDGET_CHECK_INTERVAL = 1024;\n  const EMPTY_POSTINGS = new Uint32Array(0);\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const intersectSortedArrays = (a, b) => {\n    let i = 0;\n    let j = 0;\n    const result = new Uint32Array(Math.min(a.length, b.length));\n    let count = 0;\n    while (i < a.length && j < b.length) {\n      if (a[i] === b[j]) {\n        result[count++] = a[i];\n        i++;\n        j++;\n      } else if (a[i] < b[j]) {\n        i++;\n      } else {\n        j++;\n      }\n    }\n    return count === result.length ? result : result.slice(0, count);\n  };\n  const getTokenPostingIntersection = (index, tokens) => {\n    if (tokens.length === 0) return null;\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return EMPTY_POSTINGS;\n      if (result === null) {\n        result = postings;\n      } else {\n        result = intersectSortedArrays(result, postings);\n        if (result.length === 0) return result;\n      }\n    }\n    return result;\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    if (upserts.length === 0) return true;\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    const shouldCheckBudget = (iteration) => (iteration & BUDGET_CHECK_INTERVAL - 1) === 0 && budgetExceeded();\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = null;\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            const results2 = [];\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (shouldCheckBudget(ordinal)) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                results2.push(ordinal);\n              }\n            }\n            matched = new Uint32Array(results2);\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            matched = corpus.tokenIndex.get(clause.valueNorm) || new Uint32Array(0);\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);\n            if (accelerated) {\n              const results2 = [];\n              accelerated.forEach((ordinal) => {\n                const doc = corpus.docs[ordinal];\n                if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n                results2.push(ordinal);\n              });\n              matched = new Uint32Array(results2);\n            } else {\n              matched = null;\n            }\n          }\n          if (matched) {\n            matched.forEach((ordinal) => {\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.tokenHits += 1;\n            });\n          }\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);\n          if (accelerated) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.authorHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            matched = null;\n          }\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);\n          if (accelerated) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.replyToHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            matched = null;\n          }\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          const results2 = [];\n          const constrainedOrdinals = candidateOrdinals;\n          const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;\n          for (let i = 0; i < scanLimit; i++) {\n            if (shouldCheckBudget(i)) {\n              partialResults = true;\n              break;\n            }\n            const ordinal = constrainedOrdinals ? constrainedOrdinals[i] : i;\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              results2.push(ordinal);\n            }\n          }\n          matched = new Uint32Array(results2);\n          break;\n        }\n      }\n      if (matched !== null) {\n        if (candidateOrdinals === null) {\n          candidateOrdinals = matched;\n        } else {\n          candidateOrdinals = intersectSortedArrays(candidateOrdinals, matched);\n        }\n        if (candidateOrdinals.length === 0) {\n          break;\n        }\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    let stageBApplied = false;\n    if (candidateOrdinals) {\n      for (const clause of deferredStageAClauses) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const filtered = [];\n        let clauseComplete = true;\n        for (let i = 0; i < candidateOrdinals.length; i++) {\n          if (shouldCheckBudget(i)) {\n            partialResults = true;\n            clauseComplete = false;\n            break;\n          }\n          const ordinal = candidateOrdinals[i];\n          const doc = corpus.docs[ordinal];\n          if (matchesClause(doc, clause)) {\n            filtered.push(ordinal);\n          }\n        }\n        if (!clauseComplete) {\n          candidateOrdinals = new Uint32Array(filtered);\n          break;\n        }\n        candidateOrdinals = new Uint32Array(filtered);\n        if (candidateOrdinals.length === 0) break;\n      }\n    }\n    const results = [];\n    if (hasPositiveContent && candidateOrdinals) {\n      stageBApplied = true;\n      for (let i = 0; i < candidateOrdinals.length; i++) {\n        if (shouldCheckBudget(i)) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = candidateOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      stageBApplied = true;\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (shouldCheckBudget(ordinal)) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    }\n    let finalOrdinals;\n    if (stageBApplied) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (results.length > 0) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (candidateOrdinals) {\n      finalOrdinals = candidateOrdinals;\n    } else {\n      finalOrdinals = new Uint32Array(docCount);\n      for (let i = 0; i < docCount; i++) finalOrdinals[i] = i;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = [];\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        if (shouldCheckBudget(i)) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = finalOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.push(ordinal);\n      }\n      finalOrdinals = new Uint32Array(filtered);\n    }\n    let docs;\n    if (finalOrdinals.length === docCount) {\n      docs = corpus.docs.slice();\n    } else {\n      docs = new Array(finalOrdinals.length);\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        docs[i] = corpus.docs[finalOrdinals[i]];\n      }\n    }\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    if (relevanceSignalsByOrdinal.size > 0) {\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        const ordinal = finalOrdinals[i];\n        const signals = relevanceSignalsByOrdinal.get(ordinal);\n        if (signals) {\n          const doc = corpus.docs[ordinal];\n          relevanceSignalsById.set(doc.id, signals);\n        }\n      }\n    }\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: finalOrdinals.length,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2,\n          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      let debugExplain;\n      if (request.debugExplain) {\n        const relevanceSignalsById = {};\n        for (const id of ids) {\n          const signals = mergedSignals.get(id);\n          if (!signals) continue;\n          relevanceSignalsById[id] = { ...signals };\n        }\n        debugExplain = { relevanceSignalsById };\n      }\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics,\n        ...debugExplain ? { debugExplain } : {}\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) {\n        const oldestFirst = Array.from(cancelledRequests.entries()).sort((a, b) => a[1] - b[1]);\n        const overflow = oldestFirst.length - CANCEL_MAX;\n        for (let i = 0; i < overflow; i++) {\n          cancelledRequests.delete(oldestFirst[i][0]);\n        }\n      }\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  let authoredItemsById = /* @__PURE__ */ new Map();\n  let contextItemsById = /* @__PURE__ */ new Map();\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      authoredItemsById = /* @__PURE__ */ new Map();\n      for (const item of items) authoredItemsById.set(item._id, item);\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    contextItemsById = /* @__PURE__ */ new Map();\n    for (const item of items) contextItemsById.set(item._id, item);\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    if (upserts.length === 0 && deletes.length === 0) return;\n    const byId = source === "authored" ? authoredItemsById : contextItemsById;\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    const nextItems = Array.from(byId.values());\n    if (source === "authored") {\n      authoredItems = nextItems;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = nextItems;\n    runtime.setContextItems(contextItems);\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    for (const item of message.items) {\n      fullBatch.items.push(item);\n    }\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs,\n      debugExplain: message.debugExplain\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics,\n      ...result.debugExplain ? { debugExplain: result.debugExplain } : {}\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
+  const jsContent = '(function() {\n  "use strict";\n  const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";\n  const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;\n  const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";\n  const HTML_TAG_PATTERN = /<[^>]+>/g;\n  const WHITESPACE_PATTERN = /\\s+/g;\n  const MARKDOWN_LINK_PATTERN = /\\[([^\\]]+)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_IMAGE_PATTERN = /!\\[([^\\]]*)\\]\\(([^)]+)\\)/g;\n  const MARKDOWN_FORMATTING_PATTERN = /(^|\\s)[>#*_~`-]+(?=\\s|$)/gm;\n  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;\n  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;\n  const MARKDOWN_LATEX_PATTERN = /\\$\\$?/g;\n  const PUNCT_FOLD_PATTERN = /[^\\p{L}\\p{N}\\s]/gu;\n  const APOSTROPHE_PATTERN = /[\'’]/g;\n  const TOKEN_SPLIT_PATTERN = /\\s+/g;\n  const COMMON_ENTITIES = {\n    "&amp;": "&",\n    "&lt;": "<",\n    "&gt;": ">",\n    "&quot;": \'"\',\n    "&#39;": "\'",\n    "&apos;": "\'",\n    "&nbsp;": " ",\n    "&#x27;": "\'",\n    "&#x2F;": "/"\n  };\n  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\\d+)|[a-z][a-z0-9]*);/gi;\n  const decodeHtmlEntities = (html) => {\n    if (typeof document !== "undefined") {\n      const textarea = document.createElement("textarea");\n      textarea.innerHTML = html;\n      return textarea.value;\n    }\n    return html.replace(ENTITY_PATTERN, (entity) => {\n      const known = COMMON_ENTITIES[entity.toLowerCase()];\n      if (known) return known;\n      if (entity.startsWith("&#x")) {\n        const code = parseInt(entity.slice(3, -1), 16);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      if (entity.startsWith("&#")) {\n        const code = parseInt(entity.slice(2, -1), 10);\n        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;\n      }\n      return entity;\n    });\n  };\n  const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();\n  const stripHtmlToText = (html) => {\n    const decoded = decodeHtmlEntities(html);\n    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));\n  };\n  const stripMarkdownFormatting = (markdown) => {\n    let text = markdown;\n    text = text.replace(MARKDOWN_IMAGE_PATTERN, "$1");\n    text = text.replace(MARKDOWN_LINK_PATTERN, "$1");\n    text = text.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");\n    text = text.replace(MARKDOWN_INLINE_CODE_PATTERN, "");\n    text = text.replace(MARKDOWN_LATEX_PATTERN, "");\n    text = text.replace(MARKDOWN_FORMATTING_PATTERN, "$1");\n    return collapseWhitespace(text);\n  };\n  const normalizeForSearch = (value) => {\n    if (!value) return "";\n    const nfkc = value.normalize("NFKC").toLowerCase();\n    return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));\n  };\n  const normalizeBody = (item) => {\n    const markdown = item.contents?.markdown;\n    if (typeof markdown === "string" && markdown.trim().length > 0) {\n      return normalizeForSearch(stripMarkdownFormatting(markdown));\n    }\n    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";\n    return normalizeForSearch(stripHtmlToText(htmlBody));\n  };\n  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";\n  const getItemType = (item) => "title" in item ? "post" : "comment";\n  const getAuthorDisplayName = (item) => {\n    if (item.user?.displayName) return item.user.displayName;\n    if (item.user?.username) return item.user.username;\n    return "";\n  };\n  const getReplyToDisplayName = (item) => {\n    if ("title" in item) return "";\n    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;\n    if (item.post?.user?.displayName) return item.post.user.displayName;\n    return "";\n  };\n  const buildArchiveSearchDoc = (item, source) => {\n    const titleNorm = normalizeTitle(item);\n    const bodyNorm = normalizeBody(item);\n    return {\n      id: item._id,\n      itemType: getItemType(item),\n      source,\n      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,\n      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,\n      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),\n      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),\n      titleNorm,\n      bodyNorm\n    };\n  };\n  const tokenizeForIndex = (normText) => {\n    if (!normText) return [];\n    const tokens = normText.split(TOKEN_SPLIT_PATTERN);\n    const output = [];\n    const seen = /* @__PURE__ */ new Set();\n    for (const token of tokens) {\n      if (!token || token.length < 2) continue;\n      if (seen.has(token)) continue;\n      seen.add(token);\n      output.push(token);\n    }\n    return output;\n  };\n  const MAX_REGEX_PATTERN_LENGTH = 512;\n  const DATE_PATTERN = /^\\d{4}-\\d{2}-\\d{2}$/;\n  const UTC_DAY_MS = 24 * 60 * 60 * 1e3;\n  const tokenizeQuery = (query) => {\n    const tokens = [];\n    let i = 0;\n    while (i < query.length) {\n      while (i < query.length && /\\s/.test(query[i])) i++;\n      if (i >= query.length) break;\n      const start = i;\n      let cursor = i;\n      let inQuote = false;\n      const startsWithNegation = query[cursor] === "-";\n      if (startsWithNegation) cursor++;\n      const startsRegexLiteral = query[cursor] === "/";\n      if (startsRegexLiteral) {\n        cursor++;\n        let escaped2 = false;\n        while (cursor < query.length) {\n          const ch = query[cursor];\n          if (!escaped2 && ch === "/") {\n            cursor++;\n            while (cursor < query.length && /[a-z]/i.test(query[cursor])) {\n              cursor++;\n            }\n            break;\n          }\n          if (!escaped2 && ch === "\\\\") {\n            escaped2 = true;\n          } else {\n            escaped2 = false;\n          }\n          cursor++;\n        }\n        while (cursor < query.length && !/\\s/.test(query[cursor])) {\n          cursor++;\n        }\n        tokens.push(query.slice(start, cursor));\n        i = cursor;\n        continue;\n      }\n      let escaped = false;\n      while (cursor < query.length) {\n        const ch = query[cursor];\n        if (!escaped && ch === \'"\') {\n          inQuote = !inQuote;\n          cursor++;\n          continue;\n        }\n        if (!inQuote && /\\s/.test(ch)) {\n          break;\n        }\n        escaped = !escaped && ch === "\\\\";\n        cursor++;\n      }\n      tokens.push(query.slice(start, cursor));\n      i = cursor;\n    }\n    return tokens;\n  };\n  const parseRegexLiteral = (token) => {\n    if (!token.startsWith("/")) return null;\n    let i = 1;\n    let escaped = false;\n    while (i < token.length) {\n      const ch = token[i];\n      if (!escaped && ch === "/") {\n        const pattern = token.slice(1, i);\n        const flags = token.slice(i + 1);\n        if (!/^[a-z]*$/i.test(flags)) return null;\n        return { raw: token, pattern, flags };\n      }\n      if (!escaped && ch === "\\\\") {\n        escaped = true;\n      } else {\n        escaped = false;\n      }\n      i++;\n    }\n    return null;\n  };\n  const addWarning = (warnings, type, token, message) => {\n    warnings.push({ type, token, message });\n  };\n  const removeOuterQuotes = (value) => {\n    if (value.length >= 2 && value.startsWith(\'"\') && value.endsWith(\'"\')) {\n      return value.slice(1, -1);\n    }\n    return value;\n  };\n  const parseNumber = (value) => {\n    if (!/^-?\\d+$/.test(value.trim())) return null;\n    const parsed = Number(value);\n    if (!Number.isFinite(parsed)) return null;\n    return parsed;\n  };\n  const parseScoreClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "gt", min: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const n = parseNumber(trimmed.slice(1));\n      if (n === null) return null;\n      return { kind: "score", negated, op: "lt", max: n, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [minRaw, maxRaw] = trimmed.split("..");\n      const min = parseNumber(minRaw);\n      const max = parseNumber(maxRaw);\n      if (min === null || max === null) return null;\n      return { kind: "score", negated, op: "range", min, max, includeMin: true, includeMax: true };\n    }\n    const exact = parseNumber(trimmed);\n    if (exact === null) return null;\n    return { kind: "score", negated, op: "range", min: exact, max: exact, includeMin: true, includeMax: true };\n  };\n  const parseUtcDayBounds = (value) => {\n    if (!DATE_PATTERN.test(value)) return null;\n    const [yearRaw, monthRaw, dayRaw] = value.split("-");\n    const year = Number(yearRaw);\n    const month = Number(monthRaw);\n    const day = Number(dayRaw);\n    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;\n    if (month < 1 || month > 12 || day < 1 || day > 31) return null;\n    const startMs = Date.UTC(year, month - 1, day);\n    const parsed = new Date(startMs);\n    if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {\n      return null;\n    }\n    return {\n      startMs,\n      endMs: startMs + UTC_DAY_MS - 1\n    };\n  };\n  const parseDateClause = (value, negated) => {\n    const trimmed = value.trim();\n    if (!trimmed) return null;\n    if (trimmed.startsWith(">")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "gt", minMs: bounds.endMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.startsWith("<")) {\n      const bounds = parseUtcDayBounds(trimmed.slice(1));\n      if (!bounds) return null;\n      return { kind: "date", negated, op: "lt", maxMs: bounds.startMs, includeMin: false, includeMax: false };\n    }\n    if (trimmed.includes("..")) {\n      const [startRaw, endRaw] = trimmed.split("..");\n      const hasStart = startRaw.trim().length > 0;\n      const hasEnd = endRaw.trim().length > 0;\n      if (!hasStart && !hasEnd) return null;\n      const startBounds = hasStart ? parseUtcDayBounds(startRaw) : null;\n      const endBounds = hasEnd ? parseUtcDayBounds(endRaw) : null;\n      if (hasStart && !startBounds || hasEnd && !endBounds) return null;\n      return {\n        kind: "date",\n        negated,\n        op: "range",\n        minMs: startBounds?.startMs,\n        maxMs: endBounds?.endMs,\n        includeMin: true,\n        includeMax: true\n      };\n    }\n    const day = parseUtcDayBounds(trimmed);\n    if (!day) return null;\n    return {\n      kind: "date",\n      negated,\n      op: "range",\n      minMs: day.startMs,\n      maxMs: day.endMs,\n      includeMin: true,\n      includeMax: true\n    };\n  };\n  const maybeParseFieldClause = (token, negated, scopeDirectives, warnings, executableTokens) => {\n    const colonIndex = token.indexOf(":");\n    if (colonIndex <= 0) return { handled: false, clause: null };\n    const operator = token.slice(0, colonIndex).toLowerCase();\n    const valueRaw = token.slice(colonIndex + 1);\n    const value = removeOuterQuotes(valueRaw);\n    switch (operator) {\n      case "type": {\n        const normalized = value.toLowerCase();\n        if (normalized !== "post" && normalized !== "comment") {\n          addWarning(warnings, "invalid-type", token, `Unsupported type filter: ${value}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}type:${normalized}`);\n        return { handled: true, clause: { kind: "type", negated, itemType: normalized } };\n      }\n      case "author": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "author filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}author:"${normalized}"`);\n        return { handled: true, clause: { kind: "author", negated, valueNorm: normalized } };\n      }\n      case "replyto": {\n        const normalized = normalizeForSearch(value);\n        if (!normalized) {\n          addWarning(warnings, "invalid-query", token, "replyto filter requires a value");\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}replyto:"${normalized}"`);\n        return { handled: true, clause: { kind: "replyto", negated, valueNorm: normalized } };\n      }\n      case "scope": {\n        const normalized = value.toLowerCase();\n        if (normalized === "authored" || normalized === "all") {\n          scopeDirectives.push(normalized);\n        } else {\n          addWarning(warnings, "invalid-scope", token, `Unsupported scope value: ${value}`);\n        }\n        return { handled: true, clause: null };\n      }\n      case "score": {\n        const parsed = parseScoreClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-score", token, `Malformed score filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}score:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "date": {\n        const parsed = parseDateClause(valueRaw, negated);\n        if (!parsed) {\n          addWarning(warnings, "malformed-date", token, `Malformed date filter: ${valueRaw}`);\n          return { handled: true, clause: null };\n        }\n        executableTokens.push(`${negated ? "-" : ""}date:${valueRaw}`);\n        return { handled: true, clause: parsed };\n      }\n      case "sort": {\n        addWarning(warnings, "reserved-operator", token, "sort: is controlled by the sort dropdown");\n        return { handled: true, clause: null };\n      }\n      default:\n        return { handled: false, clause: null };\n    }\n  };\n  const containsUnsafeRegexPattern = (pattern) => {\n    if (pattern.length > 250) return true;\n    return /(\\([^)]*[+*][^)]*\\)[+*])/.test(pattern) || // nested quantifiers\n    /(\\+|\\*|\\{[^}]+\\})\\s*(\\+|\\*|\\{[^}]+\\})/.test(pattern) || // consecutive quantifiers\n    /\\\\[1-9]/.test(pattern) || // backreferences \n    /(?:\\(.*?\\|.*?\\).*?){3,}/.test(pattern);\n  };\n  const serializeNormalizedTermToken = (termNorm) => termNorm.includes(" ") ? termNorm.replace(/\\s+/g, "-") : termNorm;\n  const parseStructuredQuery = (query) => {\n    const trimmed = query.trim();\n    const warnings = [];\n    const scopeDirectives = [];\n    const clauses = [];\n    const executableTokens = [];\n    let wildcardSeen = false;\n    if (!trimmed) {\n      return {\n        rawQuery: query,\n        executableQuery: "",\n        clauses,\n        scopeDirectives,\n        warnings\n      };\n    }\n    const tokens = tokenizeQuery(trimmed);\n    for (const rawToken of tokens) {\n      if (!rawToken) continue;\n      const negated = rawToken.startsWith("-");\n      const token = negated ? rawToken.slice(1) : rawToken;\n      if (!token) continue;\n      const regexLiteral = parseRegexLiteral(token);\n      if (regexLiteral) {\n        if (regexLiteral.pattern.length > MAX_REGEX_PATTERN_LENGTH) {\n          addWarning(warnings, "regex-too-long", rawToken, "Regex pattern exceeds the 512 character safety limit");\n          continue;\n        }\n        if (containsUnsafeRegexPattern(regexLiteral.pattern)) {\n          addWarning(warnings, "regex-unsafe", rawToken, "Regex pattern rejected by safety lint");\n          continue;\n        }\n        try {\n          const safeFlags = regexLiteral.flags.replace(/[gy]/g, "");\n          const regex = new RegExp(regexLiteral.pattern, safeFlags);\n          clauses.push({\n            kind: "regex",\n            negated,\n            raw: rawToken,\n            pattern: regexLiteral.pattern,\n            flags: safeFlags,\n            regex\n          });\n          executableTokens.push(rawToken);\n          continue;\n        } catch {\n          addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n          continue;\n        }\n      }\n      if (token.startsWith("/")) {\n        addWarning(warnings, "invalid-regex", rawToken, "Invalid regex literal");\n        continue;\n      }\n      const fieldResult = maybeParseFieldClause(token, negated, scopeDirectives, warnings, executableTokens);\n      if (fieldResult.handled) {\n        if (fieldResult.clause) {\n          clauses.push(fieldResult.clause);\n        }\n        continue;\n      }\n      if (token.includes(":") && /^[a-z][a-z0-9_]*:/i.test(token)) {\n        addWarning(warnings, "unknown-operator", rawToken, `Unsupported operator treated as plain term: ${token}`);\n      }\n      if (token === "*") {\n        if (!wildcardSeen) {\n          clauses.push({ kind: "wildcard", negated });\n          executableTokens.push(rawToken);\n          wildcardSeen = true;\n        }\n        continue;\n      }\n      if (token.startsWith(\'"\') && token.endsWith(\'"\') && token.length >= 2) {\n        const phraseNorm = normalizeForSearch(removeOuterQuotes(token));\n        if (phraseNorm) {\n          clauses.push({ kind: "phrase", negated, valueNorm: phraseNorm });\n          executableTokens.push(`${negated ? "-" : ""}"${phraseNorm}"`);\n        }\n        continue;\n      }\n      const termNorm = normalizeForSearch(token);\n      if (termNorm) {\n        clauses.push({ kind: "term", negated, valueNorm: termNorm });\n        executableTokens.push(`${negated ? "-" : ""}${serializeNormalizedTermToken(termNorm)}`);\n      }\n    }\n    const hasPositiveContentClause = clauses.some(isPositiveContentWithoutWildcard);\n    const filteredClauses = clauses.filter((clause) => !(clause.kind === "wildcard" && hasPositiveContentClause));\n    const hasNegatedClause = filteredClauses.some((clause) => clause.negated);\n    const hasAnyPositiveClause = filteredClauses.some((clause) => !clause.negated);\n    if (hasNegatedClause && !hasAnyPositiveClause) {\n      addWarning(warnings, "negation-only", trimmed, "Queries containing only negations are not allowed");\n    }\n    return {\n      rawQuery: query,\n      executableQuery: executableTokens.join(" ").trim(),\n      clauses: filteredClauses,\n      scopeDirectives,\n      warnings\n    };\n  };\n  const buildExecutionPlan = (clauses) => {\n    const stageA = [];\n    const stageB = [];\n    const negations = [];\n    for (const clause of clauses) {\n      if (clause.negated) {\n        negations.push(clause);\n        continue;\n      }\n      switch (clause.kind) {\n        case "type":\n        case "author":\n        case "replyto":\n        case "score":\n        case "date":\n          stageA.push(clause);\n          break;\n        case "term":\n          if (clause.valueNorm.length >= 2) {\n            stageA.push(clause);\n          } else {\n            stageB.push(clause);\n          }\n          break;\n        case "phrase":\n        case "regex":\n        case "wildcard":\n          stageB.push(clause);\n          break;\n        default:\n          stageB.push(clause);\n          break;\n      }\n    }\n    return { stageA, stageB, negations };\n  };\n  const compareSourcePriority = (a, b) => {\n    if (a.source === b.source) return 0;\n    return a.source === "authored" ? -1 : 1;\n  };\n  const compareStableTail = (a, b) => {\n    const sourceCmp = compareSourcePriority(a, b);\n    if (sourceCmp !== 0) return sourceCmp;\n    const dateCmp = b.postedAtMs - a.postedAtMs;\n    if (dateCmp !== 0) return dateCmp;\n    return a.id.localeCompare(b.id);\n  };\n  const compareReplyTo = (a, b) => {\n    const aEmpty = a.replyToNorm.length === 0;\n    const bEmpty = b.replyToNorm.length === 0;\n    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;\n    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);\n    if (nameCmp !== 0) return nameCmp;\n    return compareStableTail(a, b);\n  };\n  const computeRelevanceScore = (signals) => {\n    let score = 0;\n    score += signals.tokenHits * 10;\n    score += signals.phraseHits * 15;\n    if (signals.authorHit) score += 8;\n    if (signals.replyToHit) score += 6;\n    return score;\n  };\n  const EMPTY_SIGNALS = {\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  };\n  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {\n    const sorted = [...docs];\n    switch (sortMode) {\n      case "date-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.postedAtMs - b.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score":\n        sorted.sort((a, b) => {\n          const cmp = b.baseScore - a.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "score-asc":\n        sorted.sort((a, b) => {\n          const cmp = a.baseScore - b.baseScore;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n      case "replyTo":\n        sorted.sort(compareReplyTo);\n        return sorted;\n      case "relevance":\n        const precomputedScores = /* @__PURE__ */ new Map();\n        sorted.forEach((doc) => {\n          const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;\n          precomputedScores.set(doc.id, computeRelevanceScore(signals));\n        });\n        sorted.sort((a, b) => {\n          const scoreCmp = (precomputedScores.get(b.id) || 0) - (precomputedScores.get(a.id) || 0);\n          if (scoreCmp !== 0) return scoreCmp;\n          const dateCmp = b.postedAtMs - a.postedAtMs;\n          if (dateCmp !== 0) return dateCmp;\n          return a.id.localeCompare(b.id);\n        });\n        return sorted;\n      case "date":\n      default:\n        sorted.sort((a, b) => {\n          const cmp = b.postedAtMs - a.postedAtMs;\n          if (cmp !== 0) return cmp;\n          return compareStableTail(a, b);\n        });\n        return sorted;\n    }\n  };\n  const addPosting = (index, token, ordinal) => {\n    const postings = index.get(token);\n    if (postings) {\n      postings.push(ordinal);\n      return;\n    }\n    index.set(token, [ordinal]);\n  };\n  const compactPostings = (mutable) => {\n    const compact = /* @__PURE__ */ new Map();\n    mutable.forEach((postings, token) => {\n      postings.sort((a, b) => a - b);\n      compact.set(token, Uint32Array.from(postings));\n    });\n    return compact;\n  };\n  const appendPostingBatch = (index, token, ordinals) => {\n    if (ordinals.length === 0) return;\n    const postings = index.get(token);\n    if (!postings) {\n      index.set(token, Uint32Array.from(ordinals));\n      return;\n    }\n    const next = new Uint32Array(postings.length + ordinals.length);\n    next.set(postings);\n    next.set(ordinals, postings.length);\n    index.set(token, next);\n  };\n  const buildIndexes = (docs) => {\n    const tokenMutable = /* @__PURE__ */ new Map();\n    const authorMutable = /* @__PURE__ */ new Map();\n    const replyToMutable = /* @__PURE__ */ new Map();\n    for (let ordinal = 0; ordinal < docs.length; ordinal++) {\n      const doc = docs[ordinal];\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorMutable, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToMutable, token, ordinal);\n      }\n    }\n    return {\n      tokenIndex: compactPostings(tokenMutable),\n      authorIndex: compactPostings(authorMutable),\n      replyToIndex: compactPostings(replyToMutable)\n    };\n  };\n  const buildCorpusIndex = (source, items) => {\n    const docs = items.map((item) => buildArchiveSearchDoc(item, source));\n    const docOrdinalsById = /* @__PURE__ */ new Map();\n    const itemsById = /* @__PURE__ */ new Map();\n    docs.forEach((doc, ordinal) => {\n      docOrdinalsById.set(doc.id, ordinal);\n      itemsById.set(doc.id, items[ordinal]);\n    });\n    const indexes = buildIndexes(docs);\n    return {\n      source,\n      docs,\n      itemsById,\n      docOrdinalsById,\n      ...indexes\n    };\n  };\n  const appendItemsToCorpusIndex = (index, source, upserts) => {\n    if (upserts.length === 0) return;\n    const tokenBatch = /* @__PURE__ */ new Map();\n    const authorBatch = /* @__PURE__ */ new Map();\n    const replyToBatch = /* @__PURE__ */ new Map();\n    for (const item of upserts) {\n      if (index.docOrdinalsById.has(item._id)) continue;\n      const doc = buildArchiveSearchDoc(item, source);\n      const ordinal = index.docs.length;\n      index.docs.push(doc);\n      index.docOrdinalsById.set(doc.id, ordinal);\n      index.itemsById.set(doc.id, item);\n      const seenContentTokens = /* @__PURE__ */ new Set();\n      for (const token of tokenizeForIndex(doc.titleNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.bodyNorm)) {\n        if (seenContentTokens.has(token)) continue;\n        seenContentTokens.add(token);\n        addPosting(tokenBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.authorNameNorm)) {\n        addPosting(authorBatch, token, ordinal);\n      }\n      for (const token of tokenizeForIndex(doc.replyToNorm)) {\n        addPosting(replyToBatch, token, ordinal);\n      }\n    }\n    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));\n    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));\n    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));\n  };\n  const DEFAULT_BUDGET_MS = 150;\n  const BUDGET_CHECK_INTERVAL = 1024;\n  const EMPTY_POSTINGS = new Uint32Array(0);\n  const createEmptySignals = () => ({\n    tokenHits: 0,\n    phraseHits: 0,\n    authorHit: false,\n    replyToHit: false\n  });\n  const upsertSignal = (signalMap, ordinal) => {\n    const existing = signalMap.get(ordinal);\n    if (existing) return existing;\n    const created = createEmptySignals();\n    signalMap.set(ordinal, created);\n    return created;\n  };\n  const intersectSortedArrays = (a, b) => {\n    let i = 0;\n    let j = 0;\n    const result = new Uint32Array(Math.min(a.length, b.length));\n    let count = 0;\n    while (i < a.length && j < b.length) {\n      if (a[i] === b[j]) {\n        result[count++] = a[i];\n        i++;\n        j++;\n      } else if (a[i] < b[j]) {\n        i++;\n      } else {\n        j++;\n      }\n    }\n    return count === result.length ? result : result.slice(0, count);\n  };\n  const getTokenPostingIntersection = (index, tokens) => {\n    if (tokens.length === 0) return null;\n    let result = null;\n    for (const token of tokens) {\n      const postings = index.get(token);\n      if (!postings) return EMPTY_POSTINGS;\n      if (result === null) {\n        result = postings;\n      } else {\n        result = intersectSortedArrays(result, postings);\n        if (result.length === 0) return result;\n      }\n    }\n    return result;\n  };\n  const tryApplyAppendOnlyPatch = (index, source, items) => {\n    if (items.length < index.docs.length) return false;\n    const nextById = /* @__PURE__ */ new Map();\n    for (const item of items) {\n      nextById.set(item._id, item);\n    }\n    for (const id of index.docOrdinalsById.keys()) {\n      const nextItem = nextById.get(id);\n      if (!nextItem) return false;\n      if (index.itemsById.get(id) !== nextItem) return false;\n    }\n    const upserts = [];\n    for (const item of items) {\n      if (!index.docOrdinalsById.has(item._id)) {\n        upserts.push(item);\n      }\n    }\n    if (upserts.length === 0) return true;\n    appendItemsToCorpusIndex(index, source, upserts);\n    return true;\n  };\n  const matchesScoreClause = (doc, clause) => {\n    const value = doc.baseScore;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;\n    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;\n    return minOk && maxOk;\n  };\n  const matchesDateClause = (doc, clause) => {\n    const value = doc.postedAtMs;\n    if (clause.op === "gt") {\n      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);\n    }\n    if (clause.op === "lt") {\n      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);\n    }\n    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;\n    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;\n    return minOk && maxOk;\n  };\n  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);\n  const matchesClause = (doc, clause) => {\n    switch (clause.kind) {\n      case "term":\n        return matchesNormalizedText(doc, clause.valueNorm);\n      case "phrase":\n        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);\n      case "regex":\n        clause.regex.lastIndex = 0;\n        if (clause.regex.test(doc.titleNorm)) return true;\n        clause.regex.lastIndex = 0;\n        return clause.regex.test(doc.bodyNorm);\n      case "wildcard":\n        return true;\n      case "type":\n        return doc.itemType === clause.itemType;\n      case "author":\n        return doc.authorNameNorm.includes(clause.valueNorm);\n      case "replyto":\n        return doc.replyToNorm.includes(clause.valueNorm);\n      case "score":\n        return matchesScoreClause(doc, clause);\n      case "date":\n        return matchesDateClause(doc, clause);\n      default:\n        return false;\n    }\n  };\n  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {\n    const plan = buildExecutionPlan(clauses);\n    const docCount = corpus.docs.length;\n    const relevanceSignalsByOrdinal = /* @__PURE__ */ new Map();\n    let partialResults = false;\n    let stageBScanned = 0;\n    const deferredStageAClauses = [];\n    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;\n    const shouldCheckBudget = (iteration) => (iteration & BUDGET_CHECK_INTERVAL - 1) === 0 && budgetExceeded();\n    let candidateOrdinals = null;\n    for (const clause of plan.stageA) {\n      if (budgetExceeded()) {\n        partialResults = true;\n        deferredStageAClauses.push(clause);\n        continue;\n      }\n      let matched = null;\n      switch (clause.kind) {\n        case "term": {\n          const termTokens = tokenizeForIndex(clause.valueNorm);\n          if (termTokens.length === 0) {\n            const results2 = [];\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (shouldCheckBudget(ordinal)) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (matchesNormalizedText(doc, clause.valueNorm)) {\n                results2.push(ordinal);\n              }\n            }\n            matched = new Uint32Array(results2);\n          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {\n            matched = corpus.tokenIndex.get(clause.valueNorm) || EMPTY_POSTINGS;\n          } else {\n            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);\n            if (accelerated) {\n              const results2 = [];\n              accelerated.forEach((ordinal) => {\n                const doc = corpus.docs[ordinal];\n                if (!matchesNormalizedText(doc, clause.valueNorm)) return;\n                results2.push(ordinal);\n              });\n              matched = new Uint32Array(results2);\n            } else {\n              matched = null;\n            }\n          }\n          if (matched) {\n            matched.forEach((ordinal) => {\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.tokenHits += 1;\n            });\n          }\n          break;\n        }\n        case "author": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);\n          if (accelerated && accelerated.length > 0) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.authorNameNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.authorHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            const results2 = [];\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (shouldCheckBudget(ordinal)) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (!doc.authorNameNorm.includes(clause.valueNorm)) continue;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.authorHit = true;\n            }\n            matched = new Uint32Array(results2);\n          }\n          break;\n        }\n        case "replyto": {\n          const nameTokens = tokenizeForIndex(clause.valueNorm);\n          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);\n          if (accelerated && accelerated.length > 0) {\n            const results2 = [];\n            accelerated.forEach((ordinal) => {\n              const doc = corpus.docs[ordinal];\n              if (!doc.replyToNorm.includes(clause.valueNorm)) return;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.replyToHit = true;\n            });\n            matched = new Uint32Array(results2);\n          } else {\n            const results2 = [];\n            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n              if (shouldCheckBudget(ordinal)) {\n                partialResults = true;\n                break;\n              }\n              const doc = corpus.docs[ordinal];\n              if (!doc.replyToNorm.includes(clause.valueNorm)) continue;\n              results2.push(ordinal);\n              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n              signal.replyToHit = true;\n            }\n            matched = new Uint32Array(results2);\n          }\n          break;\n        }\n        case "type":\n        case "score":\n        case "date": {\n          const results2 = [];\n          const constrainedOrdinals = candidateOrdinals;\n          const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;\n          for (let i = 0; i < scanLimit; i++) {\n            if (shouldCheckBudget(i)) {\n              partialResults = true;\n              break;\n            }\n            const ordinal = constrainedOrdinals ? constrainedOrdinals[i] : i;\n            const doc = corpus.docs[ordinal];\n            if (matchesClause(doc, clause)) {\n              results2.push(ordinal);\n            }\n          }\n          matched = new Uint32Array(results2);\n          break;\n        }\n      }\n      if (matched !== null) {\n        if (candidateOrdinals === null) {\n          candidateOrdinals = matched;\n        } else {\n          candidateOrdinals = intersectSortedArrays(candidateOrdinals, matched);\n        }\n        if (candidateOrdinals.length === 0) {\n          break;\n        }\n      }\n    }\n    const hasPositiveContent = clauses.some(isPositiveContentClause);\n    const stageASeeded = candidateOrdinals !== null;\n    let stageBApplied = false;\n    if (candidateOrdinals) {\n      for (const clause of deferredStageAClauses) {\n        if (budgetExceeded()) {\n          partialResults = true;\n          break;\n        }\n        const filtered = [];\n        let clauseComplete = true;\n        for (let i = 0; i < candidateOrdinals.length; i++) {\n          if (shouldCheckBudget(i)) {\n            partialResults = true;\n            clauseComplete = false;\n            break;\n          }\n          const ordinal = candidateOrdinals[i];\n          const doc = corpus.docs[ordinal];\n          if (matchesClause(doc, clause)) {\n            filtered.push(ordinal);\n          }\n        }\n        if (!clauseComplete) {\n          candidateOrdinals = new Uint32Array(filtered);\n          break;\n        }\n        candidateOrdinals = new Uint32Array(filtered);\n        if (candidateOrdinals.length === 0) break;\n      }\n    }\n    const results = [];\n    if (hasPositiveContent && candidateOrdinals) {\n      stageBApplied = true;\n      for (let i = 0; i < candidateOrdinals.length; i++) {\n        if (shouldCheckBudget(i)) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = candidateOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") {\n            stageBPhraseHits += 1;\n          }\n          if (clause.kind === "term") {\n            stageBTokenHits += 1;\n          }\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    } else if (!stageASeeded && plan.stageB.length > 0) {\n      stageBApplied = true;\n      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {\n        if (shouldCheckBudget(ordinal)) {\n          partialResults = true;\n          break;\n        }\n        const doc = corpus.docs[ordinal];\n        stageBScanned++;\n        let stageBTokenHits = 0;\n        let stageBPhraseHits = 0;\n        let matched = true;\n        for (const clause of plan.stageB) {\n          if (!matchesClause(doc, clause)) {\n            matched = false;\n            break;\n          }\n          if (clause.kind === "phrase") stageBPhraseHits += 1;\n          if (clause.kind === "term") stageBTokenHits += 1;\n        }\n        if (matched) {\n          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {\n            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);\n            signal.phraseHits += stageBPhraseHits;\n            signal.tokenHits += stageBTokenHits;\n          }\n          results.push(ordinal);\n        }\n      }\n    }\n    let finalOrdinals;\n    if (stageBApplied) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (results.length > 0) {\n      finalOrdinals = new Uint32Array(results);\n    } else if (candidateOrdinals) {\n      finalOrdinals = candidateOrdinals;\n    } else {\n      finalOrdinals = new Uint32Array(docCount);\n      for (let i = 0; i < docCount; i++) finalOrdinals[i] = i;\n    }\n    if (plan.negations.length > 0) {\n      const filtered = [];\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        if (shouldCheckBudget(i)) {\n          partialResults = true;\n          break;\n        }\n        const ordinal = finalOrdinals[i];\n        const doc = corpus.docs[ordinal];\n        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));\n        if (!excluded) filtered.push(ordinal);\n      }\n      finalOrdinals = new Uint32Array(filtered);\n    }\n    let docs;\n    if (finalOrdinals.length === docCount) {\n      docs = corpus.docs.slice();\n    } else {\n      docs = new Array(finalOrdinals.length);\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        docs[i] = corpus.docs[finalOrdinals[i]];\n      }\n    }\n    const relevanceSignalsById = /* @__PURE__ */ new Map();\n    if (relevanceSignalsByOrdinal.size > 0) {\n      for (let i = 0; i < finalOrdinals.length; i++) {\n        const ordinal = finalOrdinals[i];\n        const signals = relevanceSignalsByOrdinal.get(ordinal);\n        if (signals) {\n          const doc = corpus.docs[ordinal];\n          relevanceSignalsById.set(doc.id, signals);\n        }\n      }\n    }\n    return {\n      docs,\n      relevanceSignalsById,\n      stageACandidateCount: finalOrdinals.length,\n      stageBScanned,\n      partialResults\n    };\n  };\n  class ArchiveSearchRuntime {\n    authoredIndex = buildCorpusIndex("authored", []);\n    contextIndex = buildCorpusIndex("context", []);\n    authoredItemsRef = null;\n    authoredRevisionToken = 0;\n    contextItemsRef = null;\n    setAuthoredItems(items, revisionToken = 0) {\n      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;\n      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {\n        this.authoredItemsRef = items;\n        this.authoredRevisionToken = revisionToken;\n        return;\n      }\n      this.authoredItemsRef = items;\n      this.authoredRevisionToken = revisionToken;\n      this.authoredIndex = buildCorpusIndex("authored", items);\n    }\n    setContextItems(items) {\n      if (this.contextItemsRef === items) return;\n      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {\n        this.contextItemsRef = items;\n        return;\n      }\n      this.contextItemsRef = items;\n      this.contextIndex = buildCorpusIndex("context", items);\n    }\n    runSearch(request) {\n      const startMs = Date.now();\n      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;\n      const parsed = parseStructuredQuery(request.query);\n      const warnings = [...parsed.warnings];\n      let resolvedScope = request.scopeParam || "authored";\n      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {\n        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {\n        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];\n        if (parsedScope !== request.scopeParam) {\n          warnings.push({\n            type: "invalid-scope",\n            token: `scope:${parsedScope}`,\n            message: "URL scope parameter takes precedence over in-query scope"\n          });\n        }\n      }\n      let isNegationOnly = warnings.some((w) => w.type === "negation-only");\n      if (!isNegationOnly) {\n        const hasNegation = parsed.clauses.some((clause) => clause.negated);\n        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);\n        if (hasNegation && !hasPositiveClause) {\n          isNegationOnly = true;\n          warnings.push({\n            type: "negation-only",\n            token: parsed.rawQuery,\n            message: \'Add a positive clause or use "*" before negations\'\n          });\n        }\n      }\n      if (isNegationOnly) {\n        const diagnostics2 = {\n          warnings,\n          parseState: "invalid",\n          degradedMode: false,\n          partialResults: false,\n          tookMs: Date.now() - startMs,\n          stageACandidateCount: 0,\n          stageBScanned: 0,\n          totalCandidatesBeforeLimit: 0,\n          explain: ["Query rejected: negations require at least one positive clause"]\n        };\n        return {\n          ids: [],\n          total: 0,\n          items: [],\n          canonicalQuery: parsed.executableQuery,\n          resolvedScope,\n          diagnostics: diagnostics2,\n          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}\n        };\n      }\n      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];\n      let stageACandidateCount = 0;\n      let stageBScanned = 0;\n      let partialResults = false;\n      const mergedWarnings = [...warnings];\n      const mergedDocs = /* @__PURE__ */ new Map();\n      const mergedSignals = /* @__PURE__ */ new Map();\n      for (const corpus of corpora) {\n        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);\n        stageACandidateCount += result.stageACandidateCount;\n        stageBScanned += result.stageBScanned;\n        partialResults = partialResults || result.partialResults;\n        result.docs.forEach((doc) => {\n          const existing = mergedDocs.get(doc.id);\n          if (!existing) {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n            return;\n          }\n          if (existing.source === "authored") return;\n          if (doc.source === "authored") {\n            mergedDocs.set(doc.id, doc);\n            const signal = result.relevanceSignalsById.get(doc.id);\n            if (signal) mergedSignals.set(doc.id, signal);\n          }\n        });\n      }\n      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);\n      const total = sortedDocs.length;\n      const limitedDocs = sortedDocs.slice(0, request.limit);\n      const getItemForDoc = (doc) => {\n        if (doc.source === "authored") {\n          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;\n        }\n        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;\n      };\n      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));\n      const ids = resolved.map((entry) => entry.doc.id);\n      const items = resolved.map((entry) => entry.item);\n      let debugExplain;\n      if (request.debugExplain) {\n        const relevanceSignalsById = {};\n        for (const id of ids) {\n          const signals = mergedSignals.get(id);\n          if (!signals) continue;\n          relevanceSignalsById[id] = { ...signals };\n        }\n        debugExplain = { relevanceSignalsById };\n      }\n      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";\n      const diagnostics = {\n        warnings: mergedWarnings,\n        parseState,\n        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),\n        partialResults,\n        tookMs: Date.now() - startMs,\n        stageACandidateCount,\n        stageBScanned,\n        totalCandidatesBeforeLimit: total,\n        explain: [\n          `scope=${resolvedScope}`,\n          `stageA_candidates=${stageACandidateCount}`,\n          `stageB_scanned=${stageBScanned}`,\n          `total=${total}`\n        ]\n      };\n      return {\n        ids,\n        total,\n        items,\n        canonicalQuery: parsed.executableQuery,\n        resolvedScope,\n        diagnostics,\n        ...debugExplain ? { debugExplain } : {}\n      };\n    }\n  }\n  const SEARCH_SCHEMA_VERSION = 1;\n  const runtime = new ArchiveSearchRuntime();\n  let indexVersion = 0;\n  const cancelledRequests = /* @__PURE__ */ new Map();\n  const CANCEL_MAX = 2e3;\n  const CANCEL_TTL_MS = 1e4;\n  const noteCancel = (id) => {\n    const now = Date.now();\n    cancelledRequests.set(id, now);\n    if (cancelledRequests.size > CANCEL_MAX) {\n      for (const [key, ts] of cancelledRequests) {\n        if (now - ts > CANCEL_TTL_MS) cancelledRequests.delete(key);\n      }\n      if (cancelledRequests.size > CANCEL_MAX) {\n        const oldestFirst = Array.from(cancelledRequests.entries()).sort((a, b) => a[1] - b[1]);\n        const overflow = oldestFirst.length - CANCEL_MAX;\n        for (let i = 0; i < overflow; i++) {\n          cancelledRequests.delete(oldestFirst[i][0]);\n        }\n      }\n    }\n  };\n  const consumeCancel = (id) => {\n    if (!cancelledRequests.has(id)) return false;\n    cancelledRequests.delete(id);\n    return true;\n  };\n  let fullBatch = null;\n  let authoredItems = [];\n  let contextItems = [];\n  let authoredItemsById = /* @__PURE__ */ new Map();\n  let contextItemsById = /* @__PURE__ */ new Map();\n  const post = (message) => {\n    self.postMessage(message);\n  };\n  const emitSchemaError = (message, scope = {}) => {\n    if ("kind" in message && message.kind === "query.run") {\n      post({ kind: "error", requestId: message.requestId, message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}` });\n      return;\n    }\n    post({\n      kind: "error",\n      ...scope,\n      message: `Schema mismatch: expected ${SEARCH_SCHEMA_VERSION}`\n    });\n  };\n  const setCorpusItems = (source, items) => {\n    if (source === "authored") {\n      authoredItems = items;\n      authoredItemsById = /* @__PURE__ */ new Map();\n      for (const item of items) authoredItemsById.set(item._id, item);\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = items;\n    contextItemsById = /* @__PURE__ */ new Map();\n    for (const item of items) contextItemsById.set(item._id, item);\n    runtime.setContextItems(contextItems);\n  };\n  const applyPatch = (source, upserts, deletes) => {\n    if (upserts.length === 0 && deletes.length === 0) return;\n    const byId = source === "authored" ? authoredItemsById : contextItemsById;\n    for (const id of deletes) byId.delete(id);\n    for (const item of upserts) byId.set(item._id, item);\n    const nextItems = Array.from(byId.values());\n    if (source === "authored") {\n      authoredItems = nextItems;\n      runtime.setAuthoredItems(authoredItems, indexVersion);\n      return;\n    }\n    contextItems = nextItems;\n    runtime.setContextItems(contextItems);\n  };\n  const handleFullStart = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { batchId: message.batchId });\n      return;\n    }\n    fullBatch = {\n      batchId: message.batchId,\n      source: message.source,\n      totalChunks: 0,\n      nextChunkIndex: 0,\n      items: [],\n      startedAtMs: Date.now()\n    };\n  };\n  const handleFullChunk = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch" });\n      return;\n    }\n    if (fullBatch.totalChunks === 0) {\n      fullBatch.totalChunks = message.totalChunks;\n    } else if (fullBatch.totalChunks !== message.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Mismatched totalChunks for batch" });\n      return;\n    }\n    if (message.chunkIndex !== fullBatch.nextChunkIndex) {\n      post({ kind: "error", batchId: message.batchId, message: "Out-of-order chunk index for batch" });\n      return;\n    }\n    for (const item of message.items) {\n      fullBatch.items.push(item);\n    }\n    fullBatch.nextChunkIndex += 1;\n  };\n  const handleFullCommit = (message) => {\n    if (!fullBatch || fullBatch.batchId !== message.batchId || fullBatch.source !== message.source) {\n      post({ kind: "error", batchId: message.batchId, message: "Unknown or inactive full index batch commit" });\n      return;\n    }\n    if (fullBatch.totalChunks > 0 && fullBatch.nextChunkIndex !== fullBatch.totalChunks) {\n      post({ kind: "error", batchId: message.batchId, message: "Full index commit called before all chunks arrived" });\n      return;\n    }\n    setCorpusItems(fullBatch.source, fullBatch.items);\n    indexVersion += 1;\n    const docCount = fullBatch.source === "authored" ? authoredItems.length : contextItems.length;\n    post({\n      kind: "index.ready",\n      source: "full",\n      corpus: fullBatch.source,\n      batchId: fullBatch.batchId,\n      indexVersion,\n      docCount,\n      buildMs: Date.now() - fullBatch.startedAtMs\n    });\n    fullBatch = null;\n  };\n  const handlePatch = (message) => {\n    if (message.schemaVersion !== SEARCH_SCHEMA_VERSION) {\n      emitSchemaError(message, { patchId: message.patchId });\n      return;\n    }\n    const started = Date.now();\n    applyPatch(message.source, message.upserts, message.deletes);\n    indexVersion += 1;\n    post({\n      kind: "index.ready",\n      source: "patch",\n      corpus: message.source,\n      patchId: message.patchId,\n      indexVersion,\n      docCount: message.source === "authored" ? authoredItems.length : contextItems.length,\n      buildMs: Date.now() - started\n    });\n  };\n  const handleQuery = (message) => {\n    if (consumeCancel(message.requestId)) return;\n    const result = runtime.runSearch({\n      query: message.query,\n      limit: message.limit,\n      sortMode: message.sortMode,\n      scopeParam: message.scopeParam,\n      budgetMs: message.budgetMs,\n      debugExplain: message.debugExplain\n    });\n    if (consumeCancel(message.requestId)) return;\n    post({\n      kind: "query.result",\n      requestId: message.requestId,\n      indexVersion,\n      ids: result.ids,\n      total: result.total,\n      canonicalQuery: result.canonicalQuery,\n      resolvedScope: result.resolvedScope,\n      diagnostics: result.diagnostics,\n      ...result.debugExplain ? { debugExplain: result.debugExplain } : {}\n    });\n  };\n  self.addEventListener("message", (event) => {\n    const message = event.data;\n    switch (message.kind) {\n      case "index.full.start":\n        handleFullStart(message);\n        break;\n      case "index.full.chunk":\n        handleFullChunk(message);\n        break;\n      case "index.full.commit":\n        handleFullCommit(message);\n        break;\n      case "index.patch":\n        handlePatch(message);\n        break;\n      case "query.cancel":\n        noteCancel(message.requestId);\n        break;\n      case "query.run":\n        handleQuery(message);\n        break;\n      default:\n        post({ kind: "error", message: "Unsupported worker request kind" });\n    }\n  });\n})();\n';
   const blob = typeof self !== "undefined" && self.Blob && new Blob(["(self.URL || self.webkitURL).revokeObjectURL(self.location.href);", jsContent], { type: "text/javascript;charset=utf-8" });
   function WorkerWrapper(options) {
     let objURL;
@@ -13341,7 +14122,7 @@ sortCanonicalItems() {
           const id = node.dataset.id;
           if (!id || seenIds.has(id)) return;
           seenIds.add(id);
-          if (activeDebugRelevanceSignalsById[id]) {
+          if (activeDebugRelevanceSignalsById && activeDebugRelevanceSignalsById[id]) {
             appendExplain(node, activeDebugRelevanceSignalsById[id]);
           }
         });
@@ -13583,6 +14364,7 @@ sortCanonicalItems() {
       setUIHost(uiHost);
       attachEventListeners(uiHost.getReaderState());
       initAIStudioListener(uiHost.getReaderState());
+      initArenaMaxListener(uiHost.getReaderState());
       setupExternalLinks();
       setupInlineReactions(uiHost.getReaderState());
       const syncErrorState = {
@@ -14250,6 +15032,10 @@ sortCanonicalItems() {
       await runAIStudioMode();
       return;
     }
+    if (route.type === "arena-max") {
+      await runArenaMaxMode();
+      return;
+    }
     if (route.type === "archive") {
       await initArchive(route.username);
       return;
@@ -14328,6 +15114,8 @@ sortCanonicalItems() {
       if (!root.dataset.listenersAttached) {
         initAIStudioListener(state2);
         setupAIStudioKeyboard(state2);
+        initArenaMaxListener(state2);
+        setupArenaMaxKeyboard(state2);
         attachEventListeners(state2);
         root.dataset.listenersAttached = "true";
       }

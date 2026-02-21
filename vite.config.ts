@@ -21,7 +21,9 @@ const scripts: Record<string, { name: string; match: string[]; entry: string }> 
             'https://www.lesswrong.com/*',
             'https://forum.effectivealtruism.org/*',
             'https://www.greaterwrong.com/*',
-            'https://aistudio.google.com/*'
+            'https://aistudio.google.com/*',
+            'https://arena.ai/*',
+            'https://www.arena.ai/*'
         ],
         entry: 'src/scripts/power-reader/main.ts',
     }
@@ -49,7 +51,7 @@ export default defineConfig({
                 match: config.match,
                 author: 'Wei Dai',
                 grant: ['GM_addStyle', 'GM_xmlhttpRequest', 'GM_setValue', 'GM_getValue', 'GM_log'],
-                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'greaterwrong.com'],
+                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'greaterwrong.com', 'arena.ai'],
                 'run-at': 'document-start',
             },
             build: {

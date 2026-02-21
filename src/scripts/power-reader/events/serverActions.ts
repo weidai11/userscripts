@@ -8,7 +8,6 @@ import { queryGraphQL } from '../../../shared/graphql/client';
 import {
     GET_POST_BY_ID,
     GET_COMMENT,
-    GET_POST_COMMENTS,
     GET_THREAD_COMMENTS,
     GET_COMMENTS_BY_IDS,
 } from '../../../shared/graphql/queries';
@@ -21,8 +20,6 @@ import type {
     GetPostQueryVariables,
     GetCommentQuery,
     GetCommentQueryVariables,
-    GetPostCommentsQuery,
-    GetPostCommentsQueryVariables,
     GetThreadCommentsQuery,
     GetThreadCommentsQueryVariables,
     GetCommentsByIdsQuery,
@@ -34,6 +31,11 @@ import { CONFIG } from '../config';
 import { isElementFullyVisible } from '../utils/preview';
 import { Logger } from '../utils/logger';
 import { toggleAuthorPreference } from '../utils/storage';
+import { fetchAllPostCommentsWithCache } from '../services/postDescendantsCache';
+import {
+    promptLargeDescendantConfirmation,
+    shouldPromptForLargeDescendants
+} from '../utils/descendantConfirm';
 
 import {
     getPostIdFromTarget,
@@ -408,16 +410,24 @@ export const handleTogglePostBody = async (target: HTMLElement, state: ReaderSta
 export const handleLoadAllComments = async (target: HTMLElement, state: ReaderState): Promise<void> => {
     const postId = getPostIdFromTarget(target);
     if (!postId) return;
+    const post = state.postById.get(postId);
+    const totalCount = post?.commentCount ?? -1;
+
+    if (totalCount >= 0 && shouldPromptForLargeDescendants(totalCount)) {
+        const decision = await promptLargeDescendantConfirmation({
+            descendantCount: totalCount,
+            subjectLabel: 'post'
+        });
+        if (decision === 'cancel' || decision === 'continue_without_loading') {
+            return;
+        }
+    }
 
     const originalText = target.textContent;
     target.textContent = '[...]';
 
     try {
-        const res = await queryGraphQL<GetPostCommentsQuery, GetPostCommentsQueryVariables>(GET_POST_COMMENTS, {
-            postId,
-            limit: CONFIG.loadMax,
-        });
-        const comments = (res?.comments?.results || []) as Comment[];
+        const { comments } = await fetchAllPostCommentsWithCache(state, postId, totalCount);
 
         // [PR-POSTBTN-02] Mark all comments in this post as forceVisible
         comments.forEach(c => {

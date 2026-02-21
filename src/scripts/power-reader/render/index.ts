@@ -5,7 +5,7 @@
 import type { Comment, Post } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
-import { getReadState, clearAllStorage, exportState, getAIStudioPrefix, setAIStudioPrefix, getLoadFrom, isRead } from '../utils/storage';
+import { getReadState, clearAllStorage, exportState, getAIStudioPrefix, setAIStudioPrefix, getLoadFrom, isRead, setLoadFrom } from '../utils/storage';
 import { AI_STUDIO_PROMPT_PREFIX } from '../utils/ai-studio-prompt';
 import { initResizeHandles } from '../utils/resize';
 import { initPreviewSystem, manualPreview } from '../utils/preview';
@@ -267,6 +267,7 @@ const renderHelpSection = (showHelp: boolean): string => {
           <ul>
             <li><strong>[e]</strong> Expand/load body · <strong>[a]</strong> Load all comments</li>
             <li><strong>[c]</strong> Scroll to comments · <strong>[n]</strong> Scroll to next post</li>
+            <li><strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
             <li><strong>[−]/[+]</strong> Collapse/expand post + comments</li>
           </ul>
         </div>
@@ -275,7 +276,8 @@ const renderHelpSection = (showHelp: boolean): string => {
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent · <strong>[−]/[+]</strong> Collapse/expand comment</li>
+            <li><strong>[^]</strong> Find parent · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
           </ul>
@@ -300,7 +302,8 @@ const renderHelpSection = (showHelp: boolean): string => {
         <div class="pr-help-section">
           <h4>↔️ Layout · AI: <strong>g</strong> / <strong>⇧G</strong></h4>
           <ul>
-            <li><strong>g</strong>: Thread to AI · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>g</strong>: Thread to AI Studio · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>m</strong>: Thread to Arena Max · <strong>⇧M</strong>: + Descendants</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>
@@ -503,7 +506,7 @@ const setupDebugButtons = (): void => {
   if (changeBtn) {
     changeBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      GM_setValue('power-reader-read-from', null);
+      setLoadFrom('');
       window.location.reload();
     });
   }

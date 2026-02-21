@@ -121,7 +121,7 @@ Items are organized post-centrically:
 - **[PR-POST-07]** **Inline Loading**: Clicking the title of a header-only post (`data-action="load-post"`) fetches the content via GraphQL and replaces the header with a full post render inside the current feed.
 - **[PR-POST-04]** **Truncation**: Posts taller than `50vh` are truncated with a "Read More" button and gradient overlay.
 - **[PR-POST-05]** **Expansion**: "Read More" expands the post to full height in-place.
-- **[PR-POST-11]** **Smart Truncation Handling**: If a post is technically "truncated" (has the class) but its content fits within the allotted height, the "Read More" overlay MUST be hidden automatically, and the `[e]` button disabled with a descriptive tooltip.
+- **[PR-POST-11]** **Smart Truncation Handling**: If a post is technically "truncated" (has the class) but its content fits within the allotted height, the "Read More" overlay MUST be hidden automatically, and the `[e]` button disabled with a descriptive tooltip (`"Post fits within viewport without truncation"`). If the post is already expanded and still small enough that toggling is unnecessary, `[e]` may also be disabled with `"Post body is small and doesn't need toggle"`.
 
 **Read Tracking for Posts:**
 - **[PR-POST-08]** **Body-Centric Marking**: Posts are marked as read when the bottom of their **body content** (`.pr-post-content`) is scrolled past, rather than the entire post-plus-comments container. If the body is collapsed or missing (header-only), the **header** bottom is used as the threshold instead.
@@ -176,8 +176,8 @@ Comments under a post are organized hierarchically:
     - **Posts**: Marked when the bottom of `.pr-post-content` is passed. (See `[PR-POST-08]`).
     - **Comments**: Marked when the bottom of `.pr-comment-body` is passed. If a comment is collapsed, the bottom of the `.pr-comment-meta` (header) is used as the threshold.
 - **[PR-READ-01.1]** **Marking logic**: (Legacy) Mark as read if the calculated threshold is above the viewport top.
-- **[PR-READ-02]** **Bottom of Page Logic**: If the user reaches the absolute bottom of the document (`window.innerHeight + window.scrollY >= document.body.offsetHeight`), all currently visible unread comments become eligible for read-marking (using the same delay as the normal scroll-past threshold).
-- **[PR-READ-03]** **Session Advancement**: When the "Bottom of Page" condition is met, update the stored `loadFrom` value to the ISO timestamp of the **newest comment from the initial comments batch PLUS 1 millisecond** (excluding smart-load and user-triggered loads). Advancement triggers unconditionally at bottom-of-page (no additional check on unread count).
+- **[PR-READ-02]** **Bottom of Page Logic**: Bottom detection uses a small tolerance margin (currently ~150px from document end) for cross-browser and zoom robustness. Once in this bottom zone, all currently visible unread comments become eligible for read-marking (using the same delay as the normal scroll-past threshold).
+- **[PR-READ-03]** **Session Advancement**: When the "Bottom of Page" condition is met, update the stored `loadFrom` value to the ISO timestamp of the **newest comment from the initial comments batch PLUS 1 millisecond** (excluding smart-load and user-triggered loads). Advancement triggers unconditionally at bottom-of-page (no additional check on unread count). Startup exception: if unread count is already zero on initial render and comments are loaded, this same advancement flow may run immediately.
 - **[PR-READ-04]** **5-second delay** before marking - uses `setTimeout` to avoid marking during fast scrolling.
 - **[PR-READ-05]** **Unread Persistence**: On page refresh, only unread items are shown with full content. Read comments with fewer than 2 unread descendants are collapsed into minimal placeholder bars (preserving thread structure context); read comments with 2+ unread descendants are rendered in full with greyed-out styling. Placeholders can be expanded on click, **or automatically when navigated to via `[^]` or `[t]`.**
 - **[PR-READ-06]** **Cleanup**: During session advancement (bottom-of-page processing), read IDs with `postedAt` older than the new `loadFrom` are removed. IDs not found in the current loaded set are also removed (orphaned).
@@ -298,14 +298,14 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 - If the post body is **already loaded**:
   - Toggles between **truncated** (50vh max-height with gradient overlay) and **fully expanded** (no truncation).
 - **Disabled State**: Disabled (0.15 opacity, no hover) if the post body is fully loaded AND its actual content height is less than the truncation threshold (fits within viewport without truncation). This is verified via precise DOM measurement (`scrollHeight` vs `offsetHeight`).
-- **Tooltip**: "Expand/collapse or load post body" (active); "Post fits within viewport without truncation" (disabled).
+- **Tooltip**: Active states use context-specific labels (e.g. `"Expand post body"` / `"Collapse post body"`). Disabled states include `"Post fits within viewport without truncation"` and (for expanded-but-small content) `"Post body is small and doesn't need toggle"`.
 - **Sticky Header Override**: If clicked from the **sticky header**, this action also scrolls the viewport back to the original post header. Regular post header buttons do not trigger a scroll.
 
 **[PR-POSTBTN-06]** **Header Toggle Shortcut**:
 - Clicking the **post title** or the **background** of a regular post header while it is already positioned at the top of the viewport (within 5px) triggers the `[e]` (Expansion) action. 
 
 **[PR-POSTBTN-02]** **Load All Comments** (`[a]`):
-*   Fetches **all** comments for this post from the server using the `postCommentsNew` GraphQL view.
+*   Fetches **all** comments for this post from the server using the `postCommentsNew` GraphQL view (request size must not be hard-capped below `post.commentCount`).
 *   Merges fetched comments into the current state.
 *   Re-renders the post group in place.
 *   Button shows `[...]` while loading.
@@ -333,7 +333,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 *   **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)".
 
 **Button Rendering:**
-*   Buttons appear in this order (left to right): `[g]` `[e]` `[a]` `[c]` `[n]` ... `[−]`/`[+]`
+*   Buttons appear in this order (left to right): `[g]` `[m]` `[e]` `[a]` `[c]` `[n]` ... `[−]`/`[+]`
 *   Sticky header mirrors these buttons.
 *   Disabled buttons use low opacity and `cursor: not-allowed`.
 
@@ -364,7 +364,7 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 - **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)".
 
 **Button Rendering:**
-- Buttons appear in this order: `[g]` `[r]` `[t]` ... `[^]` `[−]` `[+]`
+- Buttons appear in this order: `[g]` `[m]` `[r]` `[t]` ... `[^]` `[−]` `[+]`
 - **Visibility Policy**: Action buttons MUST never be hidden, only disabled (with `cursor: not-allowed` and reduced opacity). Disabled buttons MUST have a tooltip explaining why they are disabled.
 - **Tooltips**: All buttons MUST have descriptive tooltips (e.g., "[t]" -> "Load parents and scroll to root").
 - **Author Controls**: `[↑]` / `[↓]` must have tooltips explaining they affect author preferences.
@@ -491,16 +491,17 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ---
 
-### 20. Google AI Studio Integration
-
-- **[PR-AI-01]** **Shortkey**: Press **`g`** over any comment or post. 
-    - **Closing Logic**: Typing `g` while the mouse is over an open AI response popup or the specific post/comment that originated it ("focal item") MUST close the popup instead of triggering a new request.
-- **[PR-AI-02]** **Automation**: Opens AI Studio, selects model, injects thread XML and prompt.
+- **[PR-AI-01]** **Shortkeys**: 
+    - Press **`g`** to send to Google AI Studio.
+    - Press **`m`** to send to Arena.ai Max.
+    - **Closing Logic**: Typing the respective shortkey while the mouse is over an open AI response popup or the focal item MUST close the popup.
+- **[PR-AI-02]** **Automation**: Opens the respective AI site, selects model (if applicable), injects thread XML and prompt.
 - **[PR-AI-03]** **Display**: Responses captured and shown in formatted popup.
 - **[PR-AI-04]** **Caching**: Responses cached in-memory for session.
 - **[PR-AI-05]** **Depth**: Recursively fetches parent comments (up to 7 levels).
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
+- **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
 
 ---
 
@@ -522,14 +523,18 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
     - `c`: Scroll to comments
     - `n`: Scroll to next post
     - `g`: Send to AI Studio
-    - `G` (Shift+g): Send to AI Studio with descendants
+    - `G` (Shift+G): Send to AI Studio with descendants
+    - `m`: Send to Arena.ai Max
+    - `M` (Shift+M): Send to Arena.ai Max with descendants
     - `-`: Collapse post and comments
     - `+` / `=`: Expand post and comments
 - **[PR-HK-03]** **Comment Hotkeys**:
     - `r`: Load replies
     - `t`: Trace to root (load parents and scroll)
     - `g`: Send to AI Studio
-    - `G` (Shift+g): Send to AI Studio with descendants
+    - `G` (Shift+G): Send to AI Studio with descendants
+    - `m`: Send to Arena.ai Max
+    - `M` (Shift+M): Send to Arena.ai Max with descendants
     - `^`: Find parent (scroll)
     - `-`: Collapse comment
     - `+` / `=`: Expand comment

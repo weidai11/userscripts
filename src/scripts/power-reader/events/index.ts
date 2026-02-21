@@ -32,6 +32,7 @@ import {
   handleLoadParentsAndScroll,
 } from './navigation';
 import { handleSendToAIStudio } from '../features/aiStudioPopup';
+import { handleSendToArenaMax } from '../features/arenaMaxPopup';
 import { Logger } from '../utils/logger';
 
 
@@ -157,10 +158,10 @@ export const attachEventListeners = (state: ReaderState): void => {
       e.stopPropagation();
       const rawTarget = e.target;
       if (rawTarget instanceof Element && isHeaderInteractive(rawTarget as HTMLElement)) return;
-      
+
       // Check if already at top - if so, toggle post body expansion
-      const postId = actionTarget.closest('.pr-post-header')?.getAttribute('data-post-id') || 
-                     actionTarget.closest('.pr-post')?.getAttribute('data-id');
+      const postId = actionTarget.closest('.pr-post-header')?.getAttribute('data-post-id') ||
+        actionTarget.closest('.pr-post')?.getAttribute('data-id');
       if (postId) {
         const postHeader = document.querySelector(`.pr-post[data-id="${postId}"] .pr-post-header`) as HTMLElement;
         if (postHeader) {
@@ -176,7 +177,7 @@ export const attachEventListeners = (state: ReaderState): void => {
           }
         }
       }
-      
+
       handleScrollToPostTop(actionTarget, state);
     }
     else if (action === 'scroll-to-comments') {
@@ -190,6 +191,10 @@ export const attachEventListeners = (state: ReaderState): void => {
     else if (action === 'send-to-ai-studio') {
       e.stopPropagation();
       handleSendToAIStudio(state, e.shiftKey);
+    }
+    else if (action === 'send-to-arena-max') {
+      e.stopPropagation();
+      handleSendToArenaMax(state, e.shiftKey);
     }
     else if (action === 'collapse' && actionTarget.classList.contains('pr-collapse')) {
       handleCommentCollapse(actionTarget);
