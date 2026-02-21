@@ -7,6 +7,7 @@
 import type { ReaderState } from '../state';
 import type { Comment, Post } from '../../../shared/graphql/queries';
 import { getUIHost } from '../render/uiHost';
+import { markCommentRevealed } from '../types/uiCommentFlags';
 
 /**
  * Merge comments into state using UIHost
@@ -67,8 +68,7 @@ export const markAncestorChainForceVisible = (commentId: string, state: ReaderSt
         const comment = state.commentById.get(currentId);
         if (!comment) break;
 
-        (comment as any).forceVisible = true;
-        (comment as any).justRevealed = true;
+        markCommentRevealed(comment);
 
         currentId = comment.parentCommentId || null;
     }

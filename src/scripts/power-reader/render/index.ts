@@ -21,6 +21,7 @@ import { setupInlineReactions } from '../features/inlineReactions';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupScrollTracking } from '../features/scrollTracking';
 import { refreshPostActionButtons } from '../utils/dom';
+import { getCommentContextType } from '../types/uiCommentFlags';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -79,7 +80,7 @@ export const buildPostGroups = (
   };
 
   sortedComments.forEach(c => {
-    const ct = (c as any).contextType;
+    const ct = getCommentContextType(c);
     const isContext = ct === 'fetched' || ct === 'stub';
     const isLocallyRead = isRead(c._id, readState, c.postedAt);
     const implicit = isImplicitlyRead(c);

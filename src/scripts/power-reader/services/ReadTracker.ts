@@ -48,7 +48,11 @@ export class ReadTracker {
         this.scrollListenerAdded = true;
         this.hasAdvancedThisBatch = false;
 
-        // Initial check: if there are no unread items at startup, check for more immediately
+        // [PR-READ-02] Initial processing pass: Handle cases where content is 
+        // already visible or less than one screen (no scroll event will fire)
+        setTimeout(() => this.processScroll(), 500);
+
+        // Initial check for session advancement if all items were already read
         setTimeout(() => this.checkInitialState(), 1000);
     }
 
@@ -90,15 +94,14 @@ export class ReadTracker {
 
         Logger.debug(`processScroll: items=${items.length}, isAtBottom=${isAtBottom}, scrollY=${window.scrollY}`);
 
-        // [PR-FIX] Limit checks to elements near the viewport to avoid huge layouts/loops
-        // If we have 10k items, checking them all is expensive even off-screen.
-        const viewportMargin = 2000; // Only check items within 2000px of viewport
+        // Performance: skip items far BELOW the viewport.
+        // Items ABOVE the viewport must be processed to ensure they are marked read.
+        const viewportMargin = 2000;
 
         for (const el of items) {
             const rect = el.getBoundingClientRect();
-            
-            // Skip expensive visibility/marking logic for items far away from viewport
-            if (rect.top > viewportHeight + viewportMargin || rect.bottom < -viewportMargin) {
+
+            if (rect.top > viewportHeight + viewportMargin) {
                 continue;
             }
 
@@ -153,6 +156,22 @@ export class ReadTracker {
                                 : document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
                             liveUnreadCountEl.textContent = newCount.toString();
                         }
+
+                        // Check if this was the last unread item and trigger advancement if at bottom
+                        const remainingUnread = document.querySelectorAll(ReadTracker.UNREAD_ITEM_SELECTOR).length;
+                        if (remainingUnread === 0) {
+                            const currentDocHeight = Math.max(
+                                document.body.scrollHeight,
+                                document.documentElement.scrollHeight,
+                                document.body.offsetHeight,
+                                document.documentElement.offsetHeight
+                            );
+                            const currentIsAtBottom = window.innerHeight + window.scrollY >= currentDocHeight - ReadTracker.BOTTOM_MARGIN_PX;
+                            const currentCommentsData = this.commentsDataGetter();
+                            if (currentIsAtBottom && currentCommentsData.length > 0) {
+                                this.advanceAndCheck(currentCommentsData);
+                            }
+                        }
                     }, this.scrollMarkDelay);
                 }
             } else {
@@ -163,10 +182,10 @@ export class ReadTracker {
             }
         }
 
-        // Auto-advance session if at bottom
+        // Auto-advance session if at bottom AND everything is read
         const currentComments = this.commentsDataGetter();
-        if (isAtBottom && currentComments.length > 0) {
-            Logger.debug('processScroll: at bottom, advancing');
+        if (isAtBottom && items.length === 0 && currentComments.length > 0) {
+            Logger.debug('processScroll: at bottom and all read, advancing');
             this.advanceAndCheck(currentComments);
         }
     }

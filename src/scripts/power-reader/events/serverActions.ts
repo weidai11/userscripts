@@ -30,6 +30,15 @@ import { smartScrollTo, withForcedLayout } from '../utils/dom';
 import { CONFIG } from '../config';
 import { Logger } from '../utils/logger';
 import { toggleAuthorPreference } from '../utils/storage';
+import { getCommentVisibilityTarget, getStickyViewportTop } from '../utils/commentVisibility';
+import { logFindParentTrace } from '../utils/findParentTrace';
+import {
+    HIGHLIGHT_DURATION_MS,
+    JUST_REVEALED_DURATION_MS,
+    VIEWPORT_CORRECTION_EPSILON_PX
+} from '../utils/navigationConstants';
+import { withOverflowAnchorDisabled } from '../utils/viewTransition';
+import { markCommentRevealed, setJustRevealed } from '../types/uiCommentFlags';
 import { fetchAllPostCommentsWithCache } from '../services/postDescendantsCache';
 import {
     promptLargeDescendantConfirmation,
@@ -74,46 +83,6 @@ const findHighestKnownAncestorId = (commentId: string, state: ReaderState): stri
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => resolve()));
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
-const HIGHLIGHT_DURATION_MS = 2000;
-
-const isFindParentTraceEnabled = (): boolean => {
-    try {
-        return (window as any).__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem('pr-find-parent-trace') === '1';
-    } catch {
-        return (window as any).__PR_FIND_PARENT_TRACE__ === true;
-    }
-};
-
-const logFindParentTrace = (event: string, data: Record<string, unknown>): void => {
-    if (!isFindParentTraceEnabled()) return;
-    let json = '';
-    try {
-        json = JSON.stringify(data);
-    } catch {
-        json = '[unserializable]';
-    }
-    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
-};
-
-const getStickyViewportTop = (): number => {
-    const stickyHeader = document.getElementById('pr-sticky-header');
-    if (!stickyHeader) return 0;
-
-    const rect = stickyHeader.getBoundingClientRect();
-    const computed = window.getComputedStyle(stickyHeader);
-    const isVisible = stickyHeader.classList.contains('visible') || (computed.display !== 'none' && rect.height > 0);
-    if (!isVisible) return 0;
-
-    return Math.max(0, stickyHeader.getBoundingClientRect().bottom);
-};
-
-const getCommentNavigationViewportTarget = (commentEl: HTMLElement): HTMLElement => {
-    const ownBody = commentEl.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
-    if (ownBody) return ownBody;
-    const ownMeta = commentEl.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
-    if (ownMeta) return ownMeta;
-    return commentEl;
-};
 
 const isCommentFullyVisibleForNavigation = (commentEl: HTMLElement, viewportTarget: HTMLElement): boolean => {
     if (commentEl.classList.contains('pr-missing-parent') || commentEl.dataset.placeholder === '1' || commentEl.classList.contains('pr-comment-placeholder')) {
@@ -137,7 +106,7 @@ const isCommentFullyVisibleForNavigation = (commentEl: HTMLElement, viewportTarg
 
 const scrollToCommentIfNeeded = (commentEl: HTMLElement, contextLabel: string): void => {
     const commentId = commentEl.getAttribute('data-id') || '(unknown)';
-    const viewportTarget = getCommentNavigationViewportTarget(commentEl);
+    const viewportTarget = getCommentVisibilityTarget(commentEl);
     const rect = viewportTarget.getBoundingClientRect();
     const stickyViewportTop = getStickyViewportTop();
     logFindParentTrace('scroll:check', {
@@ -347,21 +316,6 @@ const upgradeSingleCommentInPlace = (commentId: string, state: ReaderState): num
     return upgraded;
 };
 
-const beginOverflowAnchorSuppression = (): (() => void) => {
-    const htmlStyle = document.documentElement.style as any;
-    const bodyStyle = document.body?.style as any;
-    const prevHtml = htmlStyle.overflowAnchor || '';
-    const prevBody = bodyStyle ? (bodyStyle.overflowAnchor || '') : '';
-
-    htmlStyle.overflowAnchor = 'none';
-    if (bodyStyle) bodyStyle.overflowAnchor = 'none';
-
-    return () => {
-        htmlStyle.overflowAnchor = prevHtml;
-        if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
-    };
-};
-
 const preserveFocalViewportAcrossDomMutation = async <T>(
     focalCommentId: string | null,
     mutation: () => T,
@@ -378,7 +332,7 @@ const preserveFocalViewportAcrossDomMutation = async <T>(
         beforeScrollY: round2(beforeScrollY),
     });
 
-    const restoreOverflowAnchor = beginOverflowAnchorSuppression();
+    const restoreOverflowAnchor = withOverflowAnchorDisabled();
     let result: T;
 
     const applyCorrection = (pass: 'pass1' | 'pass2'): void => {
@@ -399,7 +353,7 @@ const preserveFocalViewportAcrossDomMutation = async <T>(
             scrollY: round2(window.scrollY),
         });
 
-        if (Math.abs(delta) < 0.5) return;
+        if (Math.abs(delta) < VIEWPORT_CORRECTION_EPSILON_PX) return;
 
         const fromY = window.scrollY;
         const targetY = Math.max(0, fromY + delta);
@@ -481,15 +435,14 @@ export const handleExpandPlaceholder = (target: HTMLElement, state: ReaderState)
     const comment = state.commentById.get(commentId);
     if (!comment) return;
 
-    (comment as any).forceVisible = true;
-    (comment as any).justRevealed = true;
+    markCommentRevealed(comment);
 
     getUIHost().rerenderPostGroup(postId, commentId);
 
     // Clear justRevealed after animation
     setTimeout(() => {
-        if (comment) (comment as any).justRevealed = false;
-    }, 2000);
+        if (comment) setJustRevealed(comment, false);
+    }, JUST_REVEALED_DURATION_MS);
 };
 
 /**
@@ -552,8 +505,7 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
             logFindParentTrace('branch:parent-read-placeholder', { focalCommentId, parentId, postId, scrollY: round2(window.scrollY) });
             const directParent = state.commentById.get(parentId);
             if (directParent) {
-                (directParent as any).forceVisible = true;
-                (directParent as any).justRevealed = true;
+                markCommentRevealed(directParent);
             }
             const anchorCommentId = focalCommentId || parentId;
             const upgraded = await preserveFocalViewportAcrossDomMutation(
@@ -607,8 +559,7 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
         if (parentComment) {
             // Add to state if not present
             if (!state.commentById.has(parentComment._id)) {
-                (parentComment as any).justRevealed = true;
-                (parentComment as any).forceVisible = true; // Ensure it renders full
+                markCommentRevealed(parentComment); // Ensure it renders full
 
                 getUIHost().mergeComments([parentComment], true);
 
@@ -908,14 +859,12 @@ export const handleLoadAllComments = async (target: HTMLElement, state: ReaderSt
 
         // [PR-POSTBTN-02] Mark all comments in this post as forceVisible
         comments.forEach(c => {
-            (c as any).forceVisible = true;
-            (c as any).justRevealed = true;
+            markCommentRevealed(c);
         });
 
         // Also existing state
         state.comments.filter(c => c.postId === postId).forEach(c => {
-            (c as any).forceVisible = true;
-            (c as any).justRevealed = true;
+            markCommentRevealed(c);
         });
 
         const added = getUIHost().mergeComments(comments, false); // Load all should show them full
@@ -924,9 +873,9 @@ export const handleLoadAllComments = async (target: HTMLElement, state: ReaderSt
 
         setTimeout(() => {
             state.comments.filter(c => c.postId === postId).forEach(c => {
-                (c as any).justRevealed = false;
+                setJustRevealed(c, false);
             });
-        }, 2000);
+        }, JUST_REVEALED_DURATION_MS);
 
         getUIHost().rerenderPostGroup(postId);
 
@@ -1062,16 +1011,14 @@ export const handleLoadParents = async (
 
         // Mark fetched parents as forceVisible
         for (const f of fetched) {
-            (f as any).forceVisible = true;
-            (f as any).justRevealed = true;
+            markCommentRevealed(f);
         }
         const added = getUIHost().mergeComments(fetched, true);
 
         Logger.info(`Load parents for ${commentId}: ${fetched.length} fetched, ${added} new`);
 
         if (comment) {
-            (comment as any).forceVisible = true;
-            (comment as any).justRevealed = true;
+            markCommentRevealed(comment);
         }
 
         let inPlaceUpgraded = 0;
@@ -1103,9 +1050,9 @@ export const handleLoadParents = async (
         }
 
         setTimeout(() => {
-            for (const f of fetched) (f as any).justRevealed = false;
-            if (comment) (comment as any).justRevealed = false;
-        }, 2000);
+            for (const f of fetched) setJustRevealed(f, false);
+            if (comment) setJustRevealed(comment, false);
+        }, JUST_REVEALED_DURATION_MS);
         const result: LoadParentsResult = {
             commentId,
             fetchedCount: fetched.length,
@@ -1191,8 +1138,7 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
             if (!isTargetSubtreeComment(c._id)) return;
             const inState = state.commentById.get(c._id);
             if (inState) {
-                (inState as any).forceVisible = true;
-                (inState as any).justRevealed = true;
+                markCommentRevealed(inState);
                 revealedIds.push(inState._id);
             }
         });
@@ -1206,10 +1152,10 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
             revealedIds.forEach((id) => {
                 const inState = state.commentById.get(id);
                 if (inState) {
-                    (inState as any).justRevealed = false;
+                    setJustRevealed(inState, false);
                 }
             });
-        }, 2000);
+        }, JUST_REVEALED_DURATION_MS);
     } catch (err) {
         Logger.error('Failed to load descendants', err);
     } finally {

@@ -10,12 +10,13 @@ import { getScoreColor, getRecencyColor } from '../utils/colors';
 import { isRead, getReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
+import { getCommentContextType, isForceVisible, isJustRevealed } from '../types/uiCommentFlags';
 import { renderMetadata } from './components/metadata';
 import { renderBody, highlightQuotes } from './components/body';
 export { highlightQuotes };
 
 const getContextType = (comment: Comment): string | undefined =>
-  (comment as any).contextType;
+  getCommentContextType(comment);
 
 const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = '', state?: ReaderState): string => {
   const postId = comment.postId || '';
@@ -303,7 +304,7 @@ export const renderComment = (
 
   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
   // Exception: Never collapse if forceVisible is set (e.g. via Trace to Root)
-  const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !(comment as any).forceVisible;
+  const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !isForceVisible(comment);
 
   if (showAsPlaceholder) {
     // Render blank stub
@@ -350,7 +351,7 @@ export const renderComment = (
     isContext ? 'context' : '',
     isReplyToYou ? 'reply-to-you' : '',
     (autoHide || comment.rejected) ? 'collapsed' : '',
-    (comment as any).justRevealed ? 'pr-just-revealed' : '',
+    isJustRevealed(comment) ? 'pr-just-revealed' : '',
   ].filter(Boolean).join(' ');
 
   // Inline styles

@@ -174,12 +174,14 @@ test.describe('Post Action Buttons', () => {
     });
 
     test('[PR-POSTBTN-03][PR-POSTBTN-04] Scroll actions', async ({ page }) => {
+        const now = Date.now();
         const posts = [
-            { _id: 'p1', title: 'P1', htmlBody: '<div style="height: 1000px">B1</div>', commentCount: 1, postedAt: new Date().toISOString() },
-            { _id: 'p2', title: 'P2', htmlBody: 'B2', commentCount: 0, postedAt: new Date().toISOString() }
+            { _id: 'p1', title: 'P1', htmlBody: '<div style="height: 1000px">B1</div>', commentCount: 1, postedAt: new Date(now).toISOString() },
+            { _id: 'p2', title: 'P2', htmlBody: 'B2', commentCount: 1, postedAt: new Date(now - 10000).toISOString() }
         ];
         const comments = [
-            { _id: 'c1', postId: 'p1', htmlBody: 'C1', user: { username: 'A' }, postedAt: new Date().toISOString() }
+            { _id: 'c1', postId: 'p1', htmlBody: 'C1', user: { username: 'A' }, postedAt: new Date(now).toISOString() },
+            { _id: 'c2', postId: 'p2', htmlBody: 'C2', user: { username: 'B' }, postedAt: new Date(now - 10000).toISOString() }
         ];
 
         await initPowerReader(page, { posts, comments, testMode: true });

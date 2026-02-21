@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.693] - 2026-02-21
+
+### Fixed
+- **Read State Initialization ([PR-READ-02])**: Fixed a bug where comments were not being marked as read when the page content was less than one screen height (preventing scroll events from firing). The `ReadTracker` now performs an initial processing pass on load to handle these cases.
+- **Added Regression Test**: Created `tests/short-content-read.spec.ts` to verify read-marking behavior on short pages without scrolling.
+
+## [1.2.692] - 2026-02-21
+
+### Fixed
+- **Comment Merge Integrity**: Main-reader and loader merge paths now consistently upgrade placeholder/missing comments when fuller payloads arrive, and refresh canonical comments on non-context merges. This prevents stale context data after deep loading and load-all operations.
+- **Transient Reveal Flags**: Comment replacement paths now preserve transient UI flags (`forceVisible`, `justRevealed`) so reveal/highlight state is not lost during merge upgrades.
+- **Navigation Stability ([PR-NAV-06], [PR-NAV-06.1], [PR-NAV-10], [PR-CMTBTN-02])**: Unified sticky-aware visibility checks and viewport-correction thresholds reduced scroll drift across rerenders and stabilized parent/root navigation flows.
+
+### Changed
+- **Shared Post-Group Rerender Pipeline**: Extracted common rerender + viewport-preservation logic into `rerenderPostGroupShared` and reused it in both main reader and archive UI hosts.
+- **Shared Transition/Tracing Utilities**: Consolidated view-transition and overflow-anchor handling in `utils/viewTransition.ts`, and centralized find-parent tracing in `utils/findParentTrace.ts`.
+- **Typed UI Comment Flags**: Added `types/uiCommentFlags.ts` and migrated usage across render/event/merge paths to remove repeated ad-hoc `(as any)` flag access.
+
 ## [1.2.691] - 2026-02-20
 
 ### Added

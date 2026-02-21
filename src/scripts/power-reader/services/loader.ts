@@ -30,6 +30,7 @@ import { CONFIG } from '../config';
 import { Logger } from '../utils/logger';
 import type { ReaderState } from '../state';
 import { rebuildIndexes } from '../state';
+import { copyTransientCommentUiFlags, getCommentContextType } from '../types/uiCommentFlags';
 
 export interface InitialLoadResult {
   comments: Comment[];
@@ -349,8 +350,17 @@ export const runSmartLoading = async (
       return true;
     } else {
       const existing = commentMap.get(comment._id);
-      if ((existing as any).contextType === 'missing') {
-        const idx = allComments.findIndex(c => c._id === comment._id);
+      const existingType = existing ? getCommentContextType(existing) : undefined;
+      const incomingType = getCommentContextType(comment);
+      const existingHasBody = !!(existing?.htmlBody && existing.htmlBody.trim().length > 0);
+      const incomingHasBody = !!(comment.htmlBody && comment.htmlBody.trim().length > 0);
+      const shouldUpgrade = !!existing && (
+        ((existingType === 'stub' || existingType === 'missing') && incomingType !== 'stub' && incomingType !== 'missing') ||
+        (!existingHasBody && incomingHasBody)
+      );
+      if (shouldUpgrade) {
+        copyTransientCommentUiFlags(existing, comment);
+        const idx = allComments.indexOf(existing);
         if (idx !== -1) {
           allComments[idx] = comment;
           commentMap.set(comment._id, comment);

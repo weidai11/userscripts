@@ -222,6 +222,21 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Problem**: When loading post content inline, we must update the global `postsData` set so that if the user performs a re-render (e.g., toggling a preference), the newly loaded content doesn't disappear.
 - **Solution**: Push the newly fetched `Post` object into the global `postsData` array and immediately re-render that specific post group. Since `renderUI` also uses this data, the load is persistent across the session.
 
+### Shared Post-Group Rerender Pipeline
+- **Problem**: Main-reader and archive hosts previously had duplicated post-group rerender code (DOM replace, expansion restoration, link-preview reattachment, and anchor viewport correction), which was drifting and causing regressions.
+- **Solution**: Use `rerenderPostGroupShared` (`src/scripts/power-reader/render/rerenderPostGroupShared.ts`) from both hosts.
+- **Gotcha**: Anchor preservation is a two-pass correction (initial delta + residual correction thresholded by `VIEWPORT_CORRECTION_EPSILON_PX`) and should stay centralized to avoid behavior divergence.
+
+### Shared Transition and Trace Utilities
+- **Problem**: View-transition and overflow-anchor suppression logic was duplicated across host/event files, with inconsistent cleanup behavior.
+- **Solution**: Use `runWithViewTransition` and `withOverflowAnchorDisabled` from `src/scripts/power-reader/utils/viewTransition.ts`, and `logFindParentTrace` from `src/scripts/power-reader/utils/findParentTrace.ts`.
+- **Gotcha**: Transition cleanup intentionally falls back to `updateCallbackDone.finally(...)` when `finished` is unavailable.
+
+### Typed UI Comment Flags (No Ad-Hoc `as any`)
+- **Problem**: Transient flags (`forceVisible`, `justRevealed`, `contextType`) were set/read via repeated `(comment as any)` casts across render/event/merge paths, making merges easy to regress.
+- **Solution**: Use helpers in `src/scripts/power-reader/types/uiCommentFlags.ts` (`markCommentRevealed`, `setJustRevealed`, `getCommentContextType`, `copyTransientCommentUiFlags`, etc.).
+- **Gotcha**: `clearCommentContextType` sets `contextType` to `undefined` (instead of `delete`) intentionally, to keep behavior consistent across merge and serialization paths.
+
 ---
 
 ## Testing & Playwright

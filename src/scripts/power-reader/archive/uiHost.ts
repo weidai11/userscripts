@@ -6,117 +6,16 @@ import { createInitialState, rebuildIndexes } from '../state';
 import type { Comment, Post } from '../../../shared/graphql/queries';
 import { renderArchiveFeed } from './render';
 import { renderPostGroup } from '../render/post';
-import { setupLinkPreviews } from '../features/linkPreviews';
-import { refreshPostActionButtons } from '../utils/dom';
+import { rerenderPostGroupShared } from '../render/rerenderPostGroupShared';
 import { Logger } from '../utils/logger';
 import { getCurrentUserFromGlobals } from '../utils/currentUser';
 import { saveContextualItems } from './storage';
-
-type StartViewTransitionFn = ((update: () => void) => unknown) | undefined;
-
-const isFindParentTraceEnabled = (): boolean => {
-    try {
-        return (window as any).__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem('pr-find-parent-trace') === '1';
-    } catch {
-        return (window as any).__PR_FIND_PARENT_TRACE__ === true;
-    }
-};
-
-const logFindParentTrace = (event: string, data: Record<string, unknown>): void => {
-    if (!isFindParentTraceEnabled()) return;
-    let json = '';
-    try {
-        json = JSON.stringify(data);
-    } catch {
-        json = '[unserializable]';
-    }
-    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
-};
-
-const withOverflowAnchorDisabled = (): (() => void) => {
-    const htmlStyle = document.documentElement.style as any;
-    const bodyStyle = document.body?.style as any;
-    const prevHtml = htmlStyle.overflowAnchor || '';
-    const prevBody = bodyStyle ? (bodyStyle.overflowAnchor || '') : '';
-
-    htmlStyle.overflowAnchor = 'none';
-    if (bodyStyle) bodyStyle.overflowAnchor = 'none';
-
-    return () => {
-        htmlStyle.overflowAnchor = prevHtml;
-        if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
-    };
-};
-
-let instantViewTransitionDepth = 0;
-
-const enableInstantViewTransition = (): void => {
-    instantViewTransitionDepth += 1;
-    document.documentElement.classList.add('pr-vt-instant');
-};
-
-const disableInstantViewTransition = (): void => {
-    instantViewTransitionDepth = Math.max(0, instantViewTransitionDepth - 1);
-    if (instantViewTransitionDepth === 0) {
-        document.documentElement.classList.remove('pr-vt-instant');
-    }
-};
-
-const runWithViewTransition = (
-    update: () => void,
-    enabled: boolean = true,
-    traceLabel?: string
-): void => {
-    const rawStartViewTransition = (document as any).startViewTransition as StartViewTransitionFn;
-    const startViewTransition = rawStartViewTransition
-        ? rawStartViewTransition.bind(document) as StartViewTransitionFn
-        : undefined;
-    const canUse = enabled && !(window as any).__PR_TEST_MODE__ && typeof startViewTransition === 'function';
-    if (!canUse) {
-        logFindParentTrace('archive:transition-bypass', {
-            label: traceLabel || '',
-            enabled,
-            hasApi: typeof startViewTransition === 'function',
-        });
-        try {
-            update();
-        } catch (error) {
-            Logger.error('ArchiveUIHost: update failed (no transition path)', error);
-        }
-        return;
-    }
-
-    try {
-        enableInstantViewTransition();
-        const transition: any = startViewTransition(() => {
-            return update();
-        });
-        let cleaned = false;
-        const cleanupInstant = () => {
-            if (cleaned) return;
-            cleaned = true;
-            disableInstantViewTransition();
-        };
-        if (transition?.finished?.then) {
-            transition.finished.then(() => {
-                cleanupInstant();
-            }).catch((error: unknown) => {
-                Logger.warn('ArchiveUIHost: transition finished with error', error);
-                cleanupInstant();
-            });
-        } else {
-            cleanupInstant();
-        }
-    } catch (error) {
-        Logger.warn('ArchiveUIHost: startViewTransition failed, falling back', error);
-        disableInstantViewTransition();
-        try {
-            update();
-        } catch (updateError) {
-            Logger.error('ArchiveUIHost: update failed after transition fallback', updateError);
-        }
-    }
-};
+import {
+  clearCommentContextType,
+  copyTransientCommentUiFlags,
+  getCommentContextType,
+  setCommentContextType
+} from '../types/uiCommentFlags';
 
 export class ArchiveUIHost implements UIHost {
     private archiveState: ArchiveState;
@@ -255,8 +154,8 @@ export class ArchiveUIHost implements UIHost {
     // Non-context merge paths should always upsert latest server data.
     if (!markAsContext) return true;
 
-    const existingType = (existing as any).contextType;
-    const incomingType = (incoming as any).contextType;
+    const existingType = getCommentContextType(existing);
+    const incomingType = getCommentContextType(incoming);
     const existingIsStub = existingType === 'stub' || existingType === 'missing';
     const incomingIsStub = incomingType === 'stub' || incomingType === 'missing';
     const existingHasBody = typeof existing.htmlBody === 'string' && existing.htmlBody.trim().length > 0;
@@ -274,26 +173,21 @@ export class ArchiveUIHost implements UIHost {
     const merged = { ...existing, ...incoming } as Comment;
 
     // Preserve transient UI flags if the incoming payload does not carry them.
-    if ((existing as any).forceVisible && !(merged as any).forceVisible) {
-      (merged as any).forceVisible = true;
-    }
-    if ((existing as any).justRevealed && !(merged as any).justRevealed) {
-      (merged as any).justRevealed = true;
-    }
+    copyTransientCommentUiFlags(existing, merged);
 
     if (markAsContext) {
-      const existingType = (existing as any).contextType;
-      const incomingType = (incoming as any).contextType;
+      const existingType = getCommentContextType(existing);
+      const incomingType = getCommentContextType(incoming);
 
       // Never downgrade fetched context to stub placeholders.
       if (incomingType === 'stub' && existingType && existingType !== 'stub') {
-        (merged as any).contextType = existingType;
+        setCommentContextType(merged, existingType);
       } else if (!incomingType) {
-        (merged as any).contextType = existingType || 'fetched';
+        setCommentContextType(merged, existingType || 'fetched');
       }
     } else {
       // Canonical comments are not context placeholders.
-      delete (merged as any).contextType;
+      clearCommentContextType(merged);
     }
 
     return merged;
@@ -304,7 +198,7 @@ export class ArchiveUIHost implements UIHost {
     if (!username) return;
 
     const contextualComments = comments.filter(comment => {
-      const type = (comment as any).contextType;
+      const type = getCommentContextType(comment);
       if (type === 'stub' || type === 'missing') return false;
       return !this.archiveState.itemById.has(comment._id);
     });
@@ -384,74 +278,17 @@ export class ArchiveUIHost implements UIHost {
   }
 
     rerenderPostGroup(postId: string, anchorCommentId?: string): void {
-        const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
-        if (!postContainer) {
-            // In Archive Thread View, we might just be viewing a list of post groups.
-            // If the group is not found, maybe it's not rendered yet?
-            Logger.warn(`ArchiveUIHost: Container for post ${postId} not found`);
-            return;
-        }
-
-        let beforeTop: number | null = null;
-        if (anchorCommentId) {
-            const anchorEl = postContainer.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`) as HTMLElement;
-            if (anchorEl) beforeTop = anchorEl.getBoundingClientRect().top;
-        }
-
-        const post = this.readerState.postById.get(postId);
-        const postComments = this.readerState.comments.filter(c => c.postId === postId);
-
-        const group = {
+        rerenderPostGroupShared({
+            state: this.readerState,
             postId,
-            title: post?.title || postComments.find(c => c.post?.title)?.post?.title || 'Unknown Post',
-            comments: postComments,
-            fullPost: post,
-        };
-        const bodyContainer = postContainer.querySelector('.pr-post-body-container');
-        const wasExpanded = !!(bodyContainer && !bodyContainer.classList.contains('truncated'));
-
-        runWithViewTransition(() => {
-            const restoreOverflowAnchor = withOverflowAnchorDisabled();
-            try {
-                // Render using standard Power Reader renderer
-                postContainer.outerHTML = renderPostGroup(group, this.readerState);
-                const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement | null;
-                if (wasExpanded && newPostContainer) {
-                    const newBody = newPostContainer.querySelector('.pr-post-body-container') as HTMLElement | null;
-                    if (newBody && newBody.classList.contains('truncated')) {
-                        newBody.classList.remove('truncated');
-                        newBody.style.maxHeight = 'none';
-                        const overlay = newBody.querySelector('.pr-read-more-overlay') as HTMLElement | null;
-                        if (overlay) overlay.style.display = 'none';
-                        const readMoreBtn = newBody.querySelector('.pr-post-read-more') as HTMLElement | null;
-                        if (readMoreBtn) readMoreBtn.style.display = 'none';
-                    }
-                }
-
-                setupLinkPreviews(this.readerState.comments, newPostContainer || document);
-                refreshPostActionButtons(postId);
-
-                if (anchorCommentId && beforeTop !== null) {
-                    const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`) as HTMLElement;
-                    if (newAnchor) {
-                        const afterTop = newAnchor.getBoundingClientRect().top;
-                        const delta = afterTop - beforeTop;
-                        const oldScrollY = window.scrollY;
-                        window.scrollTo(0, Math.max(0, oldScrollY + delta));
-
-                        const pass2Anchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`) as HTMLElement;
-                        if (pass2Anchor) {
-                            const residual = pass2Anchor.getBoundingClientRect().top - beforeTop;
-                            if (Math.abs(residual) >= 0.5) {
-                                window.scrollTo(0, Math.max(0, window.scrollY + residual));
-                            }
-                        }
-                    }
-                }
-            } finally {
-                restoreOverflowAnchor();
-            }
-        }, true, `archive:rerenderPostGroup:${postId}:${anchorCommentId || 'none'}`);
+            anchorCommentId,
+            getPostById: id => this.readerState.postById.get(id),
+            getPostComments: id => this.readerState.comments.filter(c => c.postId === id),
+            renderPostGroupHtml: renderPostGroup,
+            rerenderLogPrefix: 'ArchiveUIHost',
+            tracePrefix: 'archive',
+            transitionLabelPrefix: 'archive',
+        });
     }
 
   mergeComments(newComments: Comment[], markAsContext: boolean = true, postIdMap?: Map<string, string>): number {
@@ -464,8 +301,8 @@ export class ArchiveUIHost implements UIHost {
       if (postIdMap && postIdMap.has(incoming._id)) {
         incoming.postId = postIdMap.get(incoming._id)!;
       }
-      if (markAsContext && !(incoming as any).contextType) {
-        (incoming as any).contextType = 'fetched';
+      if (markAsContext && !getCommentContextType(incoming)) {
+        setCommentContextType(incoming, 'fetched');
       }
       // Ensure root post context is available for grouped thread rendering and post actions.
       if ((incoming as any).post?._id) {
@@ -496,7 +333,11 @@ export class ArchiveUIHost implements UIHost {
         const canonical = this.readerState.commentById.get(incoming._id) || incoming;
         this.syncItemToCanonical(canonical);
         canonicalTouched = true;
-      } else if ((incoming as any).contextType !== 'stub' && (incoming as any).contextType !== 'missing') {
+      } else {
+        const incomingType = getCommentContextType(incoming);
+        if (incomingType === 'stub' || incomingType === 'missing') {
+          continue;
+        }
         const contextual = this.readerState.commentById.get(incoming._id) || incoming;
         contextCommentsToPersist.push(contextual);
       }

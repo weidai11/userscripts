@@ -7,6 +7,7 @@
 import { Logger } from './logger';
 import { sanitizeHtml } from './sanitize';
 import { withForcedLayout } from './dom';
+import { getCommentVisibilityTarget, getStickyViewportTop } from './commentVisibility';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
@@ -663,26 +664,14 @@ export function isElementFullyVisible(el: HTMLElement): boolean {
 
   if (el.classList.contains('pr-missing-parent') || el.dataset.placeholder === '1') return false;
 
-  const visibilityTarget = (() => {
-    if (el.classList.contains('pr-comment')) {
-      const ownBody = el.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
-      if (ownBody) return ownBody;
-      const ownMeta = el.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
-      if (ownMeta) return ownMeta;
-    }
-    return el;
-  })();
+  const visibilityTarget = el.classList.contains('pr-comment')
+    ? getCommentVisibilityTarget(el)
+    : el;
 
   const rect = visibilityTarget.getBoundingClientRect();
   const vh = window.innerHeight;
   const vw = window.innerWidth;
-  const stickyHeader = document.getElementById('pr-sticky-header');
-  const stickyRect = stickyHeader?.getBoundingClientRect();
-  const stickyStyles = stickyHeader ? window.getComputedStyle(stickyHeader) : null;
-  const stickyViewportTop = stickyHeader && stickyRect && stickyStyles &&
-    (stickyHeader.classList.contains('visible') || (stickyStyles.display !== 'none' && stickyRect.height > 0))
-    ? Math.max(0, stickyRect.bottom)
-    : 0;
+  const stickyViewportTop = getStickyViewportTop();
 
   // 1. Basic viewport check
   const inViewport = (

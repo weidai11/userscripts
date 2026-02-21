@@ -130,9 +130,10 @@ test.describe('Power Reader Parent Navigation', () => {
             user: { _id: 'u2', username: 'ChildUser' },
             post: { _id: 'p1', title: 'Post' }, parentComment: { _id: 'c1' }, parentCommentId: 'c1'
         };
+        const tallSiblingBody = `<div>${Array.from({ length: 260 }, (_, i) => `Tall sibling line ${i + 1}`).join('<br>')}</div>`;
         const tallSibling = {
-            _id: 'c3', postId: 'p1', htmlBody: '<div style="height: 1800px;">Tall sibling reply to inflate parent container</div>',
-            postedAt: new Date(Date.now() - 120_000).toISOString(), baseScore: 0,
+            _id: 'c3', postId: 'p1', htmlBody: tallSiblingBody,
+            postedAt: new Date(Date.now() - 120_000).toISOString(), baseScore: 10,
             user: { _id: 'u3', username: 'SiblingUser' },
             post: { _id: 'p1', title: 'Post' }, parentComment: { _id: 'c1' }, parentCommentId: 'c1'
         };
