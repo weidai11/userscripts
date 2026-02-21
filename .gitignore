@@ -51,11 +51,12 @@ test_server.js
 *.code-workspace
 
 # Temporary and backup files
-GEMINI.md
 *.tmp
+*.txt
 *.bak
 *.old
 tmp/
 test-results.json/
 
 conductor/
+GEMINI.md

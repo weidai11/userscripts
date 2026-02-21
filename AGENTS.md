@@ -14,7 +14,7 @@ High-performance Tampermonkey userscripts for **LessWrong** and **EA Forum**.
   - Include relevant requirement IDs in commit messages when applicable (e.g., `PR-UARCH-*`, `PR-PREV-*`).
   - `jj bookmark set main` (update branch pointer to current commit BEFORE push)
   - `jj git push` (sync changed bookmarks to remote)
-  - **Pre-push checklist**: run `jj --no-pager diff --git`, `npx playwright test` (or targeted suite), and `npm run test:audit`.
+  - **Pre-push checklist**: run `jj st` (avoid adding temp files), `jj --no-pager diff --git`, `npx playwright test` (or targeted suite), and `npm run test:audit`.
   - **PowerShell Note**: Quote `@` if used (e.g., `jj show '@'`), as it is a reserved symbol.
 - **Folders**:
   - `src/scripts/`: `power-reader/` (main), `playground/` (experimental).
