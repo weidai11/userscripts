@@ -1703,6 +1703,17 @@ dirty.indexOf("<") === -1) {
       contain-intrinsic-size: auto !important;
   }
 
+  /* Make View Transitions instantaneous when Power Reader opts in. */
+  html.pr-vt-instant::view-transition-group(root),
+  html.pr-vt-instant::view-transition-old(root),
+  html.pr-vt-instant::view-transition-new(root),
+  html.pr-vt-instant::view-transition-group(*),
+  html.pr-vt-instant::view-transition-old(*),
+  html.pr-vt-instant::view-transition-new(*) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+
   /* Resize handles */
   .pr-resize-handle {
     position: fixed;
@@ -4241,6 +4252,7 @@ hoverDelay: 300,
       rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
     }
   }
+  const DEFAULT_HEADER_HEIGHT = 60;
   const smartScrollTo = (el, isPost2) => {
     const postContainer = el.closest(".pr-post");
     if (!postContainer) {
@@ -4250,15 +4262,16 @@ hoverDelay: 300,
     const postHeader = postContainer.querySelector(".pr-post-header");
     const stickyHeader2 = document.getElementById("pr-sticky-header");
     const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
-    const headerHeight = postHeader ? postHeader.offsetHeight : stickyHeight || 60;
+    const postHeaderHeight = postHeader?.offsetHeight || 0;
+    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : stickyHeight || DEFAULT_HEADER_HEIGHT;
     if (isPost2) {
-      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.pageYOffset : postContainer.getBoundingClientRect().top + window.pageYOffset;
+      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.scrollY : postContainer.getBoundingClientRect().top + window.scrollY;
       window.scrollTo({
         top: headerTop,
         behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       });
     } else {
-      const elementTop = el.getBoundingClientRect().top + window.pageYOffset;
+      const elementTop = el.getBoundingClientRect().top + window.scrollY;
       window.scrollTo({
         top: elementTop - headerHeight - 10,
 behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
@@ -4731,10 +4744,23 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   function isElementFullyVisible(el) {
     if (el.closest(".pr-sticky-header")) return false;
     if (el.classList.contains("pr-missing-parent") || el.dataset.placeholder === "1") return false;
-    const rect = el.getBoundingClientRect();
+    const visibilityTarget = (() => {
+      if (el.classList.contains("pr-comment")) {
+        const ownBody = el.querySelector(":scope > .pr-comment-body");
+        if (ownBody) return ownBody;
+        const ownMeta = el.querySelector(":scope > .pr-comment-meta-wrapper");
+        if (ownMeta) return ownMeta;
+      }
+      return el;
+    })();
+    const rect = visibilityTarget.getBoundingClientRect();
     const vh = window.innerHeight;
     const vw = window.innerWidth;
-    const inViewport = rect.top >= 0 && rect.left >= 0 && rect.bottom <= vh && rect.right <= vw;
+    const stickyHeader2 = document.getElementById("pr-sticky-header");
+    const stickyRect = stickyHeader2?.getBoundingClientRect();
+    const stickyStyles = stickyHeader2 ? window.getComputedStyle(stickyHeader2) : null;
+    const stickyViewportTop = stickyHeader2 && stickyRect && stickyStyles && (stickyHeader2.classList.contains("visible") || stickyStyles.display !== "none" && stickyRect.height > 0) ? Math.max(0, stickyRect.bottom) : 0;
+    const inViewport = rect.top >= stickyViewportTop && rect.left >= 0 && rect.bottom <= vh && rect.right <= vw;
     if (!inViewport) return false;
     const points = [
       { x: rect.left + 2, y: rect.top + 2 },
@@ -4744,7 +4770,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     ];
     for (const p of points) {
       const found = document.elementFromPoint(p.x, p.y);
-      if (!found || !(el === found || el.contains(found) || found.closest(".pr-preview-overlay"))) {
+      if (!found || !(visibilityTarget === found || visibilityTarget.contains(found) || found.closest(".pr-preview-overlay"))) {
         Logger.debug(`isElementFullyVisible: obscured at (${p.x}, ${p.y}) by`, found);
         return false;
       }
@@ -5832,7 +5858,7 @@ isFullPost
       <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
       <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
       <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
-      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
+      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment (Shortkey: p or ^)">[^]</span>
       <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
       <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
     </span>
@@ -6144,7 +6170,7 @@ baseScore: 0,
         );
       }
     });
-    const authorLinks = document.querySelectorAll(".pr-author");
+    const authorLinks = container.querySelectorAll(".pr-author");
     authorLinks.forEach((link) => {
       const userId = link.getAttribute("data-author-id");
       if (userId) {
@@ -6155,7 +6181,7 @@ baseScore: 0,
         );
       }
     });
-    const commentLinks = document.querySelectorAll(".pr-comment-body a");
+    const commentLinks = container.querySelectorAll(".pr-comment-body a");
     commentLinks.forEach((link) => {
       const href = link.getAttribute("href");
       if (!href) return;
@@ -6203,7 +6229,7 @@ baseScore: 0,
         }
       }
     });
-    const parentLinks = document.querySelectorAll(".pr-find-parent");
+    const parentLinks = container.querySelectorAll(".pr-find-parent");
     parentLinks.forEach((link) => {
       const comment = link.closest(".pr-comment");
       const parentId = comment?.getAttribute("data-parent-id");
@@ -6247,7 +6273,7 @@ baseScore: 0,
         cancelHoverTimeout();
       });
     });
-    const expandButtons = document.querySelectorAll(".pr-expand");
+    const expandButtons = container.querySelectorAll(".pr-expand");
     expandButtons.forEach((btn) => {
       const comment = btn.closest(".pr-comment");
       const commentId = comment?.getAttribute("data-id");
@@ -6259,7 +6285,7 @@ baseScore: 0,
         );
       }
     });
-    const placeholderBars = document.querySelectorAll(".pr-placeholder-bar");
+    const placeholderBars = container.querySelectorAll(".pr-placeholder-bar");
     placeholderBars.forEach((bar) => {
       const comment = bar.closest(".pr-comment");
       const commentId = comment?.getAttribute("data-id");
@@ -6857,7 +6883,7 @@ refresh() {
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
             <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
@@ -7833,6 +7859,7 @@ currentCommentId = null;
         "r": "load-descendants",
         "t": "load-parents-and-scroll",
         "^": "find-parent",
+        "p": "find-parent",
         "-": "collapse",
         "+": "expand",
         "=": "expand",
@@ -8270,6 +8297,318 @@ currentCommentId = null;
     }
     return highestKnownId;
   };
+  const waitForNextPaint = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const HIGHLIGHT_DURATION_MS = 2e3;
+  const isFindParentTraceEnabled$2 = () => {
+    try {
+      return window.__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem("pr-find-parent-trace") === "1";
+    } catch {
+      return window.__PR_FIND_PARENT_TRACE__ === true;
+    }
+  };
+  const logFindParentTrace$2 = (event, data) => {
+    if (!isFindParentTraceEnabled$2()) return;
+    let json = "";
+    try {
+      json = JSON.stringify(data);
+    } catch {
+      json = "[unserializable]";
+    }
+    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
+  };
+  const getStickyViewportTop = () => {
+    const stickyHeader2 = document.getElementById("pr-sticky-header");
+    if (!stickyHeader2) return 0;
+    const rect = stickyHeader2.getBoundingClientRect();
+    const computed = window.getComputedStyle(stickyHeader2);
+    const isVisible = stickyHeader2.classList.contains("visible") || computed.display !== "none" && rect.height > 0;
+    if (!isVisible) return 0;
+    return Math.max(0, stickyHeader2.getBoundingClientRect().bottom);
+  };
+  const getCommentNavigationViewportTarget = (commentEl) => {
+    const ownBody = commentEl.querySelector(":scope > .pr-comment-body");
+    if (ownBody) return ownBody;
+    const ownMeta = commentEl.querySelector(":scope > .pr-comment-meta-wrapper");
+    if (ownMeta) return ownMeta;
+    return commentEl;
+  };
+  const isCommentFullyVisibleForNavigation = (commentEl, viewportTarget) => {
+    if (commentEl.classList.contains("pr-missing-parent") || commentEl.dataset.placeholder === "1" || commentEl.classList.contains("pr-comment-placeholder")) {
+      return false;
+    }
+    const rect = viewportTarget.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const stickyViewportTop = getStickyViewportTop();
+    const inViewport = rect.top >= stickyViewportTop && rect.left >= 0 && rect.bottom <= vh && rect.right <= vw;
+    if (!inViewport) return false;
+    return true;
+  };
+  const scrollToCommentIfNeeded = (commentEl, contextLabel) => {
+    const commentId = commentEl.getAttribute("data-id") || "(unknown)";
+    const viewportTarget = getCommentNavigationViewportTarget(commentEl);
+    const rect = viewportTarget.getBoundingClientRect();
+    const stickyViewportTop = getStickyViewportTop();
+    logFindParentTrace$2("scroll:check", {
+      context: contextLabel,
+      commentId,
+      scrollY: round2(window.scrollY),
+      rectTop: round2(rect.top),
+      rectBottom: round2(rect.bottom),
+      rectHeight: round2(rect.height),
+      viewportTargetTag: viewportTarget.tagName.toLowerCase(),
+      viewportTargetClass: viewportTarget.className || "",
+      stickyViewportTop: round2(stickyViewportTop),
+      innerHeight: window.innerHeight
+    });
+    const fullyVisible = isCommentFullyVisibleForNavigation(commentEl, viewportTarget);
+    if (fullyVisible) {
+      Logger.info(`${contextLabel}: Comment ${commentId} already visible enough, skipping scroll.`);
+      logFindParentTrace$2("scroll:skip-visible", {
+        context: contextLabel,
+        commentId,
+        scrollY: round2(window.scrollY),
+        skipReason: "fully-visible"
+      });
+      return;
+    }
+    const beforeY = window.scrollY;
+    smartScrollTo(commentEl, false);
+    logFindParentTrace$2("scroll:dispatched", {
+      context: contextLabel,
+      commentId,
+      scrollYBefore: round2(beforeY),
+      scrollYAfterDispatch: round2(window.scrollY)
+    });
+    requestAnimationFrame(() => {
+      const afterRect = commentEl.getBoundingClientRect();
+      logFindParentTrace$2("scroll:post-frame", {
+        context: contextLabel,
+        commentId,
+        scrollY: round2(window.scrollY),
+        rectTop: round2(afterRect.top),
+        rectBottom: round2(afterRect.bottom)
+      });
+    });
+  };
+  const ancestorChainNeedsRerender = (commentId, state2) => {
+    let currentId = commentId;
+    const visited = new Set();
+    while (currentId) {
+      if (visited.has(currentId)) break;
+      visited.add(currentId);
+      const commentEl = document.querySelector(`.pr-comment[data-id="${currentId}"]`);
+      if (!commentEl) return true;
+      if (commentEl.classList.contains("pr-comment-placeholder") || commentEl.classList.contains("pr-missing-parent") || commentEl.dataset.placeholder === "1") {
+        return true;
+      }
+      const comment = state2.commentById.get(currentId);
+      if (!comment) return true;
+      currentId = comment.parentCommentId || null;
+    }
+    return false;
+  };
+  const highlightCleanupTimers = new Map();
+  const highlightCleanupElementTimers = new WeakMap();
+  const clearHighlightBySelector = (selector) => {
+    document.querySelectorAll(selector).forEach((el) => {
+      el.classList.remove("pr-highlight-parent");
+    });
+  };
+  const highlightBySelectorTemporarily = (selector, durationMs = HIGHLIGHT_DURATION_MS) => {
+    const existingTimer = highlightCleanupTimers.get(selector);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const targets = Array.from(document.querySelectorAll(selector));
+    if (targets.length === 0) return;
+    targets.forEach((el) => {
+      el.classList.remove("pr-highlight-parent");
+      void el.offsetWidth;
+      el.classList.add("pr-highlight-parent");
+    });
+    const timer = window.setTimeout(() => {
+      clearHighlightBySelector(selector);
+      if (highlightCleanupTimers.get(selector) === timer) {
+        highlightCleanupTimers.delete(selector);
+      }
+    }, durationMs);
+    highlightCleanupTimers.set(selector, timer);
+  };
+  const highlightParentTemporarily = (parentEl) => {
+    const commentId = parentEl.getAttribute("data-id");
+    if (commentId && parentEl.classList.contains("pr-comment")) {
+      highlightBySelectorTemporarily(`.pr-comment[data-id="${commentId}"]`);
+      return;
+    }
+    const existingTimer = highlightCleanupElementTimers.get(parentEl);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    parentEl.classList.remove("pr-highlight-parent");
+    void parentEl.offsetWidth;
+    parentEl.classList.add("pr-highlight-parent");
+    const timer = window.setTimeout(() => {
+      parentEl.classList.remove("pr-highlight-parent");
+      if (highlightCleanupElementTimers.get(parentEl) === timer) {
+        highlightCleanupElementTimers.delete(parentEl);
+      }
+    }, HIGHLIGHT_DURATION_MS);
+    highlightCleanupElementTimers.set(parentEl, timer);
+  };
+  const getIdleCommentActionLabel = (action) => {
+    switch (action) {
+      case "find-parent":
+        return "[^]";
+      case "load-descendants":
+        return "[r]";
+      case "load-parents-and-scroll":
+        return "[t]";
+      default:
+        return null;
+    }
+  };
+  const rerenderCommentElementInPlace = (commentId, state2) => {
+    const commentEl = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
+    const comment = state2.commentById.get(commentId);
+    if (!commentEl || !comment) return false;
+    const repliesEl = Array.from(commentEl.children).find(
+      (child) => child instanceof HTMLElement && child.classList.contains("pr-replies")
+    );
+    const repliesHtml = (() => {
+      if (!repliesEl) return "";
+      const repliesClone = repliesEl.cloneNode(true);
+      if (repliesClone.hasAttribute("data-preview-attached")) {
+        repliesClone.removeAttribute("data-preview-attached");
+      }
+      repliesClone.querySelectorAll("[data-preview-attached]").forEach((el) => {
+        el.removeAttribute("data-preview-attached");
+      });
+      repliesClone.querySelectorAll("[data-action]").forEach((el) => {
+        const action = el.getAttribute("data-action");
+        const idleLabel = getIdleCommentActionLabel(action);
+        if (idleLabel && el.textContent?.trim() === "[...]") {
+          el.textContent = idleLabel;
+        }
+      });
+      return repliesClone.outerHTML;
+    })();
+    commentEl.outerHTML = renderComment(comment, state2, repliesHtml);
+    return true;
+  };
+  const setupLinkPreviewsForCommentPost = (commentId, state2) => {
+    const postId = state2.commentById.get(commentId)?.postId;
+    const postContainer = postId ? document.querySelector(`.pr-post[data-id="${postId}"]`) : null;
+    setupLinkPreviews(state2.comments, postContainer || document);
+  };
+  const upgradeAncestorChainInPlace = (startId, state2) => {
+    let upgraded = 0;
+    let currentId = startId;
+    const visited = new Set();
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      if (rerenderCommentElementInPlace(currentId, state2)) upgraded += 1;
+      const current = state2.commentById.get(currentId);
+      currentId = current?.parentCommentId || null;
+    }
+    if (upgraded > 0) {
+      setupLinkPreviewsForCommentPost(startId, state2);
+    }
+    return upgraded;
+  };
+  const upgradeSingleCommentInPlace = (commentId, state2) => {
+    const upgraded = rerenderCommentElementInPlace(commentId, state2) ? 1 : 0;
+    if (upgraded > 0) {
+      setupLinkPreviewsForCommentPost(commentId, state2);
+    }
+    return upgraded;
+  };
+  const beginOverflowAnchorSuppression = () => {
+    const htmlStyle = document.documentElement.style;
+    const bodyStyle = document.body?.style;
+    const prevHtml = htmlStyle.overflowAnchor || "";
+    const prevBody = bodyStyle ? bodyStyle.overflowAnchor || "" : "";
+    htmlStyle.overflowAnchor = "none";
+    if (bodyStyle) bodyStyle.overflowAnchor = "none";
+    return () => {
+      htmlStyle.overflowAnchor = prevHtml;
+      if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
+    };
+  };
+  const preserveFocalViewportAcrossDomMutation = async (focalCommentId, mutation, tracePrefix) => {
+    if (!focalCommentId) return mutation();
+    const beforeEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`);
+    const beforeTop = beforeEl ? beforeEl.getBoundingClientRect().top : null;
+    const beforeScrollY = window.scrollY;
+    logFindParentTrace$2(`${tracePrefix}:anchor-start`, {
+      focalCommentId,
+      beforeTop: beforeTop === null ? null : round2(beforeTop),
+      beforeScrollY: round2(beforeScrollY)
+    });
+    const restoreOverflowAnchor = beginOverflowAnchorSuppression();
+    let result;
+    const applyCorrection = (pass) => {
+      if (beforeTop === null) return;
+      const focalEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`);
+      if (!focalEl) {
+        logFindParentTrace$2(`${tracePrefix}:anchor-${pass}-missing`, { focalCommentId });
+        return;
+      }
+      const currentTop = focalEl.getBoundingClientRect().top;
+      const delta = currentTop - beforeTop;
+      logFindParentTrace$2(`${tracePrefix}:anchor-${pass}-check`, {
+        focalCommentId,
+        currentTop: round2(currentTop),
+        targetTop: round2(beforeTop),
+        delta: round2(delta),
+        scrollY: round2(window.scrollY)
+      });
+      if (Math.abs(delta) < 0.5) return;
+      const fromY = window.scrollY;
+      const targetY = Math.max(0, fromY + delta);
+      window.scrollTo(0, targetY);
+      logFindParentTrace$2(`${tracePrefix}:anchor-${pass}-applied`, {
+        focalCommentId,
+        fromY: round2(fromY),
+        targetY: round2(targetY),
+        delta: round2(delta)
+      });
+    };
+    try {
+      result = mutation();
+      applyCorrection("pass1");
+      await waitForNextPaint();
+      applyCorrection("pass2");
+      await waitForNextPaint();
+    } finally {
+      restoreOverflowAnchor();
+    }
+    const endEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`);
+    const endScrollY = window.scrollY;
+    logFindParentTrace$2(`${tracePrefix}:anchor-end`, {
+      focalCommentId,
+      endTop: endEl ? round2(endEl.getBoundingClientRect().top) : null,
+      endScrollY: round2(endScrollY),
+      scrollDelta: round2(endScrollY - beforeScrollY)
+    });
+    return result;
+  };
+  const collectMissingAncestorDomIds = (startId, state2) => {
+    const missing = [];
+    let currentId = startId;
+    const visited = new Set();
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const inState = state2.commentById.get(currentId);
+      if (inState) {
+        const inDom = !!document.querySelector(`.pr-comment[data-id="${currentId}"]`);
+        if (!inDom) missing.push(currentId);
+      }
+      currentId = inState?.parentCommentId || null;
+    }
+    return missing;
+  };
   const handleExpandPlaceholder = (target, state2) => {
     const commentEl = target.closest(".pr-comment");
     if (!commentEl) return;
@@ -8287,39 +8626,86 @@ currentCommentId = null;
   };
   const handleFindParent = async (target, state2) => {
     const commentEl = target.closest(".pr-comment");
+    const focalCommentId = commentEl?.getAttribute("data-id") || null;
     const parentId = commentEl?.getAttribute("data-parent-id");
     const postId = commentEl?.getAttribute("data-post-id");
+    logFindParentTrace$2("start", {
+      focalCommentId,
+      parentId,
+      postId,
+      scrollY: round2(window.scrollY),
+      href: location.href
+    });
     if (!parentId) {
       if (!postId) return;
+      logFindParentTrace$2("branch:top-level-post", { focalCommentId, postId, scrollY: round2(window.scrollY) });
       const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`);
       if (postEl) {
         const postHeader = postEl.querySelector(".pr-post-header");
         if (postHeader) smartScrollTo(postHeader, true);
-        const stickyHeader2 = document.querySelector(`.pr-sticky-header .pr-post-header[data-post-id="${postId}"]`);
-        const targets = [postHeader, postEl.querySelector(".pr-post-body-container"), stickyHeader2].filter(Boolean);
-        targets.forEach((t) => t.classList.add("pr-highlight-parent"));
-        setTimeout(() => targets.forEach((t) => t.classList.remove("pr-highlight-parent")), 2e3);
+        highlightBySelectorTemporarily(
+          `.pr-post[data-id="${postId}"] .pr-post-header, .pr-post[data-id="${postId}"] .pr-post-body-container, .pr-sticky-header .pr-post-header[data-post-id="${postId}"]`
+        );
       }
       return;
     }
     const parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
     const isReadPlaceholder = parentEl?.classList.contains("pr-comment-placeholder");
     const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains("pr-missing-parent") || isReadPlaceholder;
+    logFindParentTrace$2("parent:lookup", {
+      focalCommentId,
+      parentId,
+      hasParentEl: !!parentEl,
+      isReadPlaceholder,
+      parentIsPlaceholder,
+      scrollY: round2(window.scrollY)
+    });
     if (parentEl && !parentIsPlaceholder) {
-      smartScrollTo(parentEl, false);
-      parentEl.classList.add("pr-highlight-parent");
-      setTimeout(() => parentEl.classList.remove("pr-highlight-parent"), 2e3);
+      logFindParentTrace$2("branch:parent-visible", { parentId, scrollY: round2(window.scrollY) });
+      scrollToCommentIfNeeded(parentEl, "Find Parent");
+      highlightParentTemporarily(parentEl);
       return;
     }
     if (parentEl && isReadPlaceholder) {
       if (postId) {
-        markAncestorChainForceVisible(parentId, state2);
-        getUIHost().rerenderPostGroup(postId, parentId);
-        const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+        logFindParentTrace$2("branch:parent-read-placeholder", { focalCommentId, parentId, postId, scrollY: round2(window.scrollY) });
+        const directParent = state2.commentById.get(parentId);
+        if (directParent) {
+          directParent.forceVisible = true;
+          directParent.justRevealed = true;
+        }
+        const anchorCommentId = focalCommentId || parentId;
+        const upgraded = await preserveFocalViewportAcrossDomMutation(
+          anchorCommentId,
+          () => upgradeSingleCommentInPlace(parentId, state2),
+          "find-parent:read-placeholder"
+        );
+        logFindParentTrace$2("inplace:read-placeholder-upgrade", {
+          focalCommentId,
+          parentId,
+          anchorCommentId,
+          postId,
+          upgraded,
+          usedFallbackRerender: upgraded === 0,
+          revealMode: "direct-parent-only"
+        });
+        if (upgraded === 0) {
+          getUIHost().rerenderPostGroup(postId, anchorCommentId || parentId);
+        }
+        setupLinkPreviews(state2.comments);
+        let newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+        if (!newParentEl) {
+          await waitForNextPaint();
+          newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+        }
         if (newParentEl) {
-          smartScrollTo(newParentEl, false);
-          newParentEl.classList.add("pr-highlight-parent");
-          setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
+          logFindParentTrace$2("parent:after-rerender", {
+            focalCommentId,
+            parentId,
+            scrollY: round2(window.scrollY)
+          });
+          scrollToCommentIfNeeded(newParentEl, "Find Parent");
+          highlightParentTemporarily(newParentEl);
         }
       }
       return;
@@ -8328,6 +8714,7 @@ currentCommentId = null;
     target.textContent = "[...]";
     try {
       Logger.info(`Find Parent: Fetching missing parent ${parentId} from server...`);
+      logFindParentTrace$2("branch:fetch-missing-parent", { focalCommentId, parentId, scrollY: round2(window.scrollY) });
       const res = await queryGraphQL(GET_COMMENT, { id: parentId });
       const parentComment = res?.comment?.result;
       if (parentComment) {
@@ -8336,15 +8723,38 @@ currentCommentId = null;
           parentComment.forceVisible = true;
           getUIHost().mergeComments([parentComment], true);
           if (parentComment.postId) {
-            getUIHost().rerenderPostGroup(parentComment.postId, parentId);
-            setTimeout(() => {
-              const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
-              if (newParentEl) {
-                smartScrollTo(newParentEl, false);
-                newParentEl.classList.add("pr-highlight-parent");
-                setTimeout(() => newParentEl.classList.remove("pr-highlight-parent"), 2e3);
-              }
-            }, 50);
+            const upgraded = await preserveFocalViewportAcrossDomMutation(
+              focalCommentId,
+              () => upgradeSingleCommentInPlace(parentId, state2),
+              "find-parent:deep-load"
+            );
+            logFindParentTrace$2("inplace:deep-load-upgrade", {
+              focalCommentId,
+              parentId,
+              parentPostId: parentComment.postId,
+              upgraded,
+              usedFallbackRerender: upgraded === 0,
+              revealMode: "direct-parent-only",
+              scrollY: round2(window.scrollY)
+            });
+            if (upgraded === 0) {
+              getUIHost().rerenderPostGroup(parentComment.postId, focalCommentId || parentId);
+            }
+            setupLinkPreviews(state2.comments);
+            let newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+            if (!newParentEl) {
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`);
+            }
+            if (newParentEl) {
+              logFindParentTrace$2("parent:after-deep-load-rerender", {
+                focalCommentId,
+                parentId,
+                scrollY: round2(window.scrollY)
+              });
+              scrollToCommentIfNeeded(newParentEl, "Find Parent");
+              highlightParentTemporarily(newParentEl);
+            }
           }
         }
       } else {
@@ -8355,6 +8765,12 @@ currentCommentId = null;
       alert("Error fetching parent comment.");
     } finally {
       target.textContent = originalText;
+      if (focalCommentId) {
+        const liveFindParentBtn = document.querySelector(
+          `.pr-comment[data-id="${focalCommentId}"] .pr-find-parent`
+        );
+        if (liveFindParentBtn) liveFindParentBtn.textContent = originalText;
+      }
     }
   };
   const handleAuthorUp = (target, _state) => {
@@ -8614,7 +9030,9 @@ currentCommentId = null;
       target.textContent = originalText;
     }
   };
-  const handleLoadParents = async (target, state2) => {
+  const handleLoadParents = async (target, state2, options = {}) => {
+    const preferInPlace = options.preferInPlace ?? true;
+    const traceContext = options.traceContext || "load-parents";
     const commentId = getCommentIdFromTarget(target);
     if (!commentId) return;
     const comment = state2.commentById.get(commentId);
@@ -8638,7 +9056,16 @@ currentCommentId = null;
       }
       if (missingIds.length === 0) {
         target.textContent = originalText;
-        return;
+        const result2 = {
+          commentId,
+          fetchedCount: 0,
+          added: 0,
+          inPlaceUpgraded: 0,
+          usedFallbackRerender: false,
+          missingDomAncestorIds: []
+        };
+        logFindParentTrace$2("trace:load-parents-noop", { traceContext, ...result2 });
+        return result2;
       }
       const fetched = [];
       while (missingIds.length > 0) {
@@ -8662,13 +9089,47 @@ currentCommentId = null;
         comment.forceVisible = true;
         comment.justRevealed = true;
       }
+      let inPlaceUpgraded = 0;
+      let usedFallbackRerender = false;
+      let missingDomAncestorIds = [];
       if (added > 0 && comment.postId) {
-        getUIHost().rerenderPostGroup(comment.postId, commentId);
+        if (preferInPlace) {
+          inPlaceUpgraded = await preserveFocalViewportAcrossDomMutation(
+            options.anchorCommentId || commentId,
+            () => upgradeAncestorChainInPlace(commentId, state2),
+            `${traceContext}:inplace`
+          );
+          missingDomAncestorIds = collectMissingAncestorDomIds(commentId, state2);
+          usedFallbackRerender = missingDomAncestorIds.length > 0;
+          logFindParentTrace$2("trace:load-parents-inplace", {
+            traceContext,
+            commentId,
+            inPlaceUpgraded,
+            missingDomAncestorIds,
+            usedFallbackRerender
+          });
+          if (usedFallbackRerender) {
+            getUIHost().rerenderPostGroup(comment.postId, options.anchorCommentId || commentId);
+          }
+        } else {
+          usedFallbackRerender = true;
+          getUIHost().rerenderPostGroup(comment.postId, options.anchorCommentId || commentId);
+        }
       }
       setTimeout(() => {
         for (const f of fetched) f.justRevealed = false;
         if (comment) comment.justRevealed = false;
       }, 2e3);
+      const result = {
+        commentId,
+        fetchedCount: fetched.length,
+        added,
+        inPlaceUpgraded,
+        usedFallbackRerender,
+        missingDomAncestorIds
+      };
+      logFindParentTrace$2("trace:load-parents-done", { traceContext, ...result });
+      return result;
     } catch (err) {
       Logger.error("Failed to load parents", err);
     } finally {
@@ -8755,34 +9216,57 @@ currentCommentId = null;
   const handleLoadParentsAndScroll = async (target, state2) => {
     const commentId = getCommentIdFromTarget(target);
     if (!commentId) return;
+    logFindParentTrace$2("trace:start", {
+      commentId,
+      scrollY: round2(window.scrollY)
+    });
     let topLevelId = findTopLevelAncestorId(commentId, state2);
     const alreadyLoaded = !!topLevelId;
     markAncestorChainForceVisible(commentId, state2);
     if (!alreadyLoaded) {
-      await handleLoadParents(target, state2);
+      await handleLoadParents(target, state2, {
+        preferInPlace: true,
+        anchorCommentId: commentId,
+        traceContext: "trace-to-root"
+      });
       topLevelId = findTopLevelAncestorId(commentId, state2);
+      logFindParentTrace$2("trace:after-load-parents", {
+        commentId,
+        topLevelId: topLevelId || null,
+        scrollY: round2(window.scrollY)
+      });
     }
     if (topLevelId) {
       let rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
       if (rootEl) {
         const comment = state2.commentById.get(commentId);
-        if (comment?.postId) {
-          getUIHost().rerenderPostGroup(comment.postId, commentId);
+        const needsRerender = !!comment?.postId && ancestorChainNeedsRerender(commentId, state2);
+        if (needsRerender && comment?.postId) {
+          const inPlaceUpgraded = await preserveFocalViewportAcrossDomMutation(
+            commentId,
+            () => upgradeAncestorChainInPlace(commentId, state2),
+            "trace-to-root:ancestor-upgrade"
+          );
+          const missingDomAncestorIds = collectMissingAncestorDomIds(commentId, state2);
+          const usedFallbackRerender = missingDomAncestorIds.length > 0;
+          logFindParentTrace$2("trace:ancestor-upgrade", {
+            commentId,
+            topLevelId,
+            inPlaceUpgraded,
+            missingDomAncestorIds,
+            usedFallbackRerender
+          });
+          if (usedFallbackRerender) {
+            getUIHost().rerenderPostGroup(comment.postId, commentId);
+          }
           rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`);
         }
         if (!rootEl) return;
         await new Promise((resolve) => requestAnimationFrame(resolve));
         await withForcedLayout(rootEl, async () => {
           if (!rootEl.isConnected) return;
-          const isVisible = isElementFullyVisible(rootEl);
-          if (!isVisible) {
-            smartScrollTo(rootEl, false);
-          } else {
-            Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
-          }
-          rootEl.classList.add("pr-highlight-parent");
-          await new Promise((resolve) => setTimeout(resolve, 2e3));
-          rootEl.classList.remove("pr-highlight-parent");
+          scrollToCommentIfNeeded(rootEl, "Trace to Root");
+          highlightParentTemporarily(rootEl);
         });
         return;
       }
@@ -9363,6 +9847,103 @@ getPromptPrefix: getAIStudioPrefix,
     }, { passive: true, signal });
     attachHotkeyListeners(state2, signal);
   };
+  const isFindParentTraceEnabled$1 = () => {
+    try {
+      return window.__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem("pr-find-parent-trace") === "1";
+    } catch {
+      return window.__PR_FIND_PARENT_TRACE__ === true;
+    }
+  };
+  const logFindParentTrace$1 = (event, data) => {
+    if (!isFindParentTraceEnabled$1()) return;
+    let json = "";
+    try {
+      json = JSON.stringify(data);
+    } catch {
+      json = "[unserializable]";
+    }
+    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
+  };
+  const withOverflowAnchorDisabled$1 = () => {
+    const htmlStyle = document.documentElement.style;
+    const bodyStyle = document.body?.style;
+    const prevHtml = htmlStyle.overflowAnchor || "";
+    const prevBody = bodyStyle ? bodyStyle.overflowAnchor || "" : "";
+    htmlStyle.overflowAnchor = "none";
+    if (bodyStyle) bodyStyle.overflowAnchor = "none";
+    return () => {
+      htmlStyle.overflowAnchor = prevHtml;
+      if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
+    };
+  };
+  let instantViewTransitionDepth$1 = 0;
+  const enableInstantViewTransition$1 = () => {
+    instantViewTransitionDepth$1 += 1;
+    document.documentElement.classList.add("pr-vt-instant");
+  };
+  const disableInstantViewTransition$1 = () => {
+    instantViewTransitionDepth$1 = Math.max(0, instantViewTransitionDepth$1 - 1);
+    if (instantViewTransitionDepth$1 === 0) {
+      document.documentElement.classList.remove("pr-vt-instant");
+    }
+  };
+  const runWithViewTransition$1 = (update, enabled = true, traceLabel) => {
+    const rawStartViewTransition = document.startViewTransition;
+    const startViewTransition = rawStartViewTransition ? rawStartViewTransition.bind(document) : void 0;
+    const canUse = enabled && !window.__PR_TEST_MODE__ && typeof startViewTransition === "function";
+    if (!canUse) {
+      logFindParentTrace$1("host:transition-bypass", {
+        label: traceLabel || "",
+        enabled,
+        hasApi: typeof startViewTransition === "function"
+      });
+      try {
+        update();
+      } catch (error) {
+        Logger.error("rerenderPostGroup: update failed (no transition path)", error);
+      }
+      return;
+    }
+    try {
+      logFindParentTrace$1("host:transition-start", { label: traceLabel || "" });
+      enableInstantViewTransition$1();
+      const transition = startViewTransition(() => {
+        return update();
+      });
+      let cleaned = false;
+      const cleanupInstant = () => {
+        if (cleaned) return;
+        cleaned = true;
+        disableInstantViewTransition$1();
+      };
+      if (transition?.updateCallbackDone?.then) {
+        transition.updateCallbackDone.then(() => {
+          logFindParentTrace$1("host:transition-update-done", { label: traceLabel || "" });
+        }).catch((error) => {
+          Logger.warn("rerenderPostGroup: transition update callback failed", error);
+        });
+      }
+      if (transition?.finished?.then) {
+        transition.finished.then(() => {
+          logFindParentTrace$1("host:transition-finished", { label: traceLabel || "" });
+          cleanupInstant();
+        }).catch((error) => {
+          Logger.warn("rerenderPostGroup: transition finished with error", error);
+          cleanupInstant();
+        });
+      } else {
+        cleanupInstant();
+      }
+    } catch (error) {
+      Logger.warn("rerenderPostGroup: startViewTransition failed, falling back", error);
+      disableInstantViewTransition$1();
+      try {
+        update();
+      } catch (updateError) {
+        Logger.error("rerenderPostGroup: update failed after transition fallback", updateError);
+      }
+    }
+  };
   class PowerReaderUIHost {
     state;
     constructor(state2) {
@@ -9393,31 +9974,98 @@ getPromptPrefix: getAIStudioPrefix,
         comments: postComments,
         fullPost: post
       };
-      postContainer.outerHTML = renderPostGroup(group, this.state);
-      const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
-      if (wasExpanded && newPostContainer) {
-        const newBody = newPostContainer.querySelector(".pr-post-body-container");
-        if (newBody && newBody.classList.contains("truncated")) {
-          newBody.classList.remove("truncated");
-          newBody.style.maxHeight = "none";
-          const overlay = newBody.querySelector(".pr-read-more-overlay");
-          if (overlay) overlay.style.display = "none";
-          const readMoreBtn = newBody.querySelector(".pr-post-read-more");
-          if (readMoreBtn) readMoreBtn.style.display = "none";
+      logFindParentTrace$1("host:rerender-start", {
+        postId,
+        anchorCommentId: anchorCommentId || null,
+        beforeTop: beforeTop === null ? null : Math.round(beforeTop * 100) / 100,
+        scrollY: Math.round(window.scrollY * 100) / 100
+      });
+      runWithViewTransition$1(() => {
+        const restoreOverflowAnchor = withOverflowAnchorDisabled$1();
+        try {
+          postContainer.outerHTML = renderPostGroup(group, this.state);
+          logFindParentTrace$1("host:dom-replaced", {
+            postId,
+            anchorCommentId: anchorCommentId || null,
+            scrollY: Math.round(window.scrollY * 100) / 100
+          });
+          const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+          if (wasExpanded && newPostContainer) {
+            const newBody = newPostContainer.querySelector(".pr-post-body-container");
+            if (newBody && newBody.classList.contains("truncated")) {
+              newBody.classList.remove("truncated");
+              newBody.style.maxHeight = "none";
+              const overlay = newBody.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+              const readMoreBtn = newBody.querySelector(".pr-post-read-more");
+              if (readMoreBtn) readMoreBtn.style.display = "none";
+            }
+          }
+          setupLinkPreviews(this.state.comments, newPostContainer || document);
+          refreshPostActionButtons(postId);
+          if (anchorCommentId && beforeTop !== null) {
+            const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+            if (newAnchor) {
+              const afterTop = newAnchor.getBoundingClientRect().top;
+              const delta = afterTop - beforeTop;
+              const oldScrollY = window.scrollY;
+              const targetY = Math.max(0, oldScrollY + delta);
+              Logger.info(`Viewport Preservation [${anchorCommentId}]: beforeTop=${beforeTop.toFixed(2)}, afterTop=${afterTop.toFixed(2)}, delta=${delta.toFixed(2)}, oldScrollY=${oldScrollY.toFixed(2)}`);
+              logFindParentTrace$1("host:anchor-pass1", {
+                postId,
+                anchorCommentId,
+                beforeTop: Math.round(beforeTop * 100) / 100,
+                afterTop: Math.round(afterTop * 100) / 100,
+                delta: Math.round(delta * 100) / 100,
+                oldScrollY: Math.round(oldScrollY * 100) / 100,
+                targetY: Math.round(targetY * 100) / 100
+              });
+              window.scrollTo(0, targetY);
+              const pass2Anchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+              if (pass2Anchor) {
+                const pass2Top = pass2Anchor.getBoundingClientRect().top;
+                const residual = pass2Top - beforeTop;
+                logFindParentTrace$1("host:anchor-pass2-check", {
+                  postId,
+                  anchorCommentId,
+                  pass2Top: Math.round(pass2Top * 100) / 100,
+                  residual: Math.round(residual * 100) / 100,
+                  scrollY: Math.round(window.scrollY * 100) / 100
+                });
+                if (Math.abs(residual) >= 0.5) {
+                  const adjustFrom = window.scrollY;
+                  const pass2Target = Math.max(0, adjustFrom + residual);
+                  window.scrollTo(0, pass2Target);
+                  logFindParentTrace$1("host:anchor-pass2-applied", {
+                    postId,
+                    anchorCommentId,
+                    residual: Math.round(residual * 100) / 100,
+                    adjustFrom: Math.round(adjustFrom * 100) / 100,
+                    pass2Target: Math.round(pass2Target * 100) / 100
+                  });
+                }
+              }
+            } else {
+              logFindParentTrace$1("host:anchor-missing", {
+                postId,
+                anchorCommentId,
+                scrollY: Math.round(window.scrollY * 100) / 100
+              });
+            }
+          }
+        } finally {
+          restoreOverflowAnchor();
+          if (anchorCommentId) {
+            const endAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+            logFindParentTrace$1("host:rerender-end", {
+              postId,
+              anchorCommentId,
+              endScrollY: Math.round(window.scrollY * 100) / 100,
+              endAnchorTop: endAnchor ? Math.round(endAnchor.getBoundingClientRect().top * 100) / 100 : null
+            });
+          }
         }
-      }
-      setupLinkPreviews(this.state.comments);
-      refreshPostActionButtons(postId);
-      if (anchorCommentId && beforeTop !== null) {
-        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-        if (newAnchor) {
-          const afterTop = newAnchor.getBoundingClientRect().top;
-          const delta = afterTop - beforeTop;
-          const oldScrollY = window.scrollY;
-          Logger.info(`Viewport Preservation [${anchorCommentId}]: beforeTop=${beforeTop.toFixed(2)}, afterTop=${afterTop.toFixed(2)}, delta=${delta.toFixed(2)}, oldScrollY=${oldScrollY.toFixed(2)}`);
-          window.scrollTo(0, Math.max(0, oldScrollY + delta));
-        }
-      }
+      }, true, `power-reader:rerenderPostGroup:${postId}:${anchorCommentId || "none"}`);
     }
     mergeComments(newComments, markAsContext = true, postIdMap) {
       let added = 0;
@@ -11252,6 +11900,94 @@ getPromptPrefix: getAIStudioPrefix,
     if (c.post?.user?.displayName) return c.post.user.displayName;
     return "Unknown";
   };
+  const isFindParentTraceEnabled = () => {
+    try {
+      return window.__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem("pr-find-parent-trace") === "1";
+    } catch {
+      return window.__PR_FIND_PARENT_TRACE__ === true;
+    }
+  };
+  const logFindParentTrace = (event, data) => {
+    if (!isFindParentTraceEnabled()) return;
+    let json = "";
+    try {
+      json = JSON.stringify(data);
+    } catch {
+      json = "[unserializable]";
+    }
+    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
+  };
+  const withOverflowAnchorDisabled = () => {
+    const htmlStyle = document.documentElement.style;
+    const bodyStyle = document.body?.style;
+    const prevHtml = htmlStyle.overflowAnchor || "";
+    const prevBody = bodyStyle ? bodyStyle.overflowAnchor || "" : "";
+    htmlStyle.overflowAnchor = "none";
+    if (bodyStyle) bodyStyle.overflowAnchor = "none";
+    return () => {
+      htmlStyle.overflowAnchor = prevHtml;
+      if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
+    };
+  };
+  let instantViewTransitionDepth = 0;
+  const enableInstantViewTransition = () => {
+    instantViewTransitionDepth += 1;
+    document.documentElement.classList.add("pr-vt-instant");
+  };
+  const disableInstantViewTransition = () => {
+    instantViewTransitionDepth = Math.max(0, instantViewTransitionDepth - 1);
+    if (instantViewTransitionDepth === 0) {
+      document.documentElement.classList.remove("pr-vt-instant");
+    }
+  };
+  const runWithViewTransition = (update, enabled = true, traceLabel) => {
+    const rawStartViewTransition = document.startViewTransition;
+    const startViewTransition = rawStartViewTransition ? rawStartViewTransition.bind(document) : void 0;
+    const canUse = enabled && !window.__PR_TEST_MODE__ && typeof startViewTransition === "function";
+    if (!canUse) {
+      logFindParentTrace("archive:transition-bypass", {
+        label: traceLabel || "",
+        enabled,
+        hasApi: typeof startViewTransition === "function"
+      });
+      try {
+        update();
+      } catch (error) {
+        Logger.error("ArchiveUIHost: update failed (no transition path)", error);
+      }
+      return;
+    }
+    try {
+      enableInstantViewTransition();
+      const transition = startViewTransition(() => {
+        return update();
+      });
+      let cleaned = false;
+      const cleanupInstant = () => {
+        if (cleaned) return;
+        cleaned = true;
+        disableInstantViewTransition();
+      };
+      if (transition?.finished?.then) {
+        transition.finished.then(() => {
+          cleanupInstant();
+        }).catch((error) => {
+          Logger.warn("ArchiveUIHost: transition finished with error", error);
+          cleanupInstant();
+        });
+      } else {
+        cleanupInstant();
+      }
+    } catch (error) {
+      Logger.warn("ArchiveUIHost: startViewTransition failed, falling back", error);
+      disableInstantViewTransition();
+      try {
+        update();
+      } catch (updateError) {
+        Logger.error("ArchiveUIHost: update failed after transition fallback", updateError);
+      }
+    }
+  };
   class ArchiveUIHost {
     archiveState;
     readerState;
@@ -11467,18 +12203,46 @@ sortCanonicalItems() {
         comments: postComments,
         fullPost: post
       };
-      postContainer.outerHTML = renderPostGroup(group, this.readerState);
-      setupLinkPreviews(this.readerState.comments);
-      refreshPostActionButtons(postId);
-      if (anchorCommentId && beforeTop !== null) {
-        const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
-        if (newAnchor) {
-          const afterTop = newAnchor.getBoundingClientRect().top;
-          const delta = afterTop - beforeTop;
-          const oldScrollY = window.scrollY;
-          window.scrollTo(0, Math.max(0, oldScrollY + delta));
+      const bodyContainer = postContainer.querySelector(".pr-post-body-container");
+      const wasExpanded = !!(bodyContainer && !bodyContainer.classList.contains("truncated"));
+      runWithViewTransition(() => {
+        const restoreOverflowAnchor = withOverflowAnchorDisabled();
+        try {
+          postContainer.outerHTML = renderPostGroup(group, this.readerState);
+          const newPostContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+          if (wasExpanded && newPostContainer) {
+            const newBody = newPostContainer.querySelector(".pr-post-body-container");
+            if (newBody && newBody.classList.contains("truncated")) {
+              newBody.classList.remove("truncated");
+              newBody.style.maxHeight = "none";
+              const overlay = newBody.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+              const readMoreBtn = newBody.querySelector(".pr-post-read-more");
+              if (readMoreBtn) readMoreBtn.style.display = "none";
+            }
+          }
+          setupLinkPreviews(this.readerState.comments, newPostContainer || document);
+          refreshPostActionButtons(postId);
+          if (anchorCommentId && beforeTop !== null) {
+            const newAnchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+            if (newAnchor) {
+              const afterTop = newAnchor.getBoundingClientRect().top;
+              const delta = afterTop - beforeTop;
+              const oldScrollY = window.scrollY;
+              window.scrollTo(0, Math.max(0, oldScrollY + delta));
+              const pass2Anchor = document.querySelector(`.pr-comment[data-id="${anchorCommentId}"]`);
+              if (pass2Anchor) {
+                const residual = pass2Anchor.getBoundingClientRect().top - beforeTop;
+                if (Math.abs(residual) >= 0.5) {
+                  window.scrollTo(0, Math.max(0, window.scrollY + residual));
+                }
+              }
+            }
+          }
+        } finally {
+          restoreOverflowAnchor();
         }
-      }
+      }, true, `archive:rerenderPostGroup:${postId}:${anchorCommentId || "none"}`);
     }
     mergeComments(newComments, markAsContext = true, postIdMap) {
       let changed = 0;

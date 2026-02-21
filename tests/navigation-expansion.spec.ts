@@ -56,9 +56,11 @@ test.describe('Navigation to Read Placeholders', () => {
 
 
         const c2Loc = page.locator('.pr-comment[data-id="c2"]');
+        const c1Loc = page.locator('.pr-comment[data-id="c1"]');
         await expect(c2Loc).toBeAttached();
 
         // It SHOULD be a checked placeholder because it's read
+        await expect(c1Loc).toHaveClass(/pr-comment-placeholder/);
         await expect(c2Loc).toHaveClass(/pr-comment-placeholder/);
 
         const c3Loc = page.locator('.pr-comment[data-id="c3"]');
@@ -71,6 +73,8 @@ test.describe('Navigation to Read Placeholders', () => {
         const c2Body = c2Loc.locator('> .pr-comment-body');
         await expect(c2Body).toBeVisible();
         await expect(c2Body).toContainText('Middle');
+        // [p]/[^] should reveal only the direct parent; deeper ancestors are for [t].
+        await expect(c1Loc).toHaveClass(/pr-comment-placeholder/);
     });
 
     test('trace-to-root [t] should expand ALL read placeholder ancestors', async ({ page }) => {

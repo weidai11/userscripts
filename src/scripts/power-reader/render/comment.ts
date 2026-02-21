@@ -383,7 +383,7 @@ export const renderComment = (
       <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M to include descendants)">[m]</span>
       <span class="pr-comment-action text-btn ${rDisabled ? 'disabled' : ''}" data-action="load-descendants" title="${rTooltip}">[r]</span>
       <span class="pr-comment-action text-btn ${tDisabled ? 'disabled' : ''}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
-      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment">[^]</span>
+      <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment (Shortkey: p or ^)">[^]</span>
       <span class="pr-collapse text-btn" data-action="collapse" title="Collapse comment and its replies">[−]</span>
       <span class="pr-expand text-btn" data-action="expand" title="Expand comment">[+]</span>
     </span>

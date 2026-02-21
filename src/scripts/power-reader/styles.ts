@@ -44,6 +44,17 @@ export const STYLES = `
       contain-intrinsic-size: auto !important;
   }
 
+  /* Make View Transitions instantaneous when Power Reader opts in. */
+  html.pr-vt-instant::view-transition-group(root),
+  html.pr-vt-instant::view-transition-old(root),
+  html.pr-vt-instant::view-transition-new(root),
+  html.pr-vt-instant::view-transition-group(*),
+  html.pr-vt-instant::view-transition-old(*),
+  html.pr-vt-instant::view-transition-new(*) {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+  }
+
   /* Resize handles */
   .pr-resize-handle {
     position: fixed;

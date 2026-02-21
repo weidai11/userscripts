@@ -33,6 +33,7 @@ export const attachHotkeyListeners = (state: ReaderState, abortSignal?: AbortSig
       'r': 'load-descendants',
       't': 'load-parents-and-scroll',
       '^': 'find-parent',
+      'p': 'find-parent',
       '-': 'collapse',
       '+': 'expand',
       '=': 'expand', // Support = without shift

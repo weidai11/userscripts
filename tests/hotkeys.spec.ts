@@ -188,6 +188,39 @@ test.describe('Power Reader Hotkeys', () => {
         await expect.poll(() => page.evaluate(() => (window as any).loadTriggered)).toBe(true);
     });
 
+    test('[PR-HK-03] Hovering comment and pressing [p] triggers find-parent navigation', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            verbose: true,
+            appVerbose: true,
+            posts: [{ _id: 'p1', title: 'Parent Post', htmlBody: '<p>Body</p>', user: { username: 'Author' } }],
+            comments: [
+                {
+                    _id: 'c1',
+                    postId: 'p1',
+                    htmlBody: '<p>Top-level comment</p>',
+                    postedAt: new Date().toISOString(),
+                    baseScore: 5,
+                    user: { _id: 'u1', username: 'User1', karma: 100 },
+                    post: { _id: 'p1', title: 'Parent Post' }
+                }
+            ]
+        });
+
+        const logs: string[] = [];
+        page.on('console', msg => logs.push(msg.text()));
+
+        const comment = page.locator('.pr-comment[data-id="c1"]');
+        const postHeader = page.locator('.pr-post[data-id="p1"] .pr-post-header').first();
+        await expect(postHeader).toBeVisible();
+
+        await comment.hover();
+        await page.keyboard.press('p');
+
+        await expect(postHeader).toHaveClass(/pr-highlight-parent/);
+        await expect.poll(() => logs.some(l => l.includes("Hotkey 'p' triggering action 'find-parent'"))).toBe(true);
+    });
+
     test('[PR-HK-01][PR-AI-01][PR-POSTBTN-07] Hovering post and pressing [g] triggers AI Studio', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,

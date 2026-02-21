@@ -161,7 +161,8 @@ Comments under a post are organized hierarchically:
   - **[PR-NAV-05]** Targets inside the **sticky header** are considered partially visible (header only) and thus trigger a preview for the full content.
   - **[PR-NAV-09]** **Previewing**: If the target is off-screen, partially hidden, collapsed, or its content is not yet loaded ("unloaded"), it shows a preview popup instead.
 - **Click**: Scrolls to parent comment or the Post Header. 
-  - **[PR-NAV-06]** **Smart Scroll**: Post parents scroll to the top of the viewport (`block: 'start'`). Comment parents scroll to just below the **Sticky Header** of the destination post (accounting for its dynamic height).
+  - **[PR-NAV-06]** **Smart Scroll**: Post parents scroll to the top of the viewport (`block: 'start'`). Comment parents scroll to just below the **Sticky Header** of the destination post (accounting for its dynamic height), but only when needed.
+  - **[PR-NAV-06.1]** **Viewport Stability on Re-render**: If parent navigation triggers a re-render (e.g., expanding a placeholder or deep-loading a missing parent), preserve the focal comment's viewport position first; then scroll only if the resolved parent is still not fully visible.
   - **[PR-NAV-07]** **Highlight**: Provides a temporary animated flash highlight (`.pr-highlight-parent`).
   - **[PR-NAV-08]** **Deep Loading**: If a parent comment is not present in the current feed, clicking `[^]` fetches it from the server and injects it into the post group as context.
   - **[PR-NAV-10]** **Post-Rerender Event Reattachment**: After a post group is re-rendered (e.g., due to deep loading), hover previews and parent highlighting must be re-initialized on the new DOM elements.
@@ -354,7 +355,9 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 - **Combined Action**: "Trace to Root".
 - **Primary Function**: Scrolls to the top-level ancestor (Root) of the thread.
 - **Data Loading**: If the top-level ancestor (or any intermediate parent) is missing from the state, it **recursively fetches** the missing parents from the server before scrolling.
-- **Viewport**: After loading/scrolling, flashes the root comment with `.pr-highlight-parent`.
+- **Viewport**: Preserve the focal comment's viewport position across any re-render caused by `[t]`. Then scroll to Root only if Root is not fully visible.
+- **Sticky-Aware Visibility**: Visibility checks for `[t]` and `[^]` treat content under the visible sticky header as not fully visible.
+- **Highlight**: After loading/scrolling, flashes the root comment with `.pr-highlight-parent`.
 - **Disable Rule**: Always rendered, but disabled if the comment is already at the top level (no parent). Tooltip: "Already at top level".
 
 **[PR-CMTBTN-03]** **Send to AI Studio** (`[g]`):
@@ -535,7 +538,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
     - `G` (Shift+G): Send to AI Studio with descendants
     - `m`: Send to Arena.ai Max
     - `M` (Shift+M): Send to Arena.ai Max with descendants
-    - `^`: Find parent (scroll)
+    - `p` / `^`: Find parent (scroll)
     - `-`: Collapse comment
     - `+` / `=`: Expand comment
 - **[PR-HK-04]** **Input Suppression**: Hotkeys MUST be ignored when the user is typing in an `<input>`, `<textarea>`, or any `contenteditable` element to prevent accidental triggers.

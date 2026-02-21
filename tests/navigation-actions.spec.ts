@@ -328,13 +328,23 @@ test.describe('Comment Action Buttons', () => {
 
         const c1 = page.locator('.pr-comment[data-id="c1"]');
         await expect.poll(async () => {
-            return c1.evaluate(el => el.getBoundingClientRect().top);
-        }).toBeLessThan(500);
-        const c1Top = await c1.evaluate(el => el.getBoundingClientRect().top);
-        if (process.env.PW_SINGLE_FILE_RUN === 'true') {
-            console.log('c1Top after scroll-to-root:', c1Top);
-        }
-        expect(c1Top).toBeLessThan(500);
+            return c1.evaluate(el => {
+                const stickyHeader = document.getElementById('pr-sticky-header');
+                const stickyRect = stickyHeader?.getBoundingClientRect();
+                const stickyStyles = stickyHeader ? window.getComputedStyle(stickyHeader) : null;
+                const stickyTop = stickyHeader && stickyRect && stickyStyles &&
+                    (stickyHeader.classList.contains('visible') || (stickyStyles.display !== 'none' && stickyRect.height > 0))
+                    ? Math.max(0, stickyRect.bottom)
+                    : 0;
+
+                const ownBody = el.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
+                const ownMeta = el.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
+                const target = ownBody || ownMeta || el;
+                const rect = target.getBoundingClientRect();
+
+                return rect.top >= stickyTop && rect.bottom <= window.innerHeight;
+            });
+        }).toBe(true);
         await expect(c1).toHaveClass(/pr-highlight-parent/);
     });
 

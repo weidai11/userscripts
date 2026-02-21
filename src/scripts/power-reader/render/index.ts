@@ -276,7 +276,7 @@ const renderHelpSection = (showHelp: boolean): string => {
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
             <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>

@@ -180,7 +180,7 @@ export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | 
   });
 
   // Authors
-  const authorLinks = document.querySelectorAll('.pr-author') as NodeListOf<HTMLElement>;
+  const authorLinks = container.querySelectorAll('.pr-author') as NodeListOf<HTMLElement>;
   authorLinks.forEach(link => {
     const userId = link.getAttribute('data-author-id');
     if (userId) {
@@ -193,7 +193,7 @@ export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | 
   });
 
   // Comment links
-  const commentLinks = document.querySelectorAll('.pr-comment-body a') as NodeListOf<HTMLAnchorElement>;
+  const commentLinks = container.querySelectorAll('.pr-comment-body a') as NodeListOf<HTMLAnchorElement>;
   commentLinks.forEach(link => {
     const href = link.getAttribute('href');
     if (!href) return;
@@ -251,7 +251,7 @@ export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | 
   });
 
   // Parent links
-  const parentLinks = document.querySelectorAll('.pr-find-parent') as NodeListOf<HTMLElement>;
+  const parentLinks = container.querySelectorAll('.pr-find-parent') as NodeListOf<HTMLElement>;
   parentLinks.forEach(link => {
     const comment = link.closest('.pr-comment');
     const parentId = comment?.getAttribute('data-parent-id');
@@ -308,7 +308,7 @@ export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | 
   });
 
   // Collapsed Comment Expanders
-  const expandButtons = document.querySelectorAll('.pr-expand') as NodeListOf<HTMLElement>;
+  const expandButtons = container.querySelectorAll('.pr-expand') as NodeListOf<HTMLElement>;
   expandButtons.forEach(btn => {
     const comment = btn.closest('.pr-comment');
     const commentId = comment?.getAttribute('data-id');
@@ -322,7 +322,7 @@ export const setupLinkPreviews = (comments: Comment[], container: HTMLElement | 
   });
 
   // Collapsed Placeholder Bars
-  const placeholderBars = document.querySelectorAll('.pr-placeholder-bar') as NodeListOf<HTMLElement>;
+  const placeholderBars = container.querySelectorAll('.pr-placeholder-bar') as NodeListOf<HTMLElement>;
   placeholderBars.forEach(bar => {
     const comment = bar.closest('.pr-comment');
     const commentId = comment?.getAttribute('data-id');

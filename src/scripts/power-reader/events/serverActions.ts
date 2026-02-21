@@ -28,7 +28,6 @@ import type {
 import type { ReaderState } from '../state';
 import { smartScrollTo, withForcedLayout } from '../utils/dom';
 import { CONFIG } from '../config';
-import { isElementFullyVisible } from '../utils/preview';
 import { Logger } from '../utils/logger';
 import { toggleAuthorPreference } from '../utils/storage';
 import { fetchAllPostCommentsWithCache } from '../services/postDescendantsCache';
@@ -49,6 +48,8 @@ import {
 } from './stateOps';
 
 import { getUIHost } from '../render/uiHost';
+import { renderComment } from '../render/comment';
+import { setupLinkPreviews } from '../features/linkPreviews';
 
 const findHighestKnownAncestorId = (commentId: string, state: ReaderState): string | null => {
     let current = state.commentById.get(commentId);
@@ -68,6 +69,402 @@ const findHighestKnownAncestorId = (commentId: string, state: ReaderState): stri
     }
 
     return highestKnownId;
+};
+
+const waitForNextPaint = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => resolve()));
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+const HIGHLIGHT_DURATION_MS = 2000;
+
+const isFindParentTraceEnabled = (): boolean => {
+    try {
+        return (window as any).__PR_FIND_PARENT_TRACE__ === true || localStorage.getItem('pr-find-parent-trace') === '1';
+    } catch {
+        return (window as any).__PR_FIND_PARENT_TRACE__ === true;
+    }
+};
+
+const logFindParentTrace = (event: string, data: Record<string, unknown>): void => {
+    if (!isFindParentTraceEnabled()) return;
+    let json = '';
+    try {
+        json = JSON.stringify(data);
+    } catch {
+        json = '[unserializable]';
+    }
+    Logger.info(`[FindParentTrace] ${event} ${json}`, data);
+};
+
+const getStickyViewportTop = (): number => {
+    const stickyHeader = document.getElementById('pr-sticky-header');
+    if (!stickyHeader) return 0;
+
+    const rect = stickyHeader.getBoundingClientRect();
+    const computed = window.getComputedStyle(stickyHeader);
+    const isVisible = stickyHeader.classList.contains('visible') || (computed.display !== 'none' && rect.height > 0);
+    if (!isVisible) return 0;
+
+    return Math.max(0, stickyHeader.getBoundingClientRect().bottom);
+};
+
+const getCommentNavigationViewportTarget = (commentEl: HTMLElement): HTMLElement => {
+    const ownBody = commentEl.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
+    if (ownBody) return ownBody;
+    const ownMeta = commentEl.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
+    if (ownMeta) return ownMeta;
+    return commentEl;
+};
+
+const isCommentFullyVisibleForNavigation = (commentEl: HTMLElement, viewportTarget: HTMLElement): boolean => {
+    if (commentEl.classList.contains('pr-missing-parent') || commentEl.dataset.placeholder === '1' || commentEl.classList.contains('pr-comment-placeholder')) {
+        return false;
+    }
+
+    const rect = viewportTarget.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const stickyViewportTop = getStickyViewportTop();
+    const inViewport = (
+        rect.top >= stickyViewportTop &&
+        rect.left >= 0 &&
+        rect.bottom <= vh &&
+        rect.right <= vw
+    );
+    if (!inViewport) return false;
+
+    return true;
+};
+
+const scrollToCommentIfNeeded = (commentEl: HTMLElement, contextLabel: string): void => {
+    const commentId = commentEl.getAttribute('data-id') || '(unknown)';
+    const viewportTarget = getCommentNavigationViewportTarget(commentEl);
+    const rect = viewportTarget.getBoundingClientRect();
+    const stickyViewportTop = getStickyViewportTop();
+    logFindParentTrace('scroll:check', {
+        context: contextLabel,
+        commentId,
+        scrollY: round2(window.scrollY),
+        rectTop: round2(rect.top),
+        rectBottom: round2(rect.bottom),
+        rectHeight: round2(rect.height),
+        viewportTargetTag: viewportTarget.tagName.toLowerCase(),
+        viewportTargetClass: viewportTarget.className || '',
+        stickyViewportTop: round2(stickyViewportTop),
+        innerHeight: window.innerHeight,
+    });
+
+    const fullyVisible = isCommentFullyVisibleForNavigation(commentEl, viewportTarget);
+    if (fullyVisible) {
+        Logger.info(`${contextLabel}: Comment ${commentId} already visible enough, skipping scroll.`);
+        logFindParentTrace('scroll:skip-visible', {
+            context: contextLabel,
+            commentId,
+            scrollY: round2(window.scrollY),
+            skipReason: 'fully-visible',
+        });
+        return;
+    }
+
+    const beforeY = window.scrollY;
+    smartScrollTo(commentEl, false);
+    logFindParentTrace('scroll:dispatched', {
+        context: contextLabel,
+        commentId,
+        scrollYBefore: round2(beforeY),
+        scrollYAfterDispatch: round2(window.scrollY),
+    });
+    requestAnimationFrame(() => {
+        const afterRect = commentEl.getBoundingClientRect();
+        logFindParentTrace('scroll:post-frame', {
+            context: contextLabel,
+            commentId,
+            scrollY: round2(window.scrollY),
+            rectTop: round2(afterRect.top),
+            rectBottom: round2(afterRect.bottom),
+        });
+    });
+};
+
+const ancestorChainNeedsRerender = (commentId: string, state: ReaderState): boolean => {
+    let currentId: string | null = commentId;
+    const visited = new Set<string>();
+
+    while (currentId) {
+        if (visited.has(currentId)) break;
+        visited.add(currentId);
+
+        const commentEl = document.querySelector(`.pr-comment[data-id="${currentId}"]`) as HTMLElement;
+        if (!commentEl) return true;
+        if (commentEl.classList.contains('pr-comment-placeholder') || commentEl.classList.contains('pr-missing-parent') || commentEl.dataset.placeholder === '1') {
+            return true;
+        }
+
+        const comment = state.commentById.get(currentId);
+        if (!comment) return true;
+        currentId = comment.parentCommentId || null;
+    }
+
+    return false;
+};
+
+const highlightCleanupTimers = new Map<string, number>();
+const highlightCleanupElementTimers = new WeakMap<HTMLElement, number>();
+
+const clearHighlightBySelector = (selector: string): void => {
+    document.querySelectorAll(selector).forEach((el) => {
+        (el as HTMLElement).classList.remove('pr-highlight-parent');
+    });
+};
+
+const highlightBySelectorTemporarily = (selector: string, durationMs: number = HIGHLIGHT_DURATION_MS): void => {
+    const existingTimer = highlightCleanupTimers.get(selector);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+
+    const targets = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+    if (targets.length === 0) return;
+
+    targets.forEach((el) => {
+        el.classList.remove('pr-highlight-parent');
+        // Force reflow so repeated navigation reliably restarts the animation.
+        void el.offsetWidth;
+        el.classList.add('pr-highlight-parent');
+    });
+
+    const timer = window.setTimeout(() => {
+        clearHighlightBySelector(selector);
+        if (highlightCleanupTimers.get(selector) === timer) {
+            highlightCleanupTimers.delete(selector);
+        }
+    }, durationMs);
+
+    highlightCleanupTimers.set(selector, timer);
+};
+
+const highlightParentTemporarily = (parentEl: HTMLElement): void => {
+    const commentId = parentEl.getAttribute('data-id');
+    if (commentId && parentEl.classList.contains('pr-comment')) {
+        highlightBySelectorTemporarily(`.pr-comment[data-id="${commentId}"]`);
+        return;
+    }
+
+    const existingTimer = highlightCleanupElementTimers.get(parentEl);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+    parentEl.classList.remove('pr-highlight-parent');
+    void parentEl.offsetWidth;
+    parentEl.classList.add('pr-highlight-parent');
+    const timer = window.setTimeout(() => {
+        parentEl.classList.remove('pr-highlight-parent');
+        if (highlightCleanupElementTimers.get(parentEl) === timer) {
+            highlightCleanupElementTimers.delete(parentEl);
+        }
+    }, HIGHLIGHT_DURATION_MS);
+    highlightCleanupElementTimers.set(parentEl, timer);
+};
+
+const getIdleCommentActionLabel = (action: string | null): string | null => {
+    switch (action) {
+        case 'find-parent':
+            return '[^]';
+        case 'load-descendants':
+            return '[r]';
+        case 'load-parents-and-scroll':
+            return '[t]';
+        default:
+            return null;
+    }
+};
+
+const rerenderCommentElementInPlace = (commentId: string, state: ReaderState): boolean => {
+    const commentEl = document.querySelector(`.pr-comment[data-id="${commentId}"]`) as HTMLElement | null;
+    const comment = state.commentById.get(commentId);
+    if (!commentEl || !comment) return false;
+
+    // Preserve already-rendered child subtree to avoid tearing down focal descendants.
+    const repliesEl = Array.from(commentEl.children).find(
+        (child): child is HTMLElement => child instanceof HTMLElement && child.classList.contains('pr-replies')
+    );
+    const repliesHtml = (() => {
+        if (!repliesEl) return '';
+        const repliesClone = repliesEl.cloneNode(true) as HTMLElement;
+        // Runtime-only marker; cloned markup would otherwise skip reattaching listeners.
+        if (repliesClone.hasAttribute('data-preview-attached')) {
+            repliesClone.removeAttribute('data-preview-attached');
+        }
+        repliesClone.querySelectorAll('[data-preview-attached]').forEach((el) => {
+            el.removeAttribute('data-preview-attached');
+        });
+
+        // Normalize transient loading labels in preserved descendants.
+        repliesClone.querySelectorAll('[data-action]').forEach((el) => {
+            const action = el.getAttribute('data-action');
+            const idleLabel = getIdleCommentActionLabel(action);
+            if (idleLabel && (el as HTMLElement).textContent?.trim() === '[...]') {
+                (el as HTMLElement).textContent = idleLabel;
+            }
+        });
+        return repliesClone.outerHTML;
+    })();
+
+    commentEl.outerHTML = renderComment(comment, state, repliesHtml);
+    return true;
+};
+
+const setupLinkPreviewsForCommentPost = (commentId: string, state: ReaderState): void => {
+    const postId = state.commentById.get(commentId)?.postId;
+    const postContainer = postId
+        ? document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement | null
+        : null;
+    setupLinkPreviews(state.comments, postContainer || document);
+};
+
+const upgradeAncestorChainInPlace = (startId: string, state: ReaderState): number => {
+    let upgraded = 0;
+    let currentId: string | null = startId;
+    const visited = new Set<string>();
+
+    while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        if (rerenderCommentElementInPlace(currentId, state)) upgraded += 1;
+        const current = state.commentById.get(currentId);
+        currentId = current?.parentCommentId || null;
+    }
+
+    if (upgraded > 0) {
+        setupLinkPreviewsForCommentPost(startId, state);
+    }
+    return upgraded;
+};
+
+const upgradeSingleCommentInPlace = (commentId: string, state: ReaderState): number => {
+    const upgraded = rerenderCommentElementInPlace(commentId, state) ? 1 : 0;
+    if (upgraded > 0) {
+        setupLinkPreviewsForCommentPost(commentId, state);
+    }
+    return upgraded;
+};
+
+const beginOverflowAnchorSuppression = (): (() => void) => {
+    const htmlStyle = document.documentElement.style as any;
+    const bodyStyle = document.body?.style as any;
+    const prevHtml = htmlStyle.overflowAnchor || '';
+    const prevBody = bodyStyle ? (bodyStyle.overflowAnchor || '') : '';
+
+    htmlStyle.overflowAnchor = 'none';
+    if (bodyStyle) bodyStyle.overflowAnchor = 'none';
+
+    return () => {
+        htmlStyle.overflowAnchor = prevHtml;
+        if (bodyStyle) bodyStyle.overflowAnchor = prevBody;
+    };
+};
+
+const preserveFocalViewportAcrossDomMutation = async <T>(
+    focalCommentId: string | null,
+    mutation: () => T,
+    tracePrefix: string
+): Promise<T> => {
+    if (!focalCommentId) return mutation();
+
+    const beforeEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`) as HTMLElement | null;
+    const beforeTop = beforeEl ? beforeEl.getBoundingClientRect().top : null;
+    const beforeScrollY = window.scrollY;
+    logFindParentTrace(`${tracePrefix}:anchor-start`, {
+        focalCommentId,
+        beforeTop: beforeTop === null ? null : round2(beforeTop),
+        beforeScrollY: round2(beforeScrollY),
+    });
+
+    const restoreOverflowAnchor = beginOverflowAnchorSuppression();
+    let result: T;
+
+    const applyCorrection = (pass: 'pass1' | 'pass2'): void => {
+        if (beforeTop === null) return;
+        const focalEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`) as HTMLElement | null;
+        if (!focalEl) {
+            logFindParentTrace(`${tracePrefix}:anchor-${pass}-missing`, { focalCommentId });
+            return;
+        }
+
+        const currentTop = focalEl.getBoundingClientRect().top;
+        const delta = currentTop - beforeTop;
+        logFindParentTrace(`${tracePrefix}:anchor-${pass}-check`, {
+            focalCommentId,
+            currentTop: round2(currentTop),
+            targetTop: round2(beforeTop),
+            delta: round2(delta),
+            scrollY: round2(window.scrollY),
+        });
+
+        if (Math.abs(delta) < 0.5) return;
+
+        const fromY = window.scrollY;
+        const targetY = Math.max(0, fromY + delta);
+        window.scrollTo(0, targetY);
+        logFindParentTrace(`${tracePrefix}:anchor-${pass}-applied`, {
+            focalCommentId,
+            fromY: round2(fromY),
+            targetY: round2(targetY),
+            delta: round2(delta),
+        });
+    };
+
+    try {
+        result = mutation();
+        applyCorrection('pass1');
+        await waitForNextPaint();
+        applyCorrection('pass2');
+        await waitForNextPaint();
+    } finally {
+        restoreOverflowAnchor();
+    }
+
+    const endEl = document.querySelector(`.pr-comment[data-id="${focalCommentId}"]`) as HTMLElement | null;
+    const endScrollY = window.scrollY;
+    logFindParentTrace(`${tracePrefix}:anchor-end`, {
+        focalCommentId,
+        endTop: endEl ? round2(endEl.getBoundingClientRect().top) : null,
+        endScrollY: round2(endScrollY),
+        scrollDelta: round2(endScrollY - beforeScrollY),
+    });
+
+    return result!;
+};
+
+const collectMissingAncestorDomIds = (startId: string, state: ReaderState): string[] => {
+    const missing: string[] = [];
+    let currentId: string | null = startId;
+    const visited = new Set<string>();
+
+    while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        const inState = state.commentById.get(currentId);
+        if (inState) {
+            const inDom = !!document.querySelector(`.pr-comment[data-id="${currentId}"]`);
+            if (!inDom) missing.push(currentId);
+        }
+        currentId = inState?.parentCommentId || null;
+    }
+
+    return missing;
+};
+
+type LoadParentsResult = {
+    commentId: string;
+    fetchedCount: number;
+    added: number;
+    inPlaceUpgraded: number;
+    usedFallbackRerender: boolean;
+    missingDomAncestorIds: string[];
+};
+
+type LoadParentsOptions = {
+    preferInPlace?: boolean;
+    anchorCommentId?: string;
+    traceContext?: string;
 };
 
 /**
@@ -100,22 +497,31 @@ export const handleExpandPlaceholder = (target: HTMLElement, state: ReaderState)
  */
 export const handleFindParent = async (target: HTMLElement, state: ReaderState): Promise<void> => {
     const commentEl = target.closest('.pr-comment');
+    const focalCommentId = commentEl?.getAttribute('data-id') || null;
     const parentId = commentEl?.getAttribute('data-parent-id');
     const postId = commentEl?.getAttribute('data-post-id');
+    logFindParentTrace('start', {
+        focalCommentId,
+        parentId,
+        postId,
+        scrollY: round2(window.scrollY),
+        href: location.href,
+    });
 
     // Case 1: Top-level comment -> Navigate to Post
     if (!parentId) {
         if (!postId) return;
+        logFindParentTrace('branch:top-level-post', { focalCommentId, postId, scrollY: round2(window.scrollY) });
         const postEl = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement;
         if (postEl) {
             const postHeader = postEl.querySelector('.pr-post-header') as HTMLElement;
             if (postHeader) smartScrollTo(postHeader, true);
 
-            const stickyHeader = document.querySelector(`.pr-sticky-header .pr-post-header[data-post-id="${postId}"]`) as HTMLElement;
-            const targets = [postHeader, postEl.querySelector('.pr-post-body-container'), stickyHeader].filter(Boolean) as HTMLElement[];
-
-            targets.forEach(t => t.classList.add('pr-highlight-parent'));
-            setTimeout(() => targets.forEach(t => t.classList.remove('pr-highlight-parent')), 2000);
+            highlightBySelectorTemporarily(
+                `.pr-post[data-id="${postId}"] .pr-post-header, ` +
+                `.pr-post[data-id="${postId}"] .pr-post-body-container, ` +
+                `.pr-sticky-header .pr-post-header[data-post-id="${postId}"]`
+            );
         }
         return;
     }
@@ -124,25 +530,65 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
     const parentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
     const isReadPlaceholder = parentEl?.classList.contains('pr-comment-placeholder');
     const parentIsPlaceholder = !!parentEl?.dataset.placeholder || parentEl?.classList.contains('pr-missing-parent') || isReadPlaceholder;
+    logFindParentTrace('parent:lookup', {
+        focalCommentId,
+        parentId,
+        hasParentEl: !!parentEl,
+        isReadPlaceholder,
+        parentIsPlaceholder,
+        scrollY: round2(window.scrollY),
+    });
 
     if (parentEl && !parentIsPlaceholder) {
-        smartScrollTo(parentEl, false);
-        parentEl.classList.add('pr-highlight-parent');
-        setTimeout(() => parentEl.classList.remove('pr-highlight-parent'), 2000);
+        logFindParentTrace('branch:parent-visible', { parentId, scrollY: round2(window.scrollY) });
+        scrollToCommentIfNeeded(parentEl, 'Find Parent');
+        highlightParentTemporarily(parentEl);
         return;
     }
 
     // Case 3: Parent in DOM but minimized (read placeholder)
     if (parentEl && isReadPlaceholder) {
         if (postId) {
-            markAncestorChainForceVisible(parentId, state);
-            getUIHost().rerenderPostGroup(postId, parentId);
+            logFindParentTrace('branch:parent-read-placeholder', { focalCommentId, parentId, postId, scrollY: round2(window.scrollY) });
+            const directParent = state.commentById.get(parentId);
+            if (directParent) {
+                (directParent as any).forceVisible = true;
+                (directParent as any).justRevealed = true;
+            }
+            const anchorCommentId = focalCommentId || parentId;
+            const upgraded = await preserveFocalViewportAcrossDomMutation(
+                anchorCommentId,
+                () => upgradeSingleCommentInPlace(parentId, state),
+                'find-parent:read-placeholder'
+            );
+            logFindParentTrace('inplace:read-placeholder-upgrade', {
+                focalCommentId,
+                parentId,
+                anchorCommentId,
+                postId,
+                upgraded,
+                usedFallbackRerender: upgraded === 0,
+                revealMode: 'direct-parent-only',
+            });
+            if (upgraded === 0) {
+                // Fallback if the expected placeholder subtree was not found.
+                getUIHost().rerenderPostGroup(postId, anchorCommentId || parentId);
+            }
+            setupLinkPreviews(state.comments);
 
-            const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+            let newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+            if (!newParentEl) {
+                await waitForNextPaint();
+                newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+            }
             if (newParentEl) {
-                smartScrollTo(newParentEl, false);
-                newParentEl.classList.add('pr-highlight-parent');
-                setTimeout(() => newParentEl.classList.remove('pr-highlight-parent'), 2000);
+                logFindParentTrace('parent:after-rerender', {
+                    focalCommentId,
+                    parentId,
+                    scrollY: round2(window.scrollY),
+                });
+                scrollToCommentIfNeeded(newParentEl, 'Find Parent');
+                highlightParentTemporarily(newParentEl);
             }
         }
         return;
@@ -154,6 +600,7 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
 
     try {
         Logger.info(`Find Parent: Fetching missing parent ${parentId} from server...`);
+        logFindParentTrace('branch:fetch-missing-parent', { focalCommentId, parentId, scrollY: round2(window.scrollY) });
         const res = await queryGraphQL<GetCommentQuery, GetCommentQueryVariables>(GET_COMMENT, { id: parentId });
         const parentComment = res?.comment?.result as unknown as Comment;
 
@@ -167,17 +614,41 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
 
                 // Find the post group container to re-render it
                 if (parentComment.postId) {
-                    getUIHost().rerenderPostGroup(parentComment.postId, parentId);
+                    const upgraded = await preserveFocalViewportAcrossDomMutation(
+                        focalCommentId,
+                        () => upgradeSingleCommentInPlace(parentId, state),
+                        'find-parent:deep-load'
+                    );
+                    logFindParentTrace('inplace:deep-load-upgrade', {
+                        focalCommentId,
+                        parentId,
+                        parentPostId: parentComment.postId,
+                        upgraded,
+                        usedFallbackRerender: upgraded === 0,
+                        revealMode: 'direct-parent-only',
+                        scrollY: round2(window.scrollY),
+                    });
+                    if (upgraded === 0) {
+                        // Fallback when there is no placeholder slot to upgrade in-place.
+                        getUIHost().rerenderPostGroup(parentComment.postId, focalCommentId || parentId);
+                    }
+                    setupLinkPreviews(state.comments);
 
-                    // After re-render, scroll to the parent
-                    setTimeout(() => {
-                        const newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
-                        if (newParentEl) {
-                            smartScrollTo(newParentEl, false);
-                            newParentEl.classList.add('pr-highlight-parent');
-                            setTimeout(() => newParentEl.classList.remove('pr-highlight-parent'), 2000);
-                        }
-                    }, 50);
+                    let newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+                    if (!newParentEl) {
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                        newParentEl = document.querySelector(`.pr-comment[data-id="${parentId}"]`) as HTMLElement;
+                    }
+
+                    if (newParentEl) {
+                        logFindParentTrace('parent:after-deep-load-rerender', {
+                            focalCommentId,
+                            parentId,
+                            scrollY: round2(window.scrollY),
+                        });
+                        scrollToCommentIfNeeded(newParentEl, 'Find Parent');
+                        highlightParentTemporarily(newParentEl);
+                    }
                 }
             }
         } else {
@@ -188,6 +659,12 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
         alert('Error fetching parent comment.');
     } finally {
         target.textContent = originalText;
+        if (focalCommentId) {
+            const liveFindParentBtn = document.querySelector(
+                `.pr-comment[data-id="${focalCommentId}"] .pr-find-parent`
+            ) as HTMLElement | null;
+            if (liveFindParentBtn) liveFindParentBtn.textContent = originalText;
+        }
     }
 };
 
@@ -523,7 +1000,13 @@ export const handleLoadThread = async (target: HTMLElement, state: ReaderState):
     }
 };
 
-export const handleLoadParents = async (target: HTMLElement, state: ReaderState): Promise<void> => {
+export const handleLoadParents = async (
+    target: HTMLElement,
+    state: ReaderState,
+    options: LoadParentsOptions = {}
+): Promise<LoadParentsResult | void> => {
+    const preferInPlace = options.preferInPlace ?? true;
+    const traceContext = options.traceContext || 'load-parents';
     const commentId = getCommentIdFromTarget(target);
     if (!commentId) return;
     const comment = state.commentById.get(commentId);
@@ -551,7 +1034,16 @@ export const handleLoadParents = async (target: HTMLElement, state: ReaderState)
 
         if (missingIds.length === 0) {
             target.textContent = originalText;
-            return;
+            const result: LoadParentsResult = {
+                commentId,
+                fetchedCount: 0,
+                added: 0,
+                inPlaceUpgraded: 0,
+                usedFallbackRerender: false,
+                missingDomAncestorIds: [],
+            };
+            logFindParentTrace('trace:load-parents-noop', { traceContext, ...result });
+            return result;
         }
 
         const fetched: Comment[] = [];
@@ -582,14 +1074,48 @@ export const handleLoadParents = async (target: HTMLElement, state: ReaderState)
             (comment as any).justRevealed = true;
         }
 
+        let inPlaceUpgraded = 0;
+        let usedFallbackRerender = false;
+        let missingDomAncestorIds: string[] = [];
         if (added > 0 && comment.postId) {
-            getUIHost().rerenderPostGroup(comment.postId, commentId);
+            if (preferInPlace) {
+                inPlaceUpgraded = await preserveFocalViewportAcrossDomMutation(
+                    options.anchorCommentId || commentId,
+                    () => upgradeAncestorChainInPlace(commentId, state),
+                    `${traceContext}:inplace`
+                );
+                missingDomAncestorIds = collectMissingAncestorDomIds(commentId, state);
+                usedFallbackRerender = missingDomAncestorIds.length > 0;
+                logFindParentTrace('trace:load-parents-inplace', {
+                    traceContext,
+                    commentId,
+                    inPlaceUpgraded,
+                    missingDomAncestorIds,
+                    usedFallbackRerender,
+                });
+                if (usedFallbackRerender) {
+                    getUIHost().rerenderPostGroup(comment.postId, options.anchorCommentId || commentId);
+                }
+            } else {
+                usedFallbackRerender = true;
+                getUIHost().rerenderPostGroup(comment.postId, options.anchorCommentId || commentId);
+            }
         }
 
         setTimeout(() => {
             for (const f of fetched) (f as any).justRevealed = false;
             if (comment) (comment as any).justRevealed = false;
         }, 2000);
+        const result: LoadParentsResult = {
+            commentId,
+            fetchedCount: fetched.length,
+            added,
+            inPlaceUpgraded,
+            usedFallbackRerender,
+            missingDomAncestorIds,
+        };
+        logFindParentTrace('trace:load-parents-done', { traceContext, ...result });
+        return result;
     } catch (err) {
         Logger.error('Failed to load parents', err);
     } finally {
@@ -694,6 +1220,11 @@ export const handleLoadDescendants = async (target: HTMLElement, state: ReaderSt
 export const handleLoadParentsAndScroll = async (target: HTMLElement, state: ReaderState): Promise<void> => {
     const commentId = getCommentIdFromTarget(target);
     if (!commentId) return;
+    logFindParentTrace('trace:start', {
+        commentId,
+        scrollY: round2(window.scrollY),
+    });
+
     // First, check if root is already loaded
     let topLevelId = findTopLevelAncestorId(commentId, state);
     const alreadyLoaded = !!topLevelId;
@@ -703,18 +1234,43 @@ export const handleLoadParentsAndScroll = async (target: HTMLElement, state: Rea
 
     if (!alreadyLoaded) {
         // If root not found (broken chain), load parents
-        // handleLoadParents re-renders and preserves current comment's viewport top
-        await handleLoadParents(target, state);
+        await handleLoadParents(target, state, {
+            preferInPlace: true,
+            anchorCommentId: commentId,
+            traceContext: 'trace-to-root',
+        });
         // Re-check root
         topLevelId = findTopLevelAncestorId(commentId, state);
+        logFindParentTrace('trace:after-load-parents', {
+            commentId,
+            topLevelId: topLevelId || null,
+            scrollY: round2(window.scrollY),
+        });
     }
 
     if (topLevelId) {
         let rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`) as HTMLElement;
         if (rootEl) {
             const comment = state.commentById.get(commentId);
-            if (comment?.postId) {
-                getUIHost().rerenderPostGroup(comment.postId, commentId);
+            const needsRerender = !!comment?.postId && ancestorChainNeedsRerender(commentId, state);
+            if (needsRerender && comment?.postId) {
+                const inPlaceUpgraded = await preserveFocalViewportAcrossDomMutation(
+                    commentId,
+                    () => upgradeAncestorChainInPlace(commentId, state),
+                    'trace-to-root:ancestor-upgrade'
+                );
+                const missingDomAncestorIds = collectMissingAncestorDomIds(commentId, state);
+                const usedFallbackRerender = missingDomAncestorIds.length > 0;
+                logFindParentTrace('trace:ancestor-upgrade', {
+                    commentId,
+                    topLevelId,
+                    inPlaceUpgraded,
+                    missingDomAncestorIds,
+                    usedFallbackRerender,
+                });
+                if (usedFallbackRerender) {
+                    getUIHost().rerenderPostGroup(comment.postId, commentId);
+                }
                 rootEl = document.querySelector(`.pr-comment[data-id="${topLevelId}"]`) as HTMLElement;
             }
 
@@ -725,17 +1281,8 @@ export const handleLoadParentsAndScroll = async (target: HTMLElement, state: Rea
             await withForcedLayout(rootEl, async () => {
                 if (!rootEl.isConnected) return;
 
-                const isVisible = isElementFullyVisible(rootEl);
-
-                if (!isVisible) {
-                    smartScrollTo(rootEl, false);
-                } else {
-                    Logger.info(`Trace to Root: Root ${topLevelId} already visible, skipping scroll.`);
-                }
-
-                rootEl.classList.add('pr-highlight-parent');
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                rootEl.classList.remove('pr-highlight-parent');
+                scrollToCommentIfNeeded(rootEl, 'Trace to Root');
+                highlightParentTemporarily(rootEl);
             });
             return;
         }

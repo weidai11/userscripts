@@ -53,12 +53,65 @@ test.describe('Power Reader Parent Navigation', () => {
         // Verify highlight
         await expect(parentComment).toHaveClass(/highlight-parent/);
 
-        // Verify it is visible in viewport
+        // Verify the parent's own body/meta is visible in viewport.
+        // Descendants may extend off-screen and should not force additional scrolling.
         const isVisible = await parentComment.evaluate((el) => {
-            const rect = el.getBoundingClientRect();
-            return rect.top >= 0 && rect.bottom <= window.innerHeight;
+            const stickyHeader = document.getElementById('pr-sticky-header');
+            const stickyRect = stickyHeader?.getBoundingClientRect();
+            const stickyStyles = stickyHeader ? window.getComputedStyle(stickyHeader) : null;
+            const stickyTop = stickyHeader && stickyRect && stickyStyles &&
+                (stickyHeader.classList.contains('visible') || (stickyStyles.display !== 'none' && stickyRect.height > 0))
+                ? Math.max(0, stickyRect.bottom)
+                : 0;
+
+            const ownBody = el.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
+            const ownMeta = el.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
+            const target = ownBody || ownMeta || el;
+            const rect = target.getBoundingClientRect();
+            return rect.top >= stickyTop && rect.bottom <= window.innerHeight;
         });
         expect(isVisible).toBe(true);
+    });
+
+    test('[PR-NAV-07] Repeated find-parent highlight does not get stuck', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            verbose: true,
+            comments: [
+                {
+                    _id: 'parent-id',
+                    postId: 'p1',
+                    pageUrl: 'https://example.com/p1',
+                    htmlBody: '<p>Parent comment</p>',
+                    postedAt: new Date(Date.now() - 1000000).toISOString(),
+                    baseScore: 10,
+                    parentCommentId: null,
+                    user: { _id: 'u1', username: 'ParentAuthor' },
+                    post: { _id: 'p1', title: 'Post 1' }
+                },
+                {
+                    _id: 'child-id',
+                    postId: 'p1',
+                    pageUrl: 'https://example.com/c1',
+                    htmlBody: '<p>Child comment</p>',
+                    postedAt: new Date().toISOString(),
+                    baseScore: 5,
+                    parentCommentId: 'parent-id',
+                    user: { _id: 'u2', username: 'ChildAuthor' },
+                    post: { _id: 'p1', title: 'Post 1' }
+                }
+            ]
+        });
+
+        const childFindParent = page.locator('.pr-comment[data-id="child-id"] [data-action="find-parent"]');
+        const parentComment = page.locator('.pr-comment[data-id="parent-id"]');
+
+        await childFindParent.click();
+        await waitAtLeast(250);
+        await childFindParent.click();
+
+        await expect(parentComment).toHaveClass(/highlight-parent/);
+        await expect(parentComment).not.toHaveClass(/highlight-parent/, { timeout: 7000 });
     });
 
     test('Hovering [^] shows preview when parent is off-screen', async ({ page }) => {

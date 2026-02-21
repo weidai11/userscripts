@@ -663,13 +663,30 @@ export function isElementFullyVisible(el: HTMLElement): boolean {
 
   if (el.classList.contains('pr-missing-parent') || el.dataset.placeholder === '1') return false;
 
-  const rect = el.getBoundingClientRect();
+  const visibilityTarget = (() => {
+    if (el.classList.contains('pr-comment')) {
+      const ownBody = el.querySelector(':scope > .pr-comment-body') as HTMLElement | null;
+      if (ownBody) return ownBody;
+      const ownMeta = el.querySelector(':scope > .pr-comment-meta-wrapper') as HTMLElement | null;
+      if (ownMeta) return ownMeta;
+    }
+    return el;
+  })();
+
+  const rect = visibilityTarget.getBoundingClientRect();
   const vh = window.innerHeight;
   const vw = window.innerWidth;
+  const stickyHeader = document.getElementById('pr-sticky-header');
+  const stickyRect = stickyHeader?.getBoundingClientRect();
+  const stickyStyles = stickyHeader ? window.getComputedStyle(stickyHeader) : null;
+  const stickyViewportTop = stickyHeader && stickyRect && stickyStyles &&
+    (stickyHeader.classList.contains('visible') || (stickyStyles.display !== 'none' && stickyRect.height > 0))
+    ? Math.max(0, stickyRect.bottom)
+    : 0;
 
   // 1. Basic viewport check
   const inViewport = (
-    rect.top >= 0 &&
+    rect.top >= stickyViewportTop &&
     rect.left >= 0 &&
     rect.bottom <= vh &&
     rect.right <= vw
@@ -690,7 +707,7 @@ export function isElementFullyVisible(el: HTMLElement): boolean {
     const found = document.elementFromPoint(p.x, p.y);
     // If it's obscured by something that isn't the element or its children, it's not fully visible
     // We allow .pr-preview-overlay because it might be the "Ghost of Tooltips Past"
-    if (!found || !(el === found || el.contains(found) || found.closest('.pr-preview-overlay'))) {
+    if (!found || !(visibilityTarget === found || visibilityTarget.contains(found) || found.closest('.pr-preview-overlay'))) {
       Logger.debug(`isElementFullyVisible: obscured at (${p.x}, ${p.y}) by`, found);
       return false;
     }

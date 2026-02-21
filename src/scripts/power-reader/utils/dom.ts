@@ -5,6 +5,8 @@
 /**
  * Smart scroll to an element, accounting for the correct post's header height
  */
+const DEFAULT_HEADER_HEIGHT = 60;
+
 export const smartScrollTo = (el: HTMLElement, isPost: boolean): void => {
     const postContainer = el.closest('.pr-post') as HTMLElement;
 
@@ -17,13 +19,14 @@ export const smartScrollTo = (el: HTMLElement, isPost: boolean): void => {
     const postHeader = postContainer.querySelector('.pr-post-header') as HTMLElement;
     const stickyHeader = document.getElementById('pr-sticky-header');
     const stickyHeight = (stickyHeader && stickyHeader.classList.contains('visible')) ? stickyHeader.offsetHeight : 0;
-    const headerHeight = postHeader ? postHeader.offsetHeight : (stickyHeight || 60);
+    const postHeaderHeight = postHeader?.offsetHeight || 0;
+    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : (stickyHeight || DEFAULT_HEADER_HEIGHT);
 
     if (isPost) {
         // Post header should be exactly at the top of viewport
         const headerTop = postHeader
-            ? postHeader.getBoundingClientRect().top + window.pageYOffset
-            : postContainer.getBoundingClientRect().top + window.pageYOffset;
+            ? postHeader.getBoundingClientRect().top + window.scrollY
+            : postContainer.getBoundingClientRect().top + window.scrollY;
 
         window.scrollTo({
             top: headerTop,
@@ -31,7 +34,7 @@ export const smartScrollTo = (el: HTMLElement, isPost: boolean): void => {
         });
     } else {
         // Comment should be just below the calculated header height
-        const elementTop = el.getBoundingClientRect().top + window.pageYOffset;
+        const elementTop = el.getBoundingClientRect().top + window.scrollY;
         window.scrollTo({
             top: elementTop - headerHeight - 10, // 10px buffer
             behavior: (window as any).__PR_TEST_MODE__ ? 'instant' : 'smooth' as ScrollBehavior
