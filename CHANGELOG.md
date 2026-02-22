@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.694] - 2026-02-21
+
+### Added
+- **EA Forum Agree/Disagree Handling**: Corrected the display and voting logic for "Agree" and "Disagree" reactions on the EA Forum.
+    - **Separate Reaction Chips**: EAF's anonymous "Agree" and "Disagree" are now rendered as separate reaction chips with individual counts, matching the native EAF interface.
+    - **Unified Payload Format**: Updated voting mutations to use the correct EAF-style top-level payload (`{ agree: true }`) instead of the LW-style agreement axis or reacts array.
+    - **Mutual Exclusivity**: Implemented mutual exclusivity for "Agree" and "Disagree" on EAF; voting for one automatically clears the other.
+    - **Agreement Axis Suppression**: Automatically hides the redundant LessWrong-style agreement axis when viewing EAF content or when on the EAF host.
+    - **Context-Aware Rendering**: Added `votingSystem` to GraphQL fragments to reliably distinguish between EAF (`eaEmojis`) and LW (`twoAxis`) voting systems, ensuring correct display in the User Archive even when crossposted.
+- **Added Comprehensive Tests**: Created `tests/eaf-reactions.spec.ts` to verify correct rendering, voting payloads, and mutual exclusivity for EAF reactions.
+
 ## [1.2.693] - 2026-02-21
 
 ### Fixed

@@ -66,7 +66,9 @@ export const handleReactionVote = async (
     !!state.currentUserId,
     comment.currentUserVote as KarmaVote,
     comment.currentUserExtendedVote as CurrentUserExtendedVote,
-    quote
+    quote,
+    'comment',
+    comment.votingSystem === 'eaEmojis'
   );
 
   if (res) {

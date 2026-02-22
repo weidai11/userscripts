@@ -410,10 +410,10 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
     }, serialized);
 }
 
-export async function initPowerReader(page: Page, options?: MockSetupOptions): Promise<void> {
+export async function initPowerReader(page: Page, options?: MockSetupOptions, url: string = 'https://www.lesswrong.com/reader'): Promise<void> {
     const scriptContent = getScriptContent();
     await setupMockEnvironment(page, options);
-    await page.goto('https://www.lesswrong.com/reader', { waitUntil: 'domcontentloaded' });
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached', timeout: 15000 });
 }

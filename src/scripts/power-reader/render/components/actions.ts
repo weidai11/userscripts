@@ -85,6 +85,17 @@ export const renderReactions = (
     // Calculate counts for each reaction type
     const reactionCounts: Record<string, number> = {};
 
+    // 1. Add top-level counts (e.g. EA Forum "agree", "disagree")
+    if (extendedScore) {
+        allReactions.forEach(reaction => {
+            const count = (extendedScore as any)[reaction.name];
+            if (typeof count === 'number' && count > 0) {
+                reactionCounts[reaction.name] = (reactionCounts[reaction.name] || 0) + count;
+            }
+        });
+    }
+
+    // 2. Add counts from reacts array (named reactions)
     Object.entries(reacts).forEach(([reactName, users]) => {
         let score = 0;
         users.forEach(u => {
@@ -92,13 +103,18 @@ export const renderReactions = (
             else score += 1;
         });
         if (score > 0) {
-            reactionCounts[reactName] = score;
+            reactionCounts[reactName] = (reactionCounts[reactName] || 0) + score;
         }
     });
 
     allReactions.forEach(reaction => {
         const count = reactionCounts[reaction.name] || 0;
-        const userVoted = userReacts.some(r => r.react === reaction.name);
+        let userVoted = userReacts.some(r => r.react === reaction.name);
+
+        // Also check top-level keys for EA Forum style votes
+        if (!userVoted && currentUserExtendedVote && (currentUserExtendedVote as any)[reaction.name]) {
+            userVoted = true;
+        }
 
         if (count > 0 || userVoted) {
             const filter = reaction.filter || DEFAULT_FILTER;

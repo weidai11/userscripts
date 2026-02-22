@@ -30,15 +30,25 @@ export const renderMetadata = (
   const authorName = item.user?.displayName || authorHandle;
   const authorId = item.user?._id || '';
 
+  const isEAHost = window.location.hostname.includes('effectivealtruism.org') || window.location.hostname === 'localhost';
+  const isEASystem = item.votingSystem === 'eaEmojis';
+
+  // EA Forum uses reactions for Agree/Disagree, while LessWrong uses a separate agreement axis.
+  // We disable the separate agreement axis for EA Forum content or when on the EAF host to avoid redundancy.
+  const showAgreement = !isEAHost && !isEASystem;
+
+  const agreementScore = item.extendedScore?.agreement ?? (item.afExtendedScore as any)?.agreement ?? 0;
+  const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
+
   const voteButtonsHtml = renderVoteButtons(
     item._id,
     item.baseScore || 0,
     item.currentUserVote ?? null,
     item.currentUserExtendedVote ?? null,
-    (item.afExtendedScore as any)?.agreement ?? 0,
+    agreementScore,
     isPost ? (item as Post).voteCount || 0 : 0,
-    0, // agreementVoteCount
-    isPost ? window.location.hostname.includes('effectivealtruism.org') || window.location.hostname === 'localhost' : true, // showAgreement: Posts (EAF only), Comments (All)
+    agreementVoteCount,
+    showAgreement,
     isFullPost // showButtons
   );
 

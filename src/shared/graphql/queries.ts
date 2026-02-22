@@ -42,6 +42,7 @@ export const POST_FIELDS_LITE = /* GraphQL */ `
     }
     extendedScore
     afExtendedScore
+    votingSystem
     currentUserVote
     currentUserExtendedVote
   }
@@ -117,6 +118,7 @@ export const COMMENT_FIELDS_CORE = /* GraphQL */ `
     }
     extendedScore
     afExtendedScore
+    votingSystem
     currentUserVote
     currentUserExtendedVote
   }
@@ -455,6 +457,7 @@ export type Post = {
   };
   extendedScore: NamesAttachedReactionsScore | null;
   afExtendedScore: any;
+  votingSystem?: string | null;
   currentUserVote: string | number | null;
   currentUserExtendedVote: CurrentUserExtendedVote | null;
   contents: {
@@ -508,6 +511,7 @@ export type Comment = {
   parentComment: ParentCommentRef | null;
   extendedScore: NamesAttachedReactionsScore | null;
   afExtendedScore: any;
+  votingSystem?: string | null;
   currentUserVote: string | number | null;
   currentUserExtendedVote: CurrentUserExtendedVote | null;
   /** @deprecated Use contextType instead */
@@ -523,6 +527,7 @@ export type Comment = {
 export type NamesAttachedReactionsScore = {
   reacts: Record<string, Array<{ userId: string; reactType: string; quotes?: Array<{ quote: string }> }>>;
   agreement?: number;
+  agreementVoteCount?: number;
 };
 
 export type CurrentUserExtendedVote = {

@@ -113,7 +113,13 @@ export class ReactionPicker {
         const renderSectionTitle = (title: string) => `<div class="pr-picker-section-title">${title}</div>`;
 
         const renderPickerItem = (reaction: ReactionMetadata, mode: 'grid' | 'list') => {
-            const voted = userVotes.some(v => v.react === reaction.name);
+            let voted = userVotes.some(v => v.react === reaction.name);
+            
+            // Also check top-level keys for EA Forum style votes
+            if (!voted && comment?.currentUserExtendedVote && (comment.currentUserExtendedVote as any)[reaction.name]) {
+                voted = true;
+            }
+
             const filter = reaction.filter || DEFAULT_FILTER;
             const imgStyle = `
           filter: opacity(${filter.opacity ?? 1}) saturate(${filter.saturate ?? 1});
@@ -458,7 +464,9 @@ export class ReactionPicker {
             !!this.currentUserId,
             comment.currentUserVote as KarmaVote,
             comment.currentUserExtendedVote as CurrentUserExtendedVote,
-            quote
+            quote,
+            'comment',
+            comment.votingSystem === 'eaEmojis'
         );
 
         if (res) {

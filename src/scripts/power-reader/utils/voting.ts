@@ -129,7 +129,8 @@ export async function castReactionVote(
   currentKarma: KarmaVote | null = 'neutral',
   currentExtendedVote: CurrentUserExtendedVote | null = {},
   quote: string | null = null,
-  documentType: 'comment' | 'post' = 'comment'
+  documentType: 'comment' | 'post' = 'comment',
+  isEA: boolean = false
 ): Promise<VoteResponse | null> {
   // 1. Get existing reacts list
   const existingReacts = currentExtendedVote?.reacts || [];
@@ -173,16 +174,42 @@ export async function castReactionVote(
 
     if (quote) {
       newReaction.quotes = [quote];
+      newReacts.push(newReaction);
+    } else if (!isEA) {
+      // For standard LW, add to reacts array. 
+      // For EAF, we handle it via top-level keys below unless it's a quoted reaction.
+      newReacts.push(newReaction);
     }
-
-    newReacts.push(newReaction);
   }
 
   // 4. Construct payload, preserving agreement
-  const extendedVotePayload = {
-    agreement: currentExtendedVote?.agreement,
-    reacts: newReacts
-  };
+  let extendedVotePayload: any;
+
+  if (isEA && !quote) {
+    // EA Forum style: Top-level keys for reactions
+    const currentEAExVote = (currentExtendedVote as any) || {};
+    extendedVotePayload = { ...currentEAExVote };
+    
+    // Toggle the current reaction
+    const isSelected = !!currentEAExVote[reactionName];
+    extendedVotePayload[reactionName] = !isSelected;
+
+    // Handle mutual exclusivity for agree/disagree
+    if (reactionName === 'agree' && extendedVotePayload[reactionName]) {
+      extendedVotePayload['disagree'] = false;
+    } else if (reactionName === 'disagree' && extendedVotePayload[reactionName]) {
+      extendedVotePayload['agree'] = false;
+    }
+    
+    // Ensure reacts array is also preserved if it exists
+    extendedVotePayload.reacts = newReacts;
+  } else {
+    // LessWrong style: reacts array
+    extendedVotePayload = {
+      agreement: currentExtendedVote?.agreement,
+      reacts: newReacts
+    };
+  }
 
   try {
     if (documentType === 'post') {
