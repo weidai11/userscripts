@@ -62,6 +62,108 @@ const getCursorTimestampFromBatch = <T extends { postedAt: string }>(
     return null;
 };
 
+const parseTimestampMs = (timestamp: string): number | null => {
+    const value = Date.parse(timestamp);
+    return Number.isFinite(value) ? value : null;
+};
+
+const compareTimestamps = (a: string, b: string): number => {
+    const aMs = parseTimestampMs(a);
+    const bMs = parseTimestampMs(b);
+    if (aMs !== null && bMs !== null) return aMs - bMs;
+    // Fallback for unexpected non-ISO-but-comparable strings.
+    return a.localeCompare(b);
+};
+
+const getLatestCursorTimestampFromBatch = <T extends { postedAt: string }>(
+    rawItems: Array<T | null | undefined>,
+    baselineCursor: string | null
+): string | null => {
+    let latest: string | null = null;
+
+    for (const item of rawItems) {
+        const postedAt = (item as any)?.postedAt;
+        if (typeof postedAt !== 'string' || postedAt.length === 0) continue;
+        if (baselineCursor && compareTimestamps(postedAt, baselineCursor) <= 0) continue;
+        if (!latest || compareTimestamps(postedAt, latest) > 0) {
+            latest = postedAt;
+        }
+    }
+
+    return latest;
+};
+
+const summarizeBatchForCursorDebug = <T extends { postedAt: string; _id: string }>(
+    rawItems: Array<T | null | undefined>
+): {
+    firstTimestamp: string | null;
+    lastTimestamp: string | null;
+    firstId: string | null;
+    lastId: string | null;
+    uniqueIdCount: number;
+    duplicateIdCount: number;
+    uniqueTimestampCount: number;
+    missingTimestampCount: number;
+    headIds: string[];
+    tailIds: string[];
+} => {
+    const seenIds = new Set<string>();
+    const duplicateIds = new Set<string>();
+    const uniqueTimestamps = new Set<string>();
+    const idSequence: string[] = [];
+    let missingTimestampCount = 0;
+    let firstTimestamp: string | null = null;
+    let lastTimestamp: string | null = null;
+    let firstId: string | null = null;
+    let lastId: string | null = null;
+
+    for (const item of rawItems) {
+        const anyItem = item as any;
+        const itemId = typeof anyItem?._id === 'string' && anyItem._id.length > 0
+            ? anyItem._id
+            : '(missing-id)';
+        idSequence.push(itemId);
+
+        if (itemId !== '(missing-id)') {
+            if (seenIds.has(itemId)) duplicateIds.add(itemId);
+            seenIds.add(itemId);
+        }
+
+        const postedAt = typeof anyItem?.postedAt === 'string' && anyItem.postedAt.length > 0
+            ? anyItem.postedAt
+            : null;
+
+        if (!postedAt) {
+            missingTimestampCount++;
+            continue;
+        }
+
+        uniqueTimestamps.add(postedAt);
+        if (!firstTimestamp) {
+            firstTimestamp = postedAt;
+            firstId = itemId;
+        }
+        lastTimestamp = postedAt;
+        lastId = itemId;
+    }
+
+    const headIds = idSequence.slice(0, 3);
+    const tailIds = idSequence.slice(Math.max(0, idSequence.length - 3));
+
+    return {
+        firstTimestamp,
+        lastTimestamp,
+        firstId,
+        lastId,
+        uniqueIdCount: seenIds.size,
+        duplicateIdCount: duplicateIds.size,
+        uniqueTimestampCount: uniqueTimestamps.size,
+        missingTimestampCount,
+        headIds,
+        tailIds
+    };
+};
+
 const extractImmediateParentWithBody = (comment: Comment): Comment | null => {
     const parent = comment.parentComment as ParentCommentRef | null | undefined;
     if (!parent?._id) return null;
@@ -83,7 +185,12 @@ const extractImmediateParentWithBody = (comment: Comment): Comment | null => {
         rejected: false,
         topLevelCommentId: comment.topLevelCommentId || parent._id,
         user: parent.user
-            ? { ...parent.user, slug: '', karma: 0, htmlBio: '' }
+            ? {
+                ...parent.user,
+                slug: (parent.user as any).slug || '',
+                karma: typeof (parent.user as any).karma === 'number' ? (parent.user as any).karma : 0,
+                htmlBio: (parent.user as any).htmlBio || ''
+            }
             : null as any,
         postId,
         post: (comment as any).post ?? null,
@@ -117,9 +224,12 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor: string | null = afterDate ? afterDate.toISOString() : null;
+    let batchNumber = 0;
+    let previousBatchTail: { id: string | null; postedAt: string | null } | null = null;
 
     while (hasMore) {
         const startTime = Date.now();
+        batchNumber++;
         try {
             console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
             const requestBatch = async (limit: number): Promise<Array<T | null | undefined>> => {
@@ -229,17 +339,70 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
             if (onProgress) onProgress(allItems.length);
 
             if (hasMore) {
-                // Update cursor to the timestamp of the last item in the batch.
+                // Update cursor to the latest timestamp in the batch that is
+                // strictly newer than the current cursor.
                 // We intentionally avoid stopping early on short non-empty batches.
                 // Some partial-response paths may return fewer items than requested
                 // before the true end of collection.
-                const nextCursor = getCursorTimestampFromBatch(rawResults);
-                if (!nextCursor || nextCursor === afterCursor) {
-                    Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
+                const batchSummary = summarizeBatchForCursorDebug(rawResults);
+                const nextCursorTail = getCursorTimestampFromBatch(rawResults);
+                const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor);
+                if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
+                    Logger.debug(
+                        `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
+                    );
+                }
+                const nextCursor = nextCursorLatest;
+                if (!nextCursor) {
+                    const stopReason = 'cursor_not_advancing';
+                    const hint = !nextCursorTail
+                        ? (batchSummary.missingTimestampCount === rawResults.length
+                            ? 'all_raw_items_missing_postedAt'
+                            : 'tail_item_missing_or_invalid_postedAt')
+                        : (batchSummary.uniqueTimestampCount <= 1
+                            ? 'batch_collapsed_to_single_timestamp'
+                            : 'server_returned_non_advancing_page');
+                    Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
+                        key,
+                        batchNumber,
+                        hint,
+                        request: {
+                            userId,
+                            currentLimit,
+                            fetchLimitUsed: fetchLimitUsed
+                        },
+                        cursor: {
+                            afterCursor,
+                            nextCursor,
+                            nextCursorTail,
+                            nextCursorLatest
+                        },
+                        counts: {
+                            raw: rawResults.length,
+                            valid: results.length,
+                            invalid: rawResults.length - results.length,
+                            accumulatedUniqueItems: allItems.length,
+                            uniqueIdsInRawBatch: batchSummary.uniqueIdCount,
+                            duplicateIdsInRawBatch: batchSummary.duplicateIdCount,
+                            uniqueTimestampsInRawBatch: batchSummary.uniqueTimestampCount,
+                            missingTimestampsInRawBatch: batchSummary.missingTimestampCount
+                        },
+                        batchEdges: {
+                            first: { id: batchSummary.firstId, postedAt: batchSummary.firstTimestamp },
+                            last: { id: batchSummary.lastId, postedAt: batchSummary.lastTimestamp },
+                            headIds: batchSummary.headIds,
+                            tailIds: batchSummary.tailIds
+                        },
+                        previousBatchTail
+                    });
                     hasMore = false;
                 } else {
                     afterCursor = nextCursor;
                 }
+                previousBatchTail = {
+                    id: batchSummary.lastId,
+                    postedAt: batchSummary.lastTimestamp
+                };
             }
         } catch (e) {
             Logger.error(`Error fetching ${key} with cursor ${afterCursor}:`, e);

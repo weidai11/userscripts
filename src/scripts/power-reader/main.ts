@@ -31,6 +31,7 @@ import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudio
 import { initArenaMaxListener, setupArenaMaxKeyboard } from './features/arenaMaxPopup';
 import { setupHeaderInjection } from './features/headerInjection';
 import { initArchive } from './archive/index';
+import { getForumMeta } from './utils/forum';
 
 declare const __APP_VERSION__: string;
 
@@ -121,10 +122,11 @@ const loadAndRender = async (): Promise<void> => {
   if (!root) return;
 
   const state = getState();
+  const { forumLabel, forumHomeUrl } = getForumMeta();
 
   root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

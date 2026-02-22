@@ -37,6 +37,31 @@ test.describe('Author Info Features', () => {
         await expect(authorLink).toHaveAttribute('target', '_blank');
     });
 
+    test('[PR-AUTH-04] Username fallback normalizes to slug-style profile URL when slug is missing', async ({ page }) => {
+        const comments = [
+            {
+                _id: 'c-normalize-1',
+                postId: 'p1',
+                htmlBody: '<p>Test Comment</p>',
+                postedAt: new Date().toISOString(),
+                baseScore: 10,
+                user: {
+                    _id: 'u-wei',
+                    username: 'Wei_Dai',
+                    displayName: 'Wei Dai',
+                    karma: 500
+                },
+                post: { _id: 'p1', title: 'Post 1' }
+            }
+        ];
+
+        await initPowerReader(page, { comments });
+
+        const authorLink = page.locator('.pr-comment[data-id="c-normalize-1"] .pr-author');
+        await expect(authorLink).toBeVisible();
+        await expect(authorLink).toHaveAttribute('href', '/users/wei-dai');
+    });
+
     test('[PR-AUTH-09] Author hover should show preview with bio', async ({ page }) => {
         const prPage = new PowerReaderPage(page);
         const comments = [

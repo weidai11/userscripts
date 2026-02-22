@@ -5,6 +5,7 @@
 
 import { getKey } from './storage';
 import { Logger } from './logger';
+import { isEAForumHost } from './forum';
 
 export interface ReactionFilter {
     padding?: number;
@@ -158,7 +159,7 @@ let reactionsCache: ReactionMetadata[] = [];
  * Uses cached scraped data if available, merged with bootstrap defaults.
  */
 export function getReactions(): ReactionMetadata[] {
-    const isEA = window.location.hostname.includes('effectivealtruism.org');
+    const isEA = isEAForumHost();
     let finalReactions = [...(isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS)];
 
     const getCachedData = () => {
@@ -302,7 +303,7 @@ export async function initializeReactions() {
 
     if (scripts.length === 0) {
         Logger.warn("No candidate scripts found for scraping. Using bootstrap fallback.");
-        const isEA = window.location.hostname.includes('effectivealtruism.org');
+        const isEA = isEAForumHost();
         reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
         return;
     }
@@ -359,7 +360,7 @@ export async function initializeReactions() {
 
     if (!anySuccess) {
         Logger.warn("FAILED to scrape reactions from any script bundle. Using bootstrap fallback.");
-        const isEA = window.location.hostname.includes('effectivealtruism.org');
+        const isEA = isEAForumHost();
         reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
 }

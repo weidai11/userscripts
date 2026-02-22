@@ -109,6 +109,83 @@ test.describe('Power Reader Archive Route', () => {
     await expect(page.locator('.pr-archive-index-item .pr-index-title').first()).toHaveText('Old High Score Post');
   });
 
+  test('[PR-ARCH-06] archive init recovers if the site clears DOM during sync', async ({ page }) => {
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
+const win = window;
+win.__TEST_ARCHIVE_CLOBBERED__ = false;
+const clobberOnce = () => {
+  if (win.__TEST_ARCHIVE_CLOBBERED__) return;
+  if (!document.getElementById('archive-feed')) return;
+  win.__TEST_ARCHIVE_CLOBBERED__ = true;
+  setTimeout(() => {
+    document.body.innerHTML = '<div id="site-reset">Native reset happened</div>';
+  }, 0);
+};
+const timer = setInterval(() => {
+  clobberOnce();
+  if (win.__TEST_ARCHIVE_CLOBBERED__) {
+    clearInterval(timer);
+  }
+}, 5);
+`,
+      onGraphQL: `
+const userId = 'u-race';
+const userObj = { _id: userId, username: 'Race_User', displayName: 'Race User', slug: 'race-user', karma: 100 };
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: userObj } };
+}
+if (query.includes('GetUserPosts')) {
+  return new Promise(resolve => {
+    setTimeout(() => resolve({
+      data: {
+        posts: {
+          results: [
+            {
+              _id: 'p-race',
+              title: 'Race Condition Post',
+              slug: 'race-condition-post',
+              pageUrl: 'https://lesswrong.com/posts/p-race',
+              postedAt: '2025-01-02T12:00:00Z',
+              baseScore: 42,
+              voteCount: 10,
+              commentCount: 0,
+              htmlBody: '<p>Race post body</p>',
+              contents: { markdown: 'Race post body' },
+              user: userObj
+            }
+          ]
+        }
+      }
+    }), 80);
+  });
+}
+if (query.includes('GetUserComments')) {
+  return new Promise(resolve => {
+    setTimeout(() => resolve({ data: { comments: { results: [] } } }), 80);
+  });
+}
+return { data: {} };
+`
+    });
+
+    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Race_User', { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await expect(page.locator('#archive-feed')).toBeVisible();
+    await expect(page.locator('.pr-header')).toContainText('User Archive: Race_User');
+    await expect(page.locator('.pr-loading')).toHaveCount(0);
+    await expect(page.locator('.pr-item h2').first()).toHaveText('Race Condition Post');
+    await expect(page.locator('#site-reset')).toHaveCount(0);
+
+    const wasClobbered = await page.evaluate(() => (window as any).__TEST_ARCHIVE_CLOBBERED__ === true);
+    expect(wasClobbered).toBe(true);
+  });
+
   test('[PR-UARCH-41] archive search worker is enabled by default', async ({ page }) => {
     await setupMockEnvironment(page, {
       mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',

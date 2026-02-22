@@ -280,6 +280,7 @@ test.describe('User Archive Context Type & View Modes', () => {
     const parentStub = page.locator('.pr-context-placeholder[data-id="comment-parent"]');
     await expect(parentStub).toBeVisible();
     await expect(parentStub.locator(':scope > .pr-comment-meta .pr-author')).toContainText('Parent Author');
+    await expect(parentStub.locator(':scope > .pr-comment-meta .pr-author')).toHaveAttribute('href', '/users/parentauthor');
     await expect(parentStub.locator(':scope > .pr-comment-meta .pr-karma-score')).toHaveText('42');
     await expect(parentStub.locator(':scope > .pr-comment-meta .pr-agreement-score')).toHaveText('7');
 

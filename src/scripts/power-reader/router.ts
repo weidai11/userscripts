@@ -21,6 +21,7 @@ export const getRoute = (): RouteResult => {
   const host = window.location.hostname;
   const pathname = window.location.pathname;
   const params = new URLSearchParams(window.location.search);
+  const isHost = (domain: string): boolean => host === domain || host.endsWith(`.${domain}`);
 
   // AI Studio domain
   if (host === 'aistudio.google.com') {
@@ -47,9 +48,9 @@ export const getRoute = (): RouteResult => {
 
   // LessWrong / EA Forum / GreaterWrong
   const isForumDomain =
-    host.includes('lesswrong.com') ||
-    host.includes('forum.effectivealtruism.org') ||
-    host.includes('greaterwrong.com');
+    isHost('lesswrong.com') ||
+    isHost('forum.effectivealtruism.org') ||
+    isHost('greaterwrong.com');
 
   if (!isForumDomain) {
     return { type: 'skip' };

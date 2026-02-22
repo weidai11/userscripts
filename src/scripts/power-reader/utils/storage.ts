@@ -5,6 +5,7 @@
  */
 
 import { Logger } from './logger';
+import { isEAForumHostname } from './forum';
 
 declare const GM_setValue: (key: string, value: string) => void;
 declare const GM_getValue: (key: string, defaultValue: string) => string;
@@ -24,7 +25,7 @@ const STORAGE_KEYS = {
  */
 export function getKey(baseKey: string): string {
   const hostname = window.location.hostname;
-  if (hostname.includes('effectivealtruism.org')) {
+  if (isEAForumHostname(hostname)) {
     return `ea-${baseKey}`;
   }
   return baseKey;

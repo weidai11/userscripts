@@ -1617,6 +1617,7 @@ dirty.indexOf("<") === -1) {
     const host = window.location.hostname;
     const pathname = window.location.pathname;
     const params = new URLSearchParams(window.location.search);
+    const isHost = (domain) => host === domain || host.endsWith(`.${domain}`);
     if (host === "aistudio.google.com") {
       if (!pathname.startsWith("/prompts")) {
         Logger.debug(`AI Studio Router: Skipping non-prompt path: ${pathname}`);
@@ -1635,7 +1636,7 @@ dirty.indexOf("<") === -1) {
       }
       return { type: "arena-max" };
     }
-    const isForumDomain = host.includes("lesswrong.com") || host.includes("forum.effectivealtruism.org") || host.includes("greaterwrong.com");
+    const isForumDomain = isHost("lesswrong.com") || isHost("forum.effectivealtruism.org") || isHost("greaterwrong.com");
     if (!isForumDomain) {
       return { type: "skip" };
     }
@@ -1749,6 +1750,15 @@ dirty.indexOf("<") === -1) {
 
   .pr-header h1 {
     margin: 0 0 10px 0;
+  }
+
+  .pr-site-home-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .pr-site-home-link:hover {
+    text-decoration: underline;
   }
 
   .pr-status {
@@ -3749,6 +3759,15 @@ dirty.indexOf("<") === -1) {
   ${COMMENT_FIELDS}
 `
   );
+  const normalizeHost = (hostname) => hostname.trim().toLowerCase();
+  const isEAForumHostname = (hostname) => {
+    const host = normalizeHost(hostname);
+    return host === "effectivealtruism.org" || host.endsWith(".effectivealtruism.org");
+  };
+  const isLocalhostHostname = (hostname) => normalizeHost(hostname) === "localhost";
+  const isEAForumHost = () => isEAForumHostname(window.location.hostname);
+  const isEAForumLikeHost = () => isEAForumHost() || isLocalhostHostname(window.location.hostname);
+  const getForumMeta = () => isEAForumHost() ? { forumLabel: "EA Forum", forumHomeUrl: "https://forum.effectivealtruism.org/" } : { forumLabel: "Less Wrong", forumHomeUrl: "https://www.lesswrong.com/" };
   const STORAGE_KEYS = {
     READ: "power-reader-read",
     READ_FROM: "power-reader-read-from",
@@ -3758,7 +3777,7 @@ dirty.indexOf("<") === -1) {
   };
   function getKey(baseKey) {
     const hostname = window.location.hostname;
-    if (hostname.includes("effectivealtruism.org")) {
+    if (isEAForumHostname(hostname)) {
       return `ea-${baseKey}`;
     }
     return baseKey;
@@ -3935,7 +3954,6 @@ hoverDelay: 300,
       setJustRevealed(to, true);
     }
   };
-  const isEAHost$1 = () => window.location.hostname.includes("effectivealtruism.org");
   const fetchRecentCommentsForEAF = async (afterDate) => {
     const cutoffMs = new Date(afterDate).getTime();
     if (!Number.isFinite(cutoffMs)) {
@@ -3995,7 +4013,7 @@ hoverDelay: 300,
     Logger.info(`Initial fetch: after=${afterDate}`);
     const start = performance.now();
     const userPromise = queryGraphQL(GET_CURRENT_USER);
-    const commentsPromise = isEAHost$1() && !!afterDate ? fetchRecentCommentsForEAF(afterDate) : queryGraphQL(GET_ALL_RECENT_COMMENTS_LITE, {
+    const commentsPromise = isEAForumHost() && !!afterDate ? fetchRecentCommentsForEAF(afterDate) : queryGraphQL(GET_ALL_RECENT_COMMENTS_LITE, {
       after: afterDate,
       limit: CONFIG.loadMax,
       sortBy: afterDate ? "oldest" : "newest"
@@ -4040,10 +4058,10 @@ hoverDelay: 300,
   const fetchRepliesBatch = async (parentIds) => {
     const start = performance.now();
     if (parentIds.length === 0) return [];
-    const isEAHost2 = window.location.hostname.includes("effectivealtruism.org");
+    const isEAHost = isEAForumHost();
     const CHUNK_SIZE = 30;
     const allResults = [];
-    if (isEAHost2) {
+    if (isEAHost) {
       for (const parentId of parentIds) {
         try {
           const res = await queryGraphQL(
@@ -4092,10 +4110,10 @@ hoverDelay: 300,
   const fetchThreadsBatch = async (threadIds) => {
     const start = performance.now();
     if (threadIds.length === 0) return [];
-    const isEAHost2 = window.location.hostname.includes("effectivealtruism.org");
+    const isEAHost = isEAForumHost();
     const CHUNK_SIZE = 15;
     const allResults = [];
-    if (isEAHost2) {
+    if (isEAHost) {
       for (const threadId of threadIds) {
         try {
           const res = await queryGraphQL(
@@ -5267,7 +5285,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   const CACHE_TIME = 7 * 24 * 60 * 60 * 1e3;
   let reactionsCache = [];
   function getReactions() {
-    const isEA = window.location.hostname.includes("effectivealtruism.org");
+    const isEA = isEAForumHost();
     let finalReactions = [...isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS];
     const getCachedData = () => {
       try {
@@ -5356,7 +5374,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     }
     if (scripts.length === 0) {
       Logger.warn("No candidate scripts found for scraping. Using bootstrap fallback.");
-      const isEA = window.location.hostname.includes("effectivealtruism.org");
+      const isEA = isEAForumHost();
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
       return;
     }
@@ -5402,7 +5420,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     }
     if (!anySuccess) {
       Logger.warn("FAILED to scrape reactions from any script bundle. Using bootstrap fallback.");
-      const isEA = window.location.hostname.includes("effectivealtruism.org");
+      const isEA = isEAForumHost();
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
   }
@@ -5454,8 +5472,8 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     let html2 = '<span class="pr-reactions-inner">';
     const reacts = extendedScore?.reacts || {};
     const userReacts = currentUserExtendedVote?.reacts || [];
-    const isEAHost2 = typeof window !== "undefined" && window.location.hostname.includes("effectivealtruism.org");
-    const alwaysVisibleReactions = isEAHost2 ? new Set(["agree", "disagree"]) : new Set();
+    const isEAHost = typeof window !== "undefined" && isEAForumHost();
+    const alwaysVisibleReactions = isEAHost ? new Set(["agree", "disagree"]) : new Set();
     const allReactions = getReactions();
     const reactionCounts = {};
     if (extendedScore) {
@@ -5520,16 +5538,63 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     html2 += "</span>";
     return html2;
   };
+  const slugByAuthorId = new Map();
+  const normalizeUsernameToSlugCandidate = (username) => username.trim().toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+  const indexSlugsFromState = (state2) => {
+    for (const comment of state2.commentById.values()) {
+      const authorId = comment.user?._id;
+      const slug = comment.user?.slug;
+      if (!authorId || typeof slug !== "string") continue;
+      const normalized = slug.trim();
+      if (!normalized) continue;
+      slugByAuthorId.set(authorId, normalized);
+    }
+    for (const post of state2.postById.values()) {
+      const authorId = post.user?._id;
+      const slug = post.user?.slug;
+      if (!authorId || typeof slug !== "string") continue;
+      const normalized = slug.trim();
+      if (!normalized) continue;
+      slugByAuthorId.set(authorId, normalized);
+    }
+  };
+  const resolveSlugFromState = (authorId, state2) => {
+    if (!authorId || !state2) return null;
+    const cached = slugByAuthorId.get(authorId);
+    if (cached) return cached;
+    indexSlugsFromState(state2);
+    return slugByAuthorId.get(authorId) ?? null;
+  };
+  const getAuthorProfileLink = (item, fallbackHandle, state2) => {
+    const user = item.user;
+    const slug = user?.slug;
+    if (typeof slug === "string" && slug.trim().length > 0) {
+      return `/users/${encodeURIComponent(slug.trim())}`;
+    }
+    const authorId = user?._id || "";
+    const stateSlug = resolveSlugFromState(authorId, state2);
+    if (stateSlug) {
+      return `/users/${encodeURIComponent(stateSlug)}`;
+    }
+    const username = user?.username || fallbackHandle;
+    if (typeof username === "string" && username.trim().length > 0) {
+      const trimmed = username.trim();
+      const candidate = normalizeUsernameToSlugCandidate(trimmed);
+      return `/users/${encodeURIComponent(candidate || trimmed)}`;
+    }
+    return "#";
+  };
   const renderMetadata = (item, options = {}) => {
     const { state: state2, isFullPost = true, style = "", extraClass = "", children = "" } = options;
     const isPost2 = "title" in item;
-    const authorHandle = item.user?.username || item.author || "Unknown Author";
+    const authorHandle = item.user?.username || ("author" in item ? item.author : void 0) || "Unknown Author";
     const authorName = item.user?.displayName || authorHandle;
     const authorId = item.user?._id || "";
-    const isEAHost2 = window.location.hostname.includes("effectivealtruism.org") || window.location.hostname === "localhost";
+    const isEAHost = isEAForumLikeHost();
     const isEASystem = item.votingSystem === "eaEmojis";
-    const showAgreement = !isEAHost2 && !isEASystem;
-    const agreementScore = item.extendedScore?.agreement ?? item.afExtendedScore?.agreement ?? 0;
+    const showAgreement = !isEAHost && !isEASystem;
+    const afExtendedScore = item.afExtendedScore;
+    const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
     const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
     const voteButtonsHtml = renderVoteButtons(
       item._id,
@@ -5556,8 +5621,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const postedAt = item.postedAt || ( new Date()).toISOString();
     const date = new Date(postedAt);
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
-    const authorSlug = item.user?.slug;
-    const authorLink = authorSlug ? `/users/${authorSlug}` : "#";
+    const authorLink = getAuthorProfileLink(item, authorHandle, state2);
     let containerClass = isPost2 ? "pr-comment-meta pr-post-meta" : "pr-comment-meta";
     if (extraClass) containerClass += ` ${extraClass}`;
     return `
@@ -5570,7 +5634,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
               data-author="${escapeHtml(authorHandle)}"
               title="Mark author as disliked (auto-hide their future comments)">↓</span>
       </span>
-      <a href="${authorLink}" target="_blank" class="pr-author" data-author-id="${authorId}">${escapeHtml(authorName)}</a>
+      <a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${authorId}">${escapeHtml(authorName)}</a>
       <span class="pr-author-controls">
         <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" 
               data-action="author-up" 
@@ -6715,7 +6779,6 @@ refresh() {
     recheckTimer = null;
     countdownSeconds = 0;
     hasAdvancedThisBatch = false;
-    static EAF_HOST_MARKER = "effectivealtruism.org";
     constructor(scrollMarkDelay, commentsDataGetter, postsDataGetter = () => [], initialBatchNewestDateGetter = () => null) {
       this.scrollMarkDelay = scrollMarkDelay;
       this.commentsDataGetter = commentsDataGetter;
@@ -6917,9 +6980,9 @@ refresh() {
       msgEl.className = "pr-bottom-message";
       msgEl.onclick = null;
       try {
-        const isEAHost2 = window.location.hostname.includes(ReadTracker.EAF_HOST_MARKER);
+        const isEAHost = isEAForumHost();
         let hasMore = false;
-        if (isEAHost2) {
+        if (isEAHost) {
           const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
             limit: 1,
             sortBy: "newest"
@@ -6972,7 +7035,6 @@ refresh() {
     const mm = String(d.getMinutes()).padStart(2, "0");
     return `${mon} ${day} ${hh}:${mm}`;
   };
-  const getForumLabel = () => window.location.hostname.includes("effectivealtruism.org") ? "EA Forum" : "Less Wrong";
   const buildPostGroups = (comments, posts, state2) => {
     const readState = getReadState();
     const sortedComments = [...comments].sort(
@@ -7202,10 +7264,10 @@ refresh() {
     const startDate = loadFrom && loadFrom !== "__LOAD_RECENT__" ? formatStatusDate(loadFrom) : "?";
     const endDate = state2.initialBatchNewestDate ? formatStatusDate(state2.initialBatchNewestDate) : "now";
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
-    const forumLabel = getForumLabel();
+    const { forumLabel, forumHomeUrl } = getForumMeta();
     let html2 = `
     <div class="pr-header">
-      <h1>${forumLabel}: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -7349,9 +7411,10 @@ refresh() {
   const showSetupUI = (onStart) => {
     const root = document.getElementById("power-reader-root");
     if (!root) return;
+    const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -7375,8 +7438,6 @@ refresh() {
     });
   };
   const LOGIN_URL = `${window.location.origin}/login`;
-  const EAF_HOST_MARKER = "effectivealtruism.org";
-  const isEAHost = () => window.location.hostname.includes(EAF_HOST_MARKER);
   const isEAFAgreementReaction = (reactionName) => reactionName === "agree" || reactionName === "disagree";
   const openLoginPage = () => {
     const opened = window.open(LOGIN_URL, "_blank", "noopener,noreferrer");
@@ -7423,7 +7484,7 @@ refresh() {
   }
   async function castAgreementVote(documentId, voteType, isLoggedIn, currentKarma = "neutral", documentType = "comment") {
     const agreementValue = voteType === "agree" ? "smallUpvote" : voteType === "disagree" ? "smallDownvote" : "neutral";
-    const eafDebug = isEAHost() && documentType === "comment";
+    const eafDebug = isEAForumHost() && documentType === "comment";
     const agreementPayload = { agreement: agreementValue };
     if (eafDebug) {
       Logger.info("[EAF vote debug] castAgreementVote request", {
@@ -8175,9 +8236,9 @@ currentCommentId = null;
       comment.currentUserExtendedVote,
       quote,
       "comment",
-      window.location.hostname.includes("effectivealtruism.org") || comment.votingSystem === "eaEmojis"
+      isEAForumHost() || comment.votingSystem === "eaEmojis"
     );
-    if (!res && window.location.hostname.includes("effectivealtruism.org") && (reactionName === "agree" || reactionName === "disagree")) {
+    if (!res && isEAForumHost() && (reactionName === "agree" || reactionName === "disagree")) {
       Logger.warn("[EAF vote debug] handleReactionVote received null response", {
         commentId,
         reactionName,
@@ -10987,6 +11048,74 @@ getPromptPrefix: getAIStudioPrefix,
     }
     return null;
   };
+  const parseTimestampMs = (timestamp) => {
+    const value = Date.parse(timestamp);
+    return Number.isFinite(value) ? value : null;
+  };
+  const compareTimestamps = (a, b) => {
+    const aMs = parseTimestampMs(a);
+    const bMs = parseTimestampMs(b);
+    if (aMs !== null && bMs !== null) return aMs - bMs;
+    return a.localeCompare(b);
+  };
+  const getLatestCursorTimestampFromBatch = (rawItems, baselineCursor) => {
+    let latest = null;
+    for (const item of rawItems) {
+      const postedAt = item?.postedAt;
+      if (typeof postedAt !== "string" || postedAt.length === 0) continue;
+      if (baselineCursor && compareTimestamps(postedAt, baselineCursor) <= 0) continue;
+      if (!latest || compareTimestamps(postedAt, latest) > 0) {
+        latest = postedAt;
+      }
+    }
+    return latest;
+  };
+  const summarizeBatchForCursorDebug = (rawItems) => {
+    const seenIds = new Set();
+    const duplicateIds = new Set();
+    const uniqueTimestamps = new Set();
+    const idSequence = [];
+    let missingTimestampCount = 0;
+    let firstTimestamp = null;
+    let lastTimestamp = null;
+    let firstId = null;
+    let lastId = null;
+    for (const item of rawItems) {
+      const anyItem = item;
+      const itemId = typeof anyItem?._id === "string" && anyItem._id.length > 0 ? anyItem._id : "(missing-id)";
+      idSequence.push(itemId);
+      if (itemId !== "(missing-id)") {
+        if (seenIds.has(itemId)) duplicateIds.add(itemId);
+        seenIds.add(itemId);
+      }
+      const postedAt = typeof anyItem?.postedAt === "string" && anyItem.postedAt.length > 0 ? anyItem.postedAt : null;
+      if (!postedAt) {
+        missingTimestampCount++;
+        continue;
+      }
+      uniqueTimestamps.add(postedAt);
+      if (!firstTimestamp) {
+        firstTimestamp = postedAt;
+        firstId = itemId;
+      }
+      lastTimestamp = postedAt;
+      lastId = itemId;
+    }
+    const headIds = idSequence.slice(0, 3);
+    const tailIds = idSequence.slice(Math.max(0, idSequence.length - 3));
+    return {
+      firstTimestamp,
+      lastTimestamp,
+      firstId,
+      lastId,
+      uniqueIdCount: seenIds.size,
+      duplicateIdCount: duplicateIds.size,
+      uniqueTimestampCount: uniqueTimestamps.size,
+      missingTimestampCount,
+      headIds,
+      tailIds
+    };
+  };
   const extractImmediateParentWithBody = (comment) => {
     const parent = comment.parentComment;
     if (!parent?._id) return null;
@@ -11004,7 +11133,12 @@ getPromptPrefix: getAIStudioPrefix,
       author: parent.user?.username || "",
       rejected: false,
       topLevelCommentId: comment.topLevelCommentId || parent._id,
-      user: parent.user ? { ...parent.user, slug: "", karma: 0, htmlBio: "" } : null,
+      user: parent.user ? {
+        ...parent.user,
+        slug: parent.user.slug || "",
+        karma: typeof parent.user.karma === "number" ? parent.user.karma : 0,
+        htmlBio: parent.user.htmlBio || ""
+      } : null,
       postId,
       post: comment.post ?? null,
       parentCommentId: parent.parentCommentId || "",
@@ -11025,8 +11159,11 @@ getPromptPrefix: getAIStudioPrefix,
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor = afterDate ? afterDate.toISOString() : null;
+    let batchNumber = 0;
+    let previousBatchTail = null;
     while (hasMore) {
       const startTime = Date.now();
+      batchNumber++;
       try {
         console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
         const requestBatch = async (limit) => {
@@ -11114,13 +11251,59 @@ getPromptPrefix: getAIStudioPrefix,
         }
         if (onProgress) onProgress(allItems.length);
         if (hasMore) {
-          const nextCursor = getCursorTimestampFromBatch(rawResults);
-          if (!nextCursor || nextCursor === afterCursor) {
-            Logger.warn(`Archive ${key}: unable to derive next cursor from batch or cursor stuck; stopping pagination.`);
+          const batchSummary = summarizeBatchForCursorDebug(rawResults);
+          const nextCursorTail = getCursorTimestampFromBatch(rawResults);
+          const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor);
+          if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
+            Logger.debug(
+              `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
+            );
+          }
+          const nextCursor = nextCursorLatest;
+          if (!nextCursor) {
+            const stopReason = "cursor_not_advancing";
+            const hint = !nextCursorTail ? batchSummary.missingTimestampCount === rawResults.length ? "all_raw_items_missing_postedAt" : "tail_item_missing_or_invalid_postedAt" : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
+            Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
+              key,
+              batchNumber,
+              hint,
+              request: {
+                userId,
+                currentLimit,
+                fetchLimitUsed
+              },
+              cursor: {
+                afterCursor,
+                nextCursor,
+                nextCursorTail,
+                nextCursorLatest
+              },
+              counts: {
+                raw: rawResults.length,
+                valid: results.length,
+                invalid: rawResults.length - results.length,
+                accumulatedUniqueItems: allItems.length,
+                uniqueIdsInRawBatch: batchSummary.uniqueIdCount,
+                duplicateIdsInRawBatch: batchSummary.duplicateIdCount,
+                uniqueTimestampsInRawBatch: batchSummary.uniqueTimestampCount,
+                missingTimestampsInRawBatch: batchSummary.missingTimestampCount
+              },
+              batchEdges: {
+                first: { id: batchSummary.firstId, postedAt: batchSummary.firstTimestamp },
+                last: { id: batchSummary.lastId, postedAt: batchSummary.lastTimestamp },
+                headIds: batchSummary.headIds,
+                tailIds: batchSummary.tailIds
+              },
+              previousBatchTail
+            });
             hasMore = false;
           } else {
             afterCursor = nextCursor;
           }
+          previousBatchTail = {
+            id: batchSummary.lastId,
+            postedAt: batchSummary.lastTimestamp
+          };
         }
       } catch (e) {
         Logger.error(`Error fetching ${key} with cursor ${afterCursor}:`, e);
@@ -12110,30 +12293,38 @@ getPromptPrefix: getAIStudioPrefix,
       setTimeout(renderNextChunk, 0);
     });
   };
-  const parentRefToStub = (ref, sourceComment) => ({
-    _id: ref._id,
-    postedAt: ref.postedAt || "",
-    parentCommentId: ref.parentCommentId || "",
-    user: ref.user ? { ...ref.user, slug: "", karma: 0, htmlBio: "" } : null,
-    postId: sourceComment.postId,
-    post: sourceComment.post ?? null,
-    htmlBody: "",
-    baseScore: typeof ref.baseScore === "number" ? ref.baseScore : 0,
-    voteCount: 0,
-    pageUrl: ref.pageUrl || "",
-    author: ref.user?.username || "",
-    rejected: false,
-    topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
-    parentComment: null,
-    extendedScore: null,
-    afExtendedScore: ref.afExtendedScore ?? null,
-    currentUserVote: null,
-    currentUserExtendedVote: null,
-    contents: { markdown: null },
-    descendentCount: 0,
-    directChildrenCount: 0,
-    contextType: "stub"
-  });
+  const parentRefToStub = (ref, sourceComment) => {
+    const user = ref.user;
+    return {
+      _id: ref._id,
+      postedAt: ref.postedAt || "",
+      parentCommentId: ref.parentCommentId || "",
+      user: user ? {
+        ...user,
+        slug: typeof user.slug === "string" ? user.slug : "",
+        karma: typeof user.karma === "number" ? user.karma : 0,
+        htmlBio: typeof user.htmlBio === "string" ? user.htmlBio : ""
+      } : null,
+      postId: sourceComment.postId,
+      post: sourceComment.post ?? null,
+      htmlBody: "",
+      baseScore: typeof ref.baseScore === "number" ? ref.baseScore : 0,
+      voteCount: 0,
+      pageUrl: ref.pageUrl || "",
+      author: ref.user?.username || "",
+      rejected: false,
+      topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
+      parentComment: null,
+      extendedScore: null,
+      afExtendedScore: ref.afExtendedScore ?? null,
+      currentUserVote: null,
+      currentUserExtendedVote: null,
+      contents: { markdown: null },
+      descendentCount: 0,
+      directChildrenCount: 0,
+      contextType: "stub"
+    };
+  };
   const parentRefToFetchedContext = (ref, sourceComment) => ({
     ...parentRefToStub(ref, sourceComment),
     htmlBody: typeof ref.htmlBody === "string" ? ref.htmlBody : "",
@@ -14079,17 +14270,32 @@ sortCanonicalItems() {
   const INITIAL_BACKOFF_MS = 2e3;
   const SEARCH_DEBOUNCE_MS = 180;
   const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
-  const initArchive = async (username) => {
+  const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
+  let activeArchiveInitRunId = 0;
+  let activeArchiveInitAbortController = null;
+  const initArchive = async (username, recoveryAttempt = 0) => {
     Logger.info(`Initializing User Archive for: ${username}`);
+    const runAbortController = new AbortController();
+    const previousRunAbortController = activeArchiveInitAbortController;
+    activeArchiveInitRunId += 1;
+    const runId = activeArchiveInitRunId;
+    activeArchiveInitAbortController = runAbortController;
+    if (previousRunAbortController && !previousRunAbortController.signal.aborted) {
+      previousRunAbortController.abort();
+    }
+    const isCurrentRun = () => runId === activeArchiveInitRunId && !runAbortController.signal.aborted;
     try {
+      if (!isCurrentRun()) return;
       resetRenderLimit();
       executeTakeover();
       await initializeReactions();
+      if (!isCurrentRun()) return;
       rebuildDocument();
       initPreviewSystem();
       const state2 = createInitialArchiveState(username);
       const root = document.getElementById("power-reader-root");
       if (!root) return;
+      const { forumLabel, forumHomeUrl } = getForumMeta();
       let style = document.getElementById("pr-archive-styles");
       if (!style) {
         style = document.createElement("style");
@@ -14600,7 +14806,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -14726,6 +14932,23 @@ sortCanonicalItems() {
       const searchStatusEl = document.getElementById("archive-search-status");
       const searchHelpEl = document.getElementById("archive-search-help");
       const facetsEl = document.getElementById("archive-facets");
+      const isArchiveDomDetached = () => {
+        const currentRoot = document.getElementById("power-reader-root");
+        const currentFeed = document.getElementById("archive-feed");
+        const currentDashboard = document.getElementById("archive-dashboard");
+        return !root.isConnected || !feedEl?.isConnected || !dashboardEl?.isConnected || currentRoot !== root || currentFeed !== feedEl || currentDashboard !== dashboardEl;
+      };
+      const restartArchiveInitIfDetached = async (phase) => {
+        if (!isArchiveDomDetached()) return false;
+        if (recoveryAttempt >= MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS) {
+          throw new Error(`Archive UI was replaced during ${phase}; recovery limit reached.`);
+        }
+        const nextAttempt = recoveryAttempt + 1;
+        Logger.warn(`[Archive Init] DOM detached during ${phase}. Restarting (${nextAttempt}/${MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS}).`);
+        runAbortController.abort();
+        await initArchive(username, nextAttempt);
+        return true;
+      };
       if (searchInput) {
         searchInput.title = [
           "Archive search examples:",
@@ -15241,7 +15464,12 @@ sortCanonicalItems() {
         }
       };
       const refreshView = async (budgetMs) => {
+        if (!isCurrentRun()) return;
         const requestId = ++activeQueryRequestId;
+        if (isArchiveDomDetached()) {
+          Logger.debug("Skipping refreshView because archive DOM is detached");
+          return;
+        }
         const currentUi = readUiState();
         const debugExplain = isDebugExplainEnabled();
         const hasContentQuery = deriveHasContentQuery(currentUi.query);
@@ -15364,7 +15592,11 @@ sortCanonicalItems() {
         retryCount: 0,
         abortController: null
       };
+      runAbortController.signal.addEventListener("abort", () => {
+        syncErrorState.abortController?.abort();
+      }, { once: true });
       const updateItemMap = (items) => {
+        if (!isCurrentRun()) return;
         items.forEach((i) => state2.itemById.set(i._id, i));
         syncAuthoredSearchIndex();
         contextSearchItemsCache = null;
@@ -15762,6 +15994,7 @@ sortCanonicalItems() {
       let isSyncInProgress = false;
       let pendingRetryCount = 0;
       const performSync = async (forceFull = false) => {
+        if (!isCurrentRun()) return;
         if (isSyncInProgress) {
           Logger.debug("Sync already in progress, skipping duplicate request");
           return;
@@ -15774,12 +16007,15 @@ sortCanonicalItems() {
         }
         const dbStart = performance.now();
         const cached2 = await loadArchiveData(username);
+        if (!isCurrentRun()) return;
         perfMetrics.dbLoadMs = performance.now() - dbStart;
         renderTopStatusLine();
         const setStatus = (msg, isError2 = false, isSyncing = false) => {
+          if (!isCurrentRun()) return;
           setStatusBaseMessage(msg, isError2, isSyncing);
         };
         const attemptSync = async (useAutoRetry, attemptNumber = 1) => {
+          if (!isCurrentRun()) return;
           syncErrorState.isRetrying = true;
           syncErrorState.retryCount = attemptNumber;
           syncErrorState.abortController = new AbortController();
@@ -15791,6 +16027,7 @@ sortCanonicalItems() {
                 return { posts: [], comments: [] };
               })
             ]);
+            if (!isCurrentRun()) return;
             state2.items = currentCached.items;
             persistedContextItems = [...cachedContext2.posts, ...cachedContext2.comments];
             contextSearchItemsCache = null;
@@ -15812,13 +16049,23 @@ sortCanonicalItems() {
             };
             const netStart = performance.now();
             const initialCount = state2.items.length;
-            await syncArchive(
-              username,
-              state2,
-              watermarks,
-              (msg) => setStatus(msg, false, true),
-              syncErrorState.abortController.signal
-            );
+            const syncAbortController = new AbortController();
+            const abortSyncAttempt = () => syncAbortController.abort();
+            syncErrorState.abortController.signal.addEventListener("abort", abortSyncAttempt);
+            runAbortController.signal.addEventListener("abort", abortSyncAttempt);
+            try {
+              await syncArchive(
+                username,
+                state2,
+                watermarks,
+                (msg) => setStatus(msg, false, true),
+                syncAbortController.signal
+              );
+            } finally {
+              syncErrorState.abortController.signal.removeEventListener("abort", abortSyncAttempt);
+              runAbortController.signal.removeEventListener("abort", abortSyncAttempt);
+            }
+            if (!isCurrentRun()) return;
             perfMetrics.networkFetchMs = performance.now() - netStart;
             perfMetrics.newItems = state2.items.length - initialCount;
             renderTopStatusLine();
@@ -15844,6 +16091,11 @@ sortCanonicalItems() {
               isSyncInProgress = false;
               return;
             }
+            if (!isCurrentRun()) {
+              pendingRetryCount = 0;
+              isSyncInProgress = false;
+              return;
+            }
             const shouldAutoRetry = useAutoRetry || GM_getValue(AUTO_RETRY_KEY, false);
             if (shouldAutoRetry && attemptNumber < MAX_AUTO_RETRIES) {
               const backoffMs = INITIAL_BACKOFF_MS * Math.pow(2, attemptNumber - 1);
@@ -15853,11 +16105,13 @@ sortCanonicalItems() {
               let retryTimeout = null;
               pendingRetryCount++;
               const doRetry = () => {
+                if (!isCurrentRun()) return;
                 if (retryTimeout) clearTimeout(retryTimeout);
                 pendingRetryCount--;
                 attemptSync(true, attemptNumber + 1);
               };
               const doCancel = () => {
+                if (!isCurrentRun()) return;
                 if (retryTimeout) clearTimeout(retryTimeout);
                 syncErrorState.abortController?.abort();
                 if (errorContainer) errorContainer.style.display = "none";
@@ -15872,9 +16126,11 @@ sortCanonicalItems() {
             } else {
               pendingRetryCount++;
               showErrorUI(error, (retryMode) => {
+                if (!isCurrentRun()) return;
                 pendingRetryCount--;
                 attemptSync(retryMode, 1);
               }, () => {
+                if (!isCurrentRun()) return;
                 pendingRetryCount = 0;
                 isSyncInProgress = false;
                 setStatus(`Sync failed. Showing cached data (${cached2.items.length} items).`, true, false);
@@ -15892,6 +16148,7 @@ sortCanonicalItems() {
         }
       };
       resyncBtn?.addEventListener("click", () => {
+        if (!isCurrentRun()) return;
         if (confirm("This will re-download the entire archive history. Continue?")) {
           performSync(true);
         }
@@ -15906,6 +16163,7 @@ sortCanonicalItems() {
       state2.items = cached.items;
       persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
       contextSearchItemsCache = null;
+      if (!isCurrentRun()) return;
       if (cached.items.length > 0) {
         setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
       } else {
@@ -15922,16 +16180,25 @@ sortCanonicalItems() {
           updateItemMap(state2.items);
         }
       }
+      if (!isCurrentRun()) return;
       await syncPromise;
+      if (!isCurrentRun()) return;
+      if (await restartArchiveInitIfDetached("sync completion")) return;
       const isRendered = !!feedEl.querySelector(".pr-archive-item, .pr-archive-index-item, .pr-post");
       if (!isRendered) {
         console.log(`[Archive Init] Final render check: currentItems=${state2.items.length}, newItems=${perfMetrics.newItems}`);
         updateItemMap(state2.items);
       }
       await refreshView();
+      if (!isCurrentRun()) return;
+      if (await restartArchiveInitIfDetached("final refresh")) return;
       dashboardEl.style.display = "none";
       signalReady();
     } catch (err) {
+      if (!isCurrentRun()) {
+        Logger.debug("Archive init run superseded by a newer run; skipping stale error handling.");
+        return;
+      }
       Logger.error("Failed to initialize archive:", err);
       const root = document.getElementById("power-reader-root");
       if (root) {
@@ -15940,6 +16207,10 @@ sortCanonicalItems() {
         const message = err instanceof Error ? err.message : String(err);
         errorEl.textContent = `Failed to load archive: ${message}`;
         root.replaceChildren(errorEl);
+      }
+    } finally {
+      if (runId === activeArchiveInitRunId && activeArchiveInitAbortController === runAbortController) {
+        activeArchiveInitAbortController = null;
       }
     }
   };
@@ -16066,9 +16337,10 @@ sortCanonicalItems() {
     const root = getRoot();
     if (!root) return;
     const state2 = getState();
+    const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

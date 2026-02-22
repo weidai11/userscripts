@@ -8,6 +8,7 @@ import { VOTE_COMMENT_MUTATION, VOTE_POST_MUTATION } from '../../../shared/graph
 import type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote } from '../../../shared/graphql/queries';
 import type { VoteMutation, VoteMutationVariables, VotePostMutation, VotePostMutationVariables } from '../../../generated/graphql';
 import { Logger } from './logger';
+import { isEAForumHost } from './forum';
 export type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote };
 
 // Vote types
@@ -15,9 +16,6 @@ export type KarmaVote = 'smallUpvote' | 'smallDownvote' | 'bigUpvote' | 'bigDown
 export type AgreementVote = 'agree' | 'disagree' | 'neutral';
 
 const LOGIN_URL = `${window.location.origin}/login`;
-const EAF_HOST_MARKER = 'effectivealtruism.org';
-
-const isEAHost = (): boolean => window.location.hostname.includes(EAF_HOST_MARKER);
 const isEAFAgreementReaction = (reactionName: string): boolean =>
   reactionName === 'agree' || reactionName === 'disagree';
 
@@ -100,7 +98,7 @@ export async function castAgreementVote(
   const agreementValue = voteType === 'agree' ? 'smallUpvote' :
     voteType === 'disagree' ? 'smallDownvote' :
       'neutral';
-  const eafDebug = isEAHost() && documentType === 'comment';
+  const eafDebug = isEAForumHost() && documentType === 'comment';
   const agreementPayload = { agreement: agreementValue };
 
   if (eafDebug) {

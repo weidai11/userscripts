@@ -12,6 +12,7 @@ import {
 } from '../utils/voting';
 import { syncVoteToState } from './votes';
 import { Logger } from '../utils/logger';
+import { isEAForumHost } from '../utils/forum';
 
 // ReactionPicker singleton
 let reactionPicker: ReactionPicker | null = null;
@@ -68,9 +69,9 @@ export const handleReactionVote = async (
     comment.currentUserExtendedVote as CurrentUserExtendedVote,
     quote,
     'comment',
-    window.location.hostname.includes('effectivealtruism.org') || comment.votingSystem === 'eaEmojis'
+    isEAForumHost() || comment.votingSystem === 'eaEmojis'
   );
-  if (!res && window.location.hostname.includes('effectivealtruism.org') && (reactionName === 'agree' || reactionName === 'disagree')) {
+  if (!res && isEAForumHost() && (reactionName === 'agree' || reactionName === 'disagree')) {
     Logger.warn('[EAF vote debug] handleReactionVote received null response', {
       commentId,
       reactionName,

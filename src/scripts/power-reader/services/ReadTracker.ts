@@ -9,6 +9,7 @@ import type { AllRecentCommentsResponse } from '../../../shared/graphql/queries'
 import { GET_ALL_RECENT_COMMENTS } from '../../../shared/graphql/queries';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { Logger } from '../utils/logger';
+import { isEAForumHost } from '../utils/forum';
 
 /**
  * Service to track read status via scrolling
@@ -29,8 +30,6 @@ export class ReadTracker {
     private recheckTimer: number | null = null;
     private countdownSeconds: number = 0;
     private hasAdvancedThisBatch: boolean = false;
-    private static readonly EAF_HOST_MARKER = 'effectivealtruism.org';
-
     constructor(
         scrollMarkDelay: number,
         commentsDataGetter: () => { postedAt: string, _id: string }[],
@@ -296,7 +295,7 @@ export class ReadTracker {
         msgEl.onclick = null;
 
         try {
-            const isEAHost = window.location.hostname.includes(ReadTracker.EAF_HOST_MARKER);
+            const isEAHost = isEAForumHost();
             let hasMore = false;
             if (isEAHost) {
                 // EAF legacy `comments(input.terms)` ignores `after`, so compare newest postedAt client-side.

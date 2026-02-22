@@ -92,6 +92,15 @@ export const STYLES = `
     margin: 0 0 10px 0;
   }
 
+  .pr-site-home-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .pr-site-home-link:hover {
+    text-decoration: underline;
+  }
+
   .pr-status {
     color: #666;
     font-size: 0.9em;

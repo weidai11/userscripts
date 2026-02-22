@@ -4,6 +4,7 @@
 
 import { escapeHtml } from '../../utils/rendering';
 import { getReactions, DEFAULT_FILTER } from '../../utils/reactions';
+import { isEAForumHost } from '../../utils/forum';
 import type { NamesAttachedReactionsScore, CurrentUserExtendedVote } from '../../../../shared/graphql/queries';
 
 /**
@@ -79,7 +80,7 @@ export const renderReactions = (
     let html = '<span class="pr-reactions-inner">';
     const reacts = extendedScore?.reacts || {};
     const userReacts = currentUserExtendedVote?.reacts || [];
-    const isEAHost = typeof window !== 'undefined' && window.location.hostname.includes('effectivealtruism.org');
+    const isEAHost = typeof window !== 'undefined' && isEAForumHost();
     const alwaysVisibleReactions = isEAHost ? new Set(['agree', 'disagree']) : new Set<string>();
 
     const allReactions = getReactions();

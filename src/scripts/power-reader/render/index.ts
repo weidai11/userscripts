@@ -22,6 +22,7 @@ import { setupExternalLinks } from '../features/externalLinks';
 import { setupScrollTracking } from '../features/scrollTracking';
 import { refreshPostActionButtons } from '../utils/dom';
 import { getCommentContextType } from '../types/uiCommentFlags';
+import { getForumMeta } from '../utils/forum';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -53,9 +54,6 @@ const formatStatusDate = (iso: string): string => {
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${mon} ${day} ${hh}:${mm}`;
 };
-
-const getForumLabel = (): string =>
-  window.location.hostname.includes('effectivealtruism.org') ? 'EA Forum' : 'Less Wrong';
 
 /**
  * Build post groups from comments and posts
@@ -357,10 +355,10 @@ export const renderUI = (state: ReaderState): void => {
   const userLabel = state.currentUsername ? `👤 ${state.currentUsername}` : '👤 not logged in';
 
   // Build HTML
-  const forumLabel = getForumLabel();
+  const { forumLabel, forumHomeUrl } = getForumMeta();
   let html = `
     <div class="pr-header">
-      <h1>${forumLabel}: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -558,10 +556,11 @@ export const showSetupUI = (
 ): void => {
   const root = document.getElementById('power-reader-root');
   if (!root) return;
+  const { forumLabel, forumHomeUrl } = getForumMeta();
 
   root.innerHTML = `
     <div class="pr-header">
-      <h1>Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>

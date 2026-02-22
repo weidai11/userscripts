@@ -25,6 +25,12 @@ export type RenderArchiveOptions = {
   snippetPattern?: RegExp | null;
 };
 
+type ParentRefUserWithExtras = NonNullable<ParentCommentRef['user']> & {
+  slug?: string | null;
+  karma?: number | null;
+  htmlBio?: string | null;
+};
+
 /**
  * Configure view state (called by index.ts)
  */
@@ -476,28 +482,38 @@ const renderThreadView = (
  * Convert a ParentCommentRef (from the GraphQL parentComment chain)
  * into a minimal Comment suitable for renderContextPlaceholder.
  */
-const parentRefToStub = (ref: ParentCommentRef, sourceComment: Comment): Comment => ({
-  _id: ref._id,
-  postedAt: ref.postedAt || '',
-  parentCommentId: ref.parentCommentId || '',
-  user: ref.user ? { ...ref.user, slug: '', karma: 0, htmlBio: '' } : null,
-  postId: sourceComment.postId,
-  post: sourceComment.post ?? null,
-  htmlBody: '',
-  baseScore: typeof ref.baseScore === 'number' ? ref.baseScore : 0,
-  voteCount: 0,
-  pageUrl: ref.pageUrl || '',
-  author: ref.user?.username || '', rejected: false,
-  topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
-  parentComment: null,
-  extendedScore: null,
-  afExtendedScore: ref.afExtendedScore ?? null,
-  currentUserVote: null, currentUserExtendedVote: null,
-  contents: { markdown: null },
-  descendentCount: 0,
-  directChildrenCount: 0,
-  contextType: 'stub',
-} as any as Comment);
+const parentRefToStub = (ref: ParentCommentRef, sourceComment: Comment): Comment => {
+  const user = ref.user as ParentRefUserWithExtras | null | undefined;
+  return {
+    _id: ref._id,
+    postedAt: ref.postedAt || '',
+    parentCommentId: ref.parentCommentId || '',
+    user: user ? {
+      ...user,
+      slug: typeof user.slug === 'string' ? user.slug : '',
+      karma: typeof user.karma === 'number' ? user.karma : 0,
+      htmlBio: typeof user.htmlBio === 'string' ? user.htmlBio : ''
+    } : null,
+    postId: sourceComment.postId,
+    post: sourceComment.post ?? null,
+    htmlBody: '',
+    baseScore: typeof ref.baseScore === 'number' ? ref.baseScore : 0,
+    voteCount: 0,
+    pageUrl: ref.pageUrl || '',
+    author: ref.user?.username || '',
+    rejected: false,
+    topLevelCommentId: sourceComment.topLevelCommentId || ref._id,
+    parentComment: null,
+    extendedScore: null,
+    afExtendedScore: ref.afExtendedScore ?? null,
+    currentUserVote: null,
+    currentUserExtendedVote: null,
+    contents: { markdown: null },
+    descendentCount: 0,
+    directChildrenCount: 0,
+    contextType: 'stub',
+  } as Comment;
+};
 
 const parentRefToFetchedContext = (ref: ParentCommentRef, sourceComment: Comment): Comment => ({
   ...parentRefToStub(ref, sourceComment),
@@ -505,7 +521,7 @@ const parentRefToFetchedContext = (ref: ParentCommentRef, sourceComment: Comment
   contents: { markdown: ref.contents?.markdown ?? null },
   parentComment: ref.parentComment ?? null,
   contextType: 'fetched',
-} as any as Comment);
+} as Comment);
 
 const placeholderPostForTopLevelComment = (comment: Comment, state: ReaderState): Post => {
   const statePost = state.postById.get(comment.postId);

@@ -34,6 +34,7 @@ import type {
 import { getLoadFrom, setLoadFrom } from '../utils/storage';
 import { CONFIG } from '../config';
 import { Logger } from '../utils/logger';
+import { isEAForumHost } from '../utils/forum';
 import type { ReaderState } from '../state';
 import { rebuildIndexes } from '../state';
 import { copyTransientCommentUiFlags, getCommentContextType } from '../types/uiCommentFlags';
@@ -45,8 +46,6 @@ export interface InitialLoadResult {
   currentUserId: string | null;
   currentUserPaletteStyle: 'listView' | 'gridView' | null;
 }
-
-const isEAHost = (): boolean => window.location.hostname.includes('effectivealtruism.org');
 
 const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> => {
   const cutoffMs = new Date(afterDate).getTime();
@@ -121,7 +120,7 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
   const start = performance.now();
 
   const userPromise = queryGraphQL<GetCurrentUserQuery, GetCurrentUserQueryVariables>(GET_CURRENT_USER);
-  const commentsPromise = (isEAHost() && !!afterDate)
+  const commentsPromise = (isEAForumHost() && !!afterDate)
     ? fetchRecentCommentsForEAF(afterDate)
     : queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(GET_ALL_RECENT_COMMENTS_LITE, {
       after: afterDate,
@@ -179,7 +178,7 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
 export const fetchRepliesBatch = async (parentIds: string[]): Promise<Comment[]> => {
   const start = performance.now();
   if (parentIds.length === 0) return [];
-  const isEAHost = window.location.hostname.includes('effectivealtruism.org');
+  const isEAHost = isEAForumHost();
   const CHUNK_SIZE = 30;
   const allResults: Comment[] = [];
   if (isEAHost) {
@@ -236,7 +235,7 @@ export const fetchRepliesBatch = async (parentIds: string[]): Promise<Comment[]>
 export const fetchThreadsBatch = async (threadIds: string[]): Promise<Comment[]> => {
   const start = performance.now();
   if (threadIds.length === 0) return [];
-  const isEAHost = window.location.hostname.includes('effectivealtruism.org');
+  const isEAHost = isEAForumHost();
   const CHUNK_SIZE = 15; // Smaller chunk for threads as they return more data
   const allResults: Comment[] = [];
   if (isEAHost) {

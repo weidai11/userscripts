@@ -33,6 +33,7 @@ import type {
   RelevanceSignals,
   SearchDiagnostics
 } from './search/types';
+import { getForumMeta } from '../utils/forum';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -45,6 +46,10 @@ const INITIAL_BACKOFF_MS = 2000;
 
 const SEARCH_DEBOUNCE_MS = 180;
 const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
+const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
+
+let activeArchiveInitRunId = 0;
+let activeArchiveInitAbortController: AbortController | null = null;
 
 interface SyncErrorState {
   isRetrying: boolean;
@@ -55,19 +60,34 @@ interface SyncErrorState {
 /**
  * Initialize the User Archive view
  */
-export const initArchive = async (username: string): Promise<void> => {
+export const initArchive = async (username: string, recoveryAttempt = 0): Promise<void> => {
   Logger.info(`Initializing User Archive for: ${username}`);
+  const runAbortController = new AbortController();
+  const previousRunAbortController = activeArchiveInitAbortController;
+  activeArchiveInitRunId += 1;
+  const runId = activeArchiveInitRunId;
+  activeArchiveInitAbortController = runAbortController;
+
+  if (previousRunAbortController && !previousRunAbortController.signal.aborted) {
+    previousRunAbortController.abort();
+  }
+
+  const isCurrentRun = (): boolean =>
+    runId === activeArchiveInitRunId && !runAbortController.signal.aborted;
 
   try {
+    if (!isCurrentRun()) return;
     resetRenderLimit();
     executeTakeover();
     await initializeReactions();
+    if (!isCurrentRun()) return;
     rebuildDocument();
     initPreviewSystem();
 
     const state = createInitialArchiveState(username);
     const root = document.getElementById('power-reader-root');
     if (!root) return;
+    const { forumLabel, forumHomeUrl } = getForumMeta();
 
     // Inject or update styles for archive specific layouts
     let style = document.getElementById('pr-archive-styles') as HTMLStyleElement | null;
@@ -581,7 +601,7 @@ export const initArchive = async (username: string): Promise<void> => {
 
     root.innerHTML = `
     <div class="pr-header">
-      <h1>User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -708,6 +728,31 @@ export const initArchive = async (username: string): Promise<void> => {
     const searchStatusEl = document.getElementById('archive-search-status');
     const searchHelpEl = document.getElementById('archive-search-help');
     const facetsEl = document.getElementById('archive-facets') as HTMLDivElement | null;
+
+    const isArchiveDomDetached = (): boolean => {
+      const currentRoot = document.getElementById('power-reader-root');
+      const currentFeed = document.getElementById('archive-feed');
+      const currentDashboard = document.getElementById('archive-dashboard');
+      return !root.isConnected
+        || !feedEl?.isConnected
+        || !dashboardEl?.isConnected
+        || currentRoot !== root
+        || currentFeed !== feedEl
+        || currentDashboard !== dashboardEl;
+    };
+
+    const restartArchiveInitIfDetached = async (phase: string): Promise<boolean> => {
+      if (!isArchiveDomDetached()) return false;
+      if (recoveryAttempt >= MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS) {
+        throw new Error(`Archive UI was replaced during ${phase}; recovery limit reached.`);
+      }
+      const nextAttempt = recoveryAttempt + 1;
+      Logger.warn(`[Archive Init] DOM detached during ${phase}. Restarting (${nextAttempt}/${MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS}).`);
+      runAbortController.abort();
+      await initArchive(username, nextAttempt);
+      return true;
+    };
+
     if (searchInput) {
       searchInput.title = [
         'Archive search examples:',
@@ -1378,7 +1423,12 @@ export const initArchive = async (username: string): Promise<void> => {
     };
 
     const refreshView = async (budgetMs?: number) => {
+      if (!isCurrentRun()) return;
       const requestId = ++activeQueryRequestId;
+      if (isArchiveDomDetached()) {
+        Logger.debug('Skipping refreshView because archive DOM is detached');
+        return;
+      }
       const currentUi = readUiState();
       const debugExplain = isDebugExplainEnabled();
       const hasContentQuery = deriveHasContentQuery(currentUi.query);
@@ -1530,9 +1580,13 @@ export const initArchive = async (username: string): Promise<void> => {
       retryCount: 0,
       abortController: null
     };
+    runAbortController.signal.addEventListener('abort', () => {
+      syncErrorState.abortController?.abort();
+    }, { once: true });
 
     // Helper to batch updates to map
     const updateItemMap = (items: ArchiveItem[]) => {
+      if (!isCurrentRun()) return;
       items.forEach(i => state.itemById.set(i._id, i));
       syncAuthoredSearchIndex();
       contextSearchItemsCache = null;
@@ -2014,6 +2068,7 @@ export const initArchive = async (username: string): Promise<void> => {
     let isSyncInProgress = false;
     let pendingRetryCount = 0;
     const performSync = async (forceFull = false): Promise<void> => {
+      if (!isCurrentRun()) return;
       // Guard against concurrent syncs
       if (isSyncInProgress) {
         Logger.debug('Sync already in progress, skipping duplicate request');
@@ -2029,14 +2084,17 @@ export const initArchive = async (username: string): Promise<void> => {
       }
       const dbStart = performance.now();
       const cached = await loadArchiveData(username);
+      if (!isCurrentRun()) return;
       perfMetrics.dbLoadMs = performance.now() - dbStart;
       renderTopStatusLine();
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
+        if (!isCurrentRun()) return;
         setStatusBaseMessage(msg, isError, isSyncing);
       };
 
       const attemptSync = async (useAutoRetry: boolean, attemptNumber: number = 1): Promise<void> => {
+        if (!isCurrentRun()) return;
         syncErrorState.isRetrying = true;
         syncErrorState.retryCount = attemptNumber;
         syncErrorState.abortController = new AbortController();
@@ -2050,6 +2108,7 @@ export const initArchive = async (username: string): Promise<void> => {
               return { posts: [], comments: [] };
             })
           ]);
+          if (!isCurrentRun()) return;
 
           // Update in-memory state to include items saved by previous failed attempts
           state.items = currentCached.items;
@@ -2076,13 +2135,23 @@ export const initArchive = async (username: string): Promise<void> => {
           };
           const netStart = performance.now();
           const initialCount = state.items.length;
-          await syncArchive(
-            username,
-            state,
-            watermarks,
-            (msg) => setStatus(msg, false, true),
-            syncErrorState.abortController.signal
-          );
+          const syncAbortController = new AbortController();
+          const abortSyncAttempt = () => syncAbortController.abort();
+          syncErrorState.abortController.signal.addEventListener('abort', abortSyncAttempt);
+          runAbortController.signal.addEventListener('abort', abortSyncAttempt);
+          try {
+            await syncArchive(
+              username,
+              state,
+              watermarks,
+              (msg) => setStatus(msg, false, true),
+              syncAbortController.signal
+            );
+          } finally {
+            syncErrorState.abortController.signal.removeEventListener('abort', abortSyncAttempt);
+            runAbortController.signal.removeEventListener('abort', abortSyncAttempt);
+          }
+          if (!isCurrentRun()) return;
           perfMetrics.networkFetchMs = performance.now() - netStart;
           perfMetrics.newItems = state.items.length - initialCount;
           renderTopStatusLine();
@@ -2123,6 +2192,11 @@ export const initArchive = async (username: string): Promise<void> => {
             isSyncInProgress = false;
             return;
           }
+          if (!isCurrentRun()) {
+            pendingRetryCount = 0;
+            isSyncInProgress = false;
+            return;
+          }
 
           const shouldAutoRetry = useAutoRetry || GM_getValue(AUTO_RETRY_KEY, false);
 
@@ -2142,12 +2216,14 @@ export const initArchive = async (username: string): Promise<void> => {
             pendingRetryCount++;
 
             const doRetry = () => {
+              if (!isCurrentRun()) return;
               if (retryTimeout) clearTimeout(retryTimeout);
               pendingRetryCount--;
               attemptSync(true, attemptNumber + 1);
             };
 
             const doCancel = () => {
+              if (!isCurrentRun()) return;
               if (retryTimeout) clearTimeout(retryTimeout);
               syncErrorState.abortController?.abort();
               if (errorContainer) errorContainer.style.display = 'none';
@@ -2169,9 +2245,11 @@ export const initArchive = async (username: string): Promise<void> => {
             // Wrap callbacks to track retry state
             pendingRetryCount++;
             showErrorUI(error as Error, (retryMode) => {
+              if (!isCurrentRun()) return;
               pendingRetryCount--;
               attemptSync(retryMode, 1);
             }, () => {
+              if (!isCurrentRun()) return;
               pendingRetryCount = 0;
               isSyncInProgress = false;
               setStatus(`Sync failed. Showing cached data (${cached.items.length} items).`, true, false);
@@ -2193,6 +2271,7 @@ export const initArchive = async (username: string): Promise<void> => {
     };
 
     resyncBtn?.addEventListener('click', () => {
+      if (!isCurrentRun()) return;
       // Clear current view
       if (confirm('This will re-download the entire archive history. Continue?')) {
         performSync(true);
@@ -2211,6 +2290,7 @@ export const initArchive = async (username: string): Promise<void> => {
     state.items = cached.items;
     persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
     contextSearchItemsCache = null;
+    if (!isCurrentRun()) return;
 
     // We no longer trigger an initial render from cache here.
     // Instead, we wait for sync to finish (or fail) and then render once.
@@ -2237,9 +2317,12 @@ export const initArchive = async (username: string): Promise<void> => {
         updateItemMap(state.items);
       }
     }
+    if (!isCurrentRun()) return;
 
     // Wait for the sync to eventually finish (it will call updateItemMap itself if new items found)
     await syncPromise;
+    if (!isCurrentRun()) return;
+    if (await restartArchiveInitIfDetached('sync completion')) return;
 
     // 3. Final render check
     // If we haven't rendered yet (e.g. sync was fast but found no new items), do it now.
@@ -2250,11 +2333,17 @@ export const initArchive = async (username: string): Promise<void> => {
     }
 
     await refreshView();
+    if (!isCurrentRun()) return;
+    if (await restartArchiveInitIfDetached('final refresh')) return;
 
     dashboardEl!.style.display = 'none';
     signalReady();
 
   } catch (err) {
+    if (!isCurrentRun()) {
+      Logger.debug('Archive init run superseded by a newer run; skipping stale error handling.');
+      return;
+    }
     Logger.error('Failed to initialize archive:', err);
     const root = document.getElementById('power-reader-root');
     if (root) {
@@ -2263,6 +2352,10 @@ export const initArchive = async (username: string): Promise<void> => {
       const message = err instanceof Error ? err.message : String(err);
       errorEl.textContent = `Failed to load archive: ${message}`;
       root.replaceChildren(errorEl);
+    }
+  } finally {
+    if (runId === activeArchiveInitRunId && activeArchiveInitAbortController === runAbortController) {
+      activeArchiveInitAbortController = null;
     }
   }
 };
