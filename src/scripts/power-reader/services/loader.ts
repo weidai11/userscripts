@@ -9,6 +9,8 @@ import {
   GET_SUBSCRIPTIONS,
   GET_ALL_RECENT_COMMENTS_LITE,
   GET_NEW_POSTS_FULL,
+  GET_COMMENT_REPLIES,
+  GET_THREAD_COMMENTS,
   COMMENT_FIELDS,
 } from '../../../shared/graphql/queries';
 import type {
@@ -24,6 +26,10 @@ import type {
   GetSubscriptionsQueryVariables,
   GetNewPostsFullQuery,
   GetNewPostsFullQueryVariables,
+  GetCommentRepliesQuery,
+  GetCommentRepliesQueryVariables,
+  GetThreadCommentsQuery,
+  GetThreadCommentsQueryVariables,
 } from '../../../generated/graphql';
 import { getLoadFrom, setLoadFrom } from '../utils/storage';
 import { CONFIG } from '../config';
@@ -39,6 +45,57 @@ export interface InitialLoadResult {
   currentUserId: string | null;
   currentUserPaletteStyle: 'listView' | 'gridView' | null;
 }
+
+const isEAHost = (): boolean => window.location.hostname.includes('effectivealtruism.org');
+
+const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> => {
+  const cutoffMs = new Date(afterDate).getTime();
+  if (!Number.isFinite(cutoffMs)) {
+    Logger.warn(`EAF fallback skipped due to invalid after date: ${afterDate}`);
+    return [];
+  }
+
+  const pageSize = Math.min(CONFIG.loadMax, 200);
+  const maxPages = Math.max(1, Math.ceil(CONFIG.loadMax / pageSize));
+  const seen = new Set<string>();
+  const filtered: Comment[] = [];
+  let pagesFetched = 0;
+
+  for (let page = 0; page < maxPages; page++) {
+    const offset = page * pageSize;
+    const res = await queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(
+      GET_ALL_RECENT_COMMENTS_LITE,
+      {
+        limit: pageSize,
+        offset,
+        sortBy: 'newest',
+      }
+    );
+    pagesFetched++;
+
+    const batch = (res?.comments?.results || []) as Comment[];
+    if (batch.length === 0) break;
+
+    for (const comment of batch) {
+      if (!comment?._id || seen.has(comment._id)) continue;
+      seen.add(comment._id);
+      const postedAtMs = comment.postedAt ? new Date(comment.postedAt).getTime() : NaN;
+      if (Number.isFinite(postedAtMs) && postedAtMs >= cutoffMs) {
+        filtered.push(comment);
+      }
+    }
+
+    const oldestPostedAt = batch[batch.length - 1]?.postedAt;
+    const oldestMs = oldestPostedAt ? new Date(oldestPostedAt).getTime() : NaN;
+    const crossedCutoff = Number.isFinite(oldestMs) && oldestMs < cutoffMs;
+    if (crossedCutoff || filtered.length >= CONFIG.loadMax) break;
+  }
+
+  filtered.sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());
+  const limited = filtered.slice(0, CONFIG.loadMax);
+  Logger.info(`EAF recent-comments fallback fetched ${pagesFetched} page(s), retained ${limited.length} comments after ${afterDate}`);
+  return limited;
+};
 
 /**
  * Phase 1: Initial fast fetch - User + Comments
@@ -63,18 +120,21 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
   Logger.info(`Initial fetch: after=${afterDate}`);
   const start = performance.now();
 
-  const [userRes, commentsRes] = await Promise.all([
-    queryGraphQL<GetCurrentUserQuery, GetCurrentUserQueryVariables>(GET_CURRENT_USER),
-    queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(GET_ALL_RECENT_COMMENTS_LITE, {
+  const userPromise = queryGraphQL<GetCurrentUserQuery, GetCurrentUserQueryVariables>(GET_CURRENT_USER);
+  const commentsPromise = (isEAHost() && !!afterDate)
+    ? fetchRecentCommentsForEAF(afterDate)
+    : queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(GET_ALL_RECENT_COMMENTS_LITE, {
       after: afterDate,
       limit: CONFIG.loadMax,
       sortBy: afterDate ? 'oldest' : 'newest'
-    }),
+    }).then(res => (res?.comments?.results || []) as Comment[]);
+
+  const [userRes, comments] = await Promise.all([
+    userPromise,
+    commentsPromise,
   ]);
   const networkTime = performance.now() - start;
   Logger.info(`Initial fetch network request took ${networkTime.toFixed(2)}ms`);
-
-  const comments: Comment[] = (commentsRes?.comments?.results || []) as Comment[];
 
   // Extract user info
   let currentUsername: string | null = null;
@@ -119,8 +179,26 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
 export const fetchRepliesBatch = async (parentIds: string[]): Promise<Comment[]> => {
   const start = performance.now();
   if (parentIds.length === 0) return [];
+  const isEAHost = window.location.hostname.includes('effectivealtruism.org');
   const CHUNK_SIZE = 30;
   const allResults: Comment[] = [];
+  if (isEAHost) {
+    for (const parentId of parentIds) {
+      try {
+        const res = await queryGraphQL<GetCommentRepliesQuery, GetCommentRepliesQueryVariables>(
+          GET_COMMENT_REPLIES,
+          { parentCommentId: parentId }
+        );
+        const results = (res?.comments?.results || []) as unknown as Comment[];
+        allResults.push(...results);
+      } catch (e) {
+        Logger.error(`Reply fetch failed for parent ${parentId}`, e);
+      }
+    }
+    Logger.info(`EA fallback reply fetch for ${parentIds.length} parents took ${(performance.now() - start).toFixed(2)}ms`);
+    return allResults;
+  }
+
   for (let i = 0; i < parentIds.length; i += CHUNK_SIZE) {
     const chunk = parentIds.slice(i, i + CHUNK_SIZE);
     const query = `
@@ -128,11 +206,12 @@ export const fetchRepliesBatch = async (parentIds: string[]): Promise<Comment[]>
         ${chunk.map((_, j) => `
           r${j}: comments(selector: { commentReplies: { parentCommentId: $id${j} } }) {
             results {
-              ${COMMENT_FIELDS}
+              ...CommentFieldsFull
             }
           }
         `).join('\n')}
       }
+      ${COMMENT_FIELDS}
     `;
     const variables: Record<string, string> = {};
     chunk.forEach((id, j) => variables[`id${j}`] = id);
@@ -157,8 +236,26 @@ export const fetchRepliesBatch = async (parentIds: string[]): Promise<Comment[]>
 export const fetchThreadsBatch = async (threadIds: string[]): Promise<Comment[]> => {
   const start = performance.now();
   if (threadIds.length === 0) return [];
+  const isEAHost = window.location.hostname.includes('effectivealtruism.org');
   const CHUNK_SIZE = 15; // Smaller chunk for threads as they return more data
   const allResults: Comment[] = [];
+  if (isEAHost) {
+    for (const threadId of threadIds) {
+      try {
+        const res = await queryGraphQL<GetThreadCommentsQuery, GetThreadCommentsQueryVariables>(
+          GET_THREAD_COMMENTS,
+          { topLevelCommentId: threadId, limit: 100 }
+        );
+        const results = (res?.comments?.results || []) as unknown as Comment[];
+        allResults.push(...results);
+      } catch (e) {
+        Logger.error(`Thread fetch failed for root ${threadId}`, e);
+      }
+    }
+    Logger.info(`EA fallback thread fetch for ${threadIds.length} threads took ${(performance.now() - start).toFixed(2)}ms`);
+    return allResults;
+  }
+
   for (let i = 0; i < threadIds.length; i += CHUNK_SIZE) {
     const chunk = threadIds.slice(i, i + CHUNK_SIZE);
     const query = `
@@ -166,11 +263,12 @@ export const fetchThreadsBatch = async (threadIds: string[]): Promise<Comment[]>
         ${chunk.map((_, j) => `
           t${j}: comments(selector: { repliesToCommentThreadIncludingRoot: { topLevelCommentId: $id${j} } }, limit: 100) {
             results {
-              ${COMMENT_FIELDS}
+              ...CommentFieldsFull
             }
           }
         `).join('\n')}
       }
+      ${COMMENT_FIELDS}
     `;
     const variables: Record<string, string> = {};
     chunk.forEach((id, j) => variables[`id${j}`] = id);

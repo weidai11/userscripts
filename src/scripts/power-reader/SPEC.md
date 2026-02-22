@@ -177,7 +177,6 @@ Comments under a post are organized hierarchically:
 - **[PR-READ-01]** **Item-Centric Threshold**: Items are marked read when their specific **content body** is scrolled past, rather than their entire bounding box (which might include long nested subthreads).
     - **Posts**: Marked when the bottom of `.pr-post-content` is passed. (See `[PR-POST-08]`).
     - **Comments**: Marked when the bottom of `.pr-comment-body` is passed. If a comment is collapsed, the bottom of the `.pr-comment-meta` (header) is used as the threshold.
-- **[PR-READ-01.1]** **Marking logic**: (Legacy) Mark as read if the calculated threshold is above the viewport top.
 - **[PR-READ-02]** **Bottom of Page Logic**: Bottom detection uses a small tolerance margin (currently ~150px from document end) for cross-browser and zoom robustness. Once in this bottom zone, all currently visible unread comments become eligible for read-marking (using the same delay as the normal scroll-past threshold).
 - **[PR-READ-03]** **Session Advancement**: When the "Bottom of Page" condition is met, update the stored `loadFrom` value to the ISO timestamp of the **newest comment from the initial comments batch PLUS 1 millisecond** (excluding smart-load and user-triggered loads). Advancement triggers unconditionally at bottom-of-page (no additional check on unread count). Startup exception: if unread count is already zero on initial render and comments are loaded, this same advancement flow may run immediately.
 - **[PR-READ-04]** **5-second delay** before marking - uses `setTimeout` to avoid marking during fast scrolling.
@@ -479,6 +478,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-VOTE-03]** **Agreement voting**: `[✓]` `[✗]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
 - **[PR-VOTE-05]** If not logged in: Open login page in new tab.
+- **[PR-VOTE-06]** On EA Forum host, `agree` and `disagree` reaction chips must remain visible even when their counts are `0`.
 
 ---
 

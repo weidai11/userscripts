@@ -15,6 +15,11 @@ export type KarmaVote = 'smallUpvote' | 'smallDownvote' | 'bigUpvote' | 'bigDown
 export type AgreementVote = 'agree' | 'disagree' | 'neutral';
 
 const LOGIN_URL = `${window.location.origin}/login`;
+const EAF_HOST_MARKER = 'effectivealtruism.org';
+
+const isEAHost = (): boolean => window.location.hostname.includes(EAF_HOST_MARKER);
+const isEAFAgreementReaction = (reactionName: string): boolean =>
+  reactionName === 'agree' || reactionName === 'disagree';
 
 const openLoginPage = (): void => {
   const opened = window.open(LOGIN_URL, '_blank', 'noopener,noreferrer');
@@ -95,13 +100,25 @@ export async function castAgreementVote(
   const agreementValue = voteType === 'agree' ? 'smallUpvote' :
     voteType === 'disagree' ? 'smallDownvote' :
       'neutral';
+  const eafDebug = isEAHost() && documentType === 'comment';
+  const agreementPayload = { agreement: agreementValue };
+
+  if (eafDebug) {
+    Logger.info('[EAF vote debug] castAgreementVote request', {
+      documentId,
+      voteType,
+      currentKarma,
+      agreementPayload,
+      hostname: window.location.hostname,
+    });
+  }
 
   try {
     if (documentType === 'post') {
       const response = await queryGraphQL<VotePostMutation, VotePostMutationVariables>(VOTE_POST_MUTATION, {
         documentId: documentId,
         voteType: currentKarma || 'neutral',
-        extendedVote: { agreement: agreementValue },
+        extendedVote: agreementPayload,
       });
       return response as unknown as VoteResponse;
     }
@@ -109,11 +126,30 @@ export async function castAgreementVote(
     const response = await queryGraphQL<VoteMutation, VoteMutationVariables>(VOTE_COMMENT_MUTATION, {
       documentId: documentId,
       voteType: currentKarma || 'neutral',
-      extendedVote: { agreement: agreementValue },
+      extendedVote: agreementPayload,
     });
+
+    if (eafDebug) {
+      const doc = response?.performVoteComment?.document;
+      const ext = (doc?.currentUserExtendedVote || {}) as any;
+      Logger.info('[EAF vote debug] castAgreementVote response', {
+        documentId,
+        agreement: ext?.agreement ?? null,
+        agree: ext?.agree ?? null,
+        disagree: ext?.disagree ?? null,
+      });
+    }
 
     return response;
   } catch (e) {
+    if (eafDebug) {
+      Logger.error('[EAF vote debug] castAgreementVote failed', {
+        documentId,
+        voteType,
+        currentKarma,
+        agreementPayload,
+      }, e);
+    }
     return handleVoteFailure(e, isLoggedIn, 'Agreement vote');
   }
 }
@@ -129,7 +165,8 @@ export async function castReactionVote(
   currentKarma: KarmaVote | null = 'neutral',
   currentExtendedVote: CurrentUserExtendedVote | null = {},
   quote: string | null = null,
-  documentType: 'comment' | 'post' = 'comment'
+  documentType: 'comment' | 'post' = 'comment',
+  isEA: boolean = false
 ): Promise<VoteResponse | null> {
   // 1. Get existing reacts list
   const existingReacts = currentExtendedVote?.reacts || [];
@@ -173,16 +210,53 @@ export async function castReactionVote(
 
     if (quote) {
       newReaction.quotes = [quote];
+      newReacts.push(newReaction);
+    } else if (!isEA) {
+      // For standard LW, add to reacts array. 
+      // For EAF, we handle it via top-level keys below unless it's a quoted reaction.
+      newReacts.push(newReaction);
     }
-
-    newReacts.push(newReaction);
   }
 
   // 4. Construct payload, preserving agreement
-  const extendedVotePayload = {
-    agreement: currentExtendedVote?.agreement,
-    reacts: newReacts
-  };
+  let extendedVotePayload: any;
+
+  if (isEA && !quote) {
+    // EA Forum style: Top-level keys for reactions
+    const currentEAExVote = (currentExtendedVote as any) || {};
+    extendedVotePayload = { ...currentEAExVote };
+    
+    // Toggle the current reaction
+    const isSelected = !!currentEAExVote[reactionName];
+    extendedVotePayload[reactionName] = !isSelected;
+
+    // Handle mutual exclusivity for agree/disagree
+    if (reactionName === 'agree' && extendedVotePayload[reactionName]) {
+      extendedVotePayload['disagree'] = false;
+    } else if (reactionName === 'disagree' && extendedVotePayload[reactionName]) {
+      extendedVotePayload['agree'] = false;
+    }
+    
+    // Ensure reacts array is also preserved if it exists
+    extendedVotePayload.reacts = newReacts;
+  } else {
+    // LessWrong style: reacts array
+    extendedVotePayload = {
+      agreement: currentExtendedVote?.agreement,
+      reacts: newReacts
+    };
+  }
+  const eafAgreementDebug = isEA && documentType === 'comment' && !quote && isEAFAgreementReaction(reactionName);
+  if (eafAgreementDebug) {
+    Logger.info('[EAF vote debug] castReactionVote request', {
+      documentId,
+      reactionName,
+      currentKarma: currentKarma || 'neutral',
+      hostname: window.location.hostname,
+      extendedVotePayload,
+      currentUserExtendedVote: currentExtendedVote || {},
+    });
+  }
 
   try {
     if (documentType === 'post') {
@@ -199,8 +273,36 @@ export async function castReactionVote(
       voteType: currentKarma || 'neutral',
       extendedVote: extendedVotePayload,
     });
+    if (eafAgreementDebug) {
+      const doc = response?.performVoteComment?.document;
+      const ext = (doc?.currentUserExtendedVote || {}) as any;
+      Logger.info('[EAF vote debug] castReactionVote response', {
+        documentId,
+        reactionName,
+        baseScore: doc?.baseScore ?? null,
+        voteCount: doc?.voteCount ?? null,
+        agreement: ext?.agreement ?? null,
+        agree: ext?.agree ?? null,
+        disagree: ext?.disagree ?? null,
+        hasReactsArray: Array.isArray(ext?.reacts),
+      });
+      if (!doc) {
+        Logger.warn('[EAF vote debug] castReactionVote returned without document payload', {
+          documentId,
+          reactionName,
+        });
+      }
+    }
     return response;
   } catch (e) {
+    if (eafAgreementDebug) {
+      Logger.error('[EAF vote debug] castReactionVote failed', {
+        documentId,
+        reactionName,
+        currentKarma: currentKarma || 'neutral',
+        extendedVotePayload,
+      }, e);
+    }
     return handleVoteFailure(e, isLoggedIn, 'Reaction vote');
   }
 }

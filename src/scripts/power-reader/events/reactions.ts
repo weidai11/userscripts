@@ -66,8 +66,19 @@ export const handleReactionVote = async (
     !!state.currentUserId,
     comment.currentUserVote as KarmaVote,
     comment.currentUserExtendedVote as CurrentUserExtendedVote,
-    quote
+    quote,
+    'comment',
+    window.location.hostname.includes('effectivealtruism.org') || comment.votingSystem === 'eaEmojis'
   );
+  if (!res && window.location.hostname.includes('effectivealtruism.org') && (reactionName === 'agree' || reactionName === 'disagree')) {
+    Logger.warn('[EAF vote debug] handleReactionVote received null response', {
+      commentId,
+      reactionName,
+      votingSystem: comment.votingSystem || null,
+      currentUserVote: comment.currentUserVote || null,
+      currentUserExtendedVote: comment.currentUserExtendedVote || null,
+    });
+  }
 
   if (res) {
     updateVoteUI(commentId, res);

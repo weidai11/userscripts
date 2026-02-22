@@ -54,6 +54,9 @@ const formatStatusDate = (iso: string): string => {
   return `${mon} ${day} ${hh}:${mm}`;
 };
 
+const getForumLabel = (): string =>
+  window.location.hostname.includes('effectivealtruism.org') ? 'EA Forum' : 'Less Wrong';
+
 /**
  * Build post groups from comments and posts
  * Groups comments by their parent post
@@ -354,9 +357,10 @@ export const renderUI = (state: ReaderState): void => {
   const userLabel = state.currentUsername ? `👤 ${state.currentUsername}` : '👤 not logged in';
 
   // Build HTML
+  const forumLabel = getForumLabel();
   let html = `
     <div class="pr-header">
-      <h1>Less Wrong: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
+      <h1>${forumLabel}: Power Reader <small style="font-size: 0.6em; color: #888;">v${__APP_VERSION__}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread

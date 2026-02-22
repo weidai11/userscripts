@@ -79,12 +79,25 @@ export const renderReactions = (
     let html = '<span class="pr-reactions-inner">';
     const reacts = extendedScore?.reacts || {};
     const userReacts = currentUserExtendedVote?.reacts || [];
+    const isEAHost = typeof window !== 'undefined' && window.location.hostname.includes('effectivealtruism.org');
+    const alwaysVisibleReactions = isEAHost ? new Set(['agree', 'disagree']) : new Set<string>();
 
     const allReactions = getReactions();
 
     // Calculate counts for each reaction type
     const reactionCounts: Record<string, number> = {};
 
+    // 1. Add top-level counts (e.g. EA Forum "agree", "disagree")
+    if (extendedScore) {
+        allReactions.forEach(reaction => {
+            const count = (extendedScore as any)[reaction.name];
+            if (typeof count === 'number' && count > 0) {
+                reactionCounts[reaction.name] = (reactionCounts[reaction.name] || 0) + count;
+            }
+        });
+    }
+
+    // 2. Add counts from reacts array (named reactions)
     Object.entries(reacts).forEach(([reactName, users]) => {
         let score = 0;
         users.forEach(u => {
@@ -92,15 +105,21 @@ export const renderReactions = (
             else score += 1;
         });
         if (score > 0) {
-            reactionCounts[reactName] = score;
+            reactionCounts[reactName] = (reactionCounts[reactName] || 0) + score;
         }
     });
 
     allReactions.forEach(reaction => {
         const count = reactionCounts[reaction.name] || 0;
-        const userVoted = userReacts.some(r => r.react === reaction.name);
+        const isAlwaysVisible = alwaysVisibleReactions.has(reaction.name);
+        let userVoted = userReacts.some(r => r.react === reaction.name);
 
-        if (count > 0 || userVoted) {
+        // Also check top-level keys for EA Forum style votes
+        if (!userVoted && currentUserExtendedVote && (currentUserExtendedVote as any)[reaction.name]) {
+            userVoted = true;
+        }
+
+        if (count > 0 || userVoted || isAlwaysVisible) {
             const filter = reaction.filter || DEFAULT_FILTER;
             const opacity = filter.opacity ?? 1;
             const saturate = filter.saturate ?? 1;
@@ -117,6 +136,8 @@ export const renderReactions = (
 
             const title = `${reaction.label}${reaction.description ? '\\n' + reaction.description : ''}`;
 
+            const countText = count > 0 || isAlwaysVisible ? String(count) : '';
+
             html += `
         <span class="pr-reaction-chip ${userVoted ? 'voted' : ''}" 
               data-action="reaction-vote" 
@@ -126,7 +147,7 @@ export const renderReactions = (
           <span class="pr-reaction-icon" style="overflow:visible">
              <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
           </span>
-          <span class="pr-reaction-count">${count > 0 ? count : ''}</span>
+          <span class="pr-reaction-count">${countText}</span>
         </span>
       `;
         }

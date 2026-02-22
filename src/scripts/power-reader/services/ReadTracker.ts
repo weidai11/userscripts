@@ -29,6 +29,7 @@ export class ReadTracker {
     private recheckTimer: number | null = null;
     private countdownSeconds: number = 0;
     private hasAdvancedThisBatch: boolean = false;
+    private static readonly EAF_HOST_MARKER = 'effectivealtruism.org';
 
     constructor(
         scrollMarkDelay: number,
@@ -295,13 +296,26 @@ export class ReadTracker {
         msgEl.onclick = null;
 
         try {
-            const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
-                after: afterIso,
-                limit: 1,
-                sortBy: 'oldest'
-            }) as AllRecentCommentsResponse;
-
-            const hasMore = (res?.comments?.results?.length || 0) > 0;
+            const isEAHost = window.location.hostname.includes(ReadTracker.EAF_HOST_MARKER);
+            let hasMore = false;
+            if (isEAHost) {
+                // EAF legacy `comments(input.terms)` ignores `after`, so compare newest postedAt client-side.
+                const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
+                    limit: 1,
+                    sortBy: 'newest'
+                }) as AllRecentCommentsResponse;
+                const newestPostedAt = res?.comments?.results?.[0]?.postedAt;
+                const newestMs = newestPostedAt ? new Date(newestPostedAt).getTime() : NaN;
+                const afterMs = new Date(afterIso).getTime();
+                hasMore = Number.isFinite(newestMs) && Number.isFinite(afterMs) && newestMs > afterMs;
+            } else {
+                const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
+                    after: afterIso,
+                    limit: 1,
+                    sortBy: 'oldest'
+                }) as AllRecentCommentsResponse;
+                hasMore = (res?.comments?.results?.length || 0) > 0;
+            }
 
             if (hasMore) {
                 msgEl.textContent = 'New comments available! Click here to reload.';

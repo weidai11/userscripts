@@ -22,6 +22,12 @@ type GraphQLResponse = {
 
 const clip = (s: string, max = 800): string => (s.length > max ? `${s.slice(0, max)}...` : s);
 const formatErrors = (errors?: GraphQLError[]): string => JSON.stringify(errors ?? [], null, 2);
+const isExpectedVoteMutationError = (label: string, errors?: GraphQLError[]): boolean => {
+  if (label !== 'VoteMutation' || !errors?.length) return false;
+  return errors.every((e: GraphQLError) =>
+    /not logged in|error casting vote/i.test(String(e.message || '')),
+  );
+};
 
 const postGraphQL = async (
   page: Page,
@@ -68,7 +74,7 @@ const postGraphQL = async (
     throw new Error(`[api-sanity] ${label} expected JSON but got non-JSON response`);
   }
 
-  if (json.errors?.length) {
+  if (json.errors?.length && label !== 'VoteMutation' && !isExpectedVoteMutationError(label, json.errors)) {
     console.error(`[api-sanity] ${label} GraphQL errors: ${formatErrors(json.errors)}`);
   }
 

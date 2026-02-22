@@ -20,27 +20,19 @@ function main() {
 
     // 1. Extract all requirement IDs from SPEC (supports dotted IDs like [PR-FOO-01.1])
     const idRegex = /\[PR-[A-Z]+-[0-9]+(?:\.[0-9]+)?\]/g;
-    const legacyIds = new Set<string>();
     const allSpecIds = new Set<string>();
     const specLines = specContent.split(/\r?\n/);
     for (const line of specLines) {
         const matches = line.match(idRegex);
         if (!matches) continue;
         matches.forEach(id => allSpecIds.add(id));
-        if (/\blegacy\b/i.test(line)) {
-            matches.forEach(id => legacyIds.add(id));
-        }
     }
-    const allIds = Array.from(allSpecIds).filter(id => !legacyIds.has(id));
+    const allIds = Array.from(allSpecIds);
 
     console.log(`
 📊 Power Reader Coverage Audit`);
     console.log(`===============================`);
     console.log(`Total Requirements found in SPEC: ${allIds.length}`);
-    if (legacyIds.size > 0) {
-        console.log(`Excluded legacy requirements: ${legacyIds.size}`);
-    }
-
     // 2. Extract results from report
     // We need to traverse the suite tree in the JSON report
     const testResults = new Map<string, 'passed' | 'failed' | 'skipped'>();

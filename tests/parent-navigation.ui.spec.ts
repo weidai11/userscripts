@@ -147,24 +147,29 @@ test.describe('Power Reader Parent Navigation', () => {
         const setup = await page.evaluate(() => {
             const parent = document.querySelector('.pr-comment[data-id="c1"]') as HTMLElement | null;
             const parentBody = document.querySelector('.pr-comment[data-id="c1"] > .pr-comment-body') as HTMLElement | null;
-            if (!parent || !parentBody) return null;
+            const tallSiblingBody = document.querySelector('.pr-comment[data-id="c3"] > .pr-comment-body') as HTMLElement | null;
+            if (!parent || !parentBody || !tallSiblingBody) return null;
             const targetTop = 120;
             window.scrollBy(0, parentBody.getBoundingClientRect().top - targetTop);
             const parentRect = parent.getBoundingClientRect();
             const parentBodyRect = parentBody.getBoundingClientRect();
+            const tallSiblingRect = tallSiblingBody.getBoundingClientRect();
             return {
                 scrollY: window.scrollY,
                 parentBottom: parentRect.bottom,
                 parentBodyTop: parentBodyRect.top,
                 parentBodyBottom: parentBodyRect.bottom,
+                siblingTop: tallSiblingRect.top,
+                siblingScrollHeight: tallSiblingBody.scrollHeight,
                 innerHeight: window.innerHeight
             };
         });
 
         expect(setup).not.toBeNull();
-        expect((setup as any).parentBottom).toBeGreaterThan((setup as any).innerHeight);
         expect((setup as any).parentBodyTop).toBeGreaterThanOrEqual(0);
         expect((setup as any).parentBodyBottom).toBeLessThanOrEqual((setup as any).innerHeight);
+        expect((setup as any).siblingTop).toBeLessThan((setup as any).innerHeight);
+        expect((setup as any).siblingTop + (setup as any).siblingScrollHeight).toBeGreaterThan((setup as any).innerHeight);
 
         const beforeScroll = await page.evaluate(() => window.scrollY);
 

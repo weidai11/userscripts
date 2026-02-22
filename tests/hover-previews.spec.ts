@@ -86,8 +86,17 @@ test.describe('Power Reader Hover Previews', () => {
     test('Hovering whitespace to the right of title triggers preview', async ({ page }) => {
         await setupDefault(page);
         const h2 = page.locator('.pr-post-header h2').first();
-        // Hover at the right side of the H2 (whitespace)
-        await h2.hover({ position: { x: 500, y: 10 } });
+        const title = h2.locator('.pr-post-title').first();
+        const [box, titleBox] = await Promise.all([h2.boundingBox(), title.boundingBox()]);
+        expect(box).not.toBeNull();
+        expect(titleBox).not.toBeNull();
+
+        // Pick whitespace inside h2, just to the right of title text, but keep clear of action buttons.
+        const titleRightInH2 = Math.floor(((titleBox?.x ?? 0) - (box?.x ?? 0)) + (titleBox?.width ?? 0));
+        const maxSafeX = Math.max(2, Math.floor((box?.width ?? 0) - 40));
+        const x = Math.max(2, Math.min(maxSafeX, titleRightInH2 + 8));
+        const y = Math.max(2, Math.floor((box?.height ?? 0) / 2));
+        await h2.hover({ position: { x, y } });
 
         const preview = page.locator('.pr-preview-overlay.post-preview');
         await expect(preview).toBeVisible({ timeout: 15000 });
