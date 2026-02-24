@@ -185,7 +185,8 @@ const fetchItemMarkdown = async (
 };
 
 export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFeature => {
-  const getCacheKey = (id: string): string => `${config.cacheKeyPrefix}:${id}`;
+  const getCacheKey = (id: string, includeDescendants: boolean = false): string =>
+    `${config.cacheKeyPrefix}:${id}:${includeDescendants ? 'with_descendants' : 'base'}`;
 
   const closePopup = (state: ReaderState): void => {
     if (state.activeAIPopup) {
@@ -232,10 +233,10 @@ export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFea
       return;
     }
 
-    const cacheKey = getCacheKey(id);
-    if (!includeDescendants && state.sessionAICache[cacheKey] && !(window as any).PR_FORCE_AI_REGEN) {
+    const cacheKey = getCacheKey(id, includeDescendants);
+    if (state.sessionAICache[cacheKey] && !(window as any).PR_FORCE_AI_REGEN) {
       Logger.info(`${config.name}: Using session-cached answer for ${id}`);
-      displayPopup(state.sessionAICache[cacheKey], state);
+      displayPopup(state.sessionAICache[cacheKey], state, includeDescendants);
       return;
     }
     (window as any).PR_FORCE_AI_REGEN = false;
@@ -413,15 +414,16 @@ export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFea
       if (!newVal || !remote) return;
 
       const { text, requestId, includeDescendants } = newVal;
+      const includeDescendantsMode = !!includeDescendants;
       if (requestId === state.currentAIRequestId) {
         Logger.info(`${config.name}: Received matching response!`);
 
         const target = document.querySelector('.being-summarized') as HTMLElement;
         if (target?.dataset.id) {
-          state.sessionAICache[getCacheKey(target.dataset.id)] = text;
+          state.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text;
         }
 
-        displayPopup(text, state, !!includeDescendants);
+        displayPopup(text, state, includeDescendantsMode);
         setStatusMessage(`${config.name} response received.`);
 
         const stickyEl = document.getElementById('pr-sticky-ai-status');

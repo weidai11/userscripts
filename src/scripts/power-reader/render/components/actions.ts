@@ -19,7 +19,8 @@ export function renderVoteButtons(
     voteCount: number = 0,
     agreementVoteCount: number = 0,
     showAgreement: boolean = true,
-    showButtons: boolean = true
+    showButtons: boolean = true,
+    reactionsHtml: string = ''
 ): string {
     const isUpvoted = currentKarmaVote === 'smallUpvote' || currentKarmaVote === 'bigUpvote' || currentKarmaVote === 1;
     const isDownvoted = currentKarmaVote === 'smallDownvote' || currentKarmaVote === 'bigDownvote' || currentKarmaVote === -1;
@@ -64,7 +65,7 @@ export function renderVoteButtons(
     </span>
     ${agreementHtml}
     <span class="pr-reactions-container" data-id="${itemId}">
-      <!-- Reactions will be injected here during main render or update -->
+      ${reactionsHtml}
     </span>
   `;
 }

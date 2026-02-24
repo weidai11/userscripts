@@ -492,6 +492,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-REACT-06]** **Reaction Picker Tooltips**: Viewport-aware tooltips for icons within the reaction picker panel; native `title` tooltips for reaction chips in post/comment headers.
 - **[PR-REACT-07]** **Inline Reactions**: Select text to react with a quote.
 - **[PR-REACT-08]** **Display**: Reactions shown as chips in header with net scoring.
+- **[PR-REACT-09]** **Single Reaction Control**: Each post/comment metadata row MUST render exactly one reactions container and one add-reaction button; rerenders (including vote updates) MUST replace reaction contents in-place without duplicating controls.
 
 ---
 
@@ -501,7 +502,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
     - **Closing Logic**: Typing the respective shortkey while the mouse is over an open AI response popup or the focal item MUST close the popup.
 - **[PR-AI-02]** **Automation**: Opens the respective AI site, selects model (if applicable), injects thread XML and prompt.
 - **[PR-AI-03]** **Display**: Responses captured and shown in formatted popup.
-- **[PR-AI-04]** **Caching**: Responses cached in-memory for session.
+- **[PR-AI-04]** **Caching**: Responses cached in-memory for session, scoped by provider and descendant mode (base vs include-descendants).
 - **[PR-AI-05]** **Depth**: Recursively fetches parent comments (up to 7 levels).
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.

@@ -201,4 +201,51 @@ test.describe('Power Reader Reactions UI', () => {
         await expect(chip).toBeVisible();
         await expect(agreeBtn).toHaveClass(/active/);
     });
+
+    test('[PR-REACT-09] Reaction UI: does not duplicate add-reaction button after vote-driven refresh', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [{
+                _id: 'c-no-dupe',
+                postId: 'p1',
+                htmlBody: '<p>No duplicate reaction button</p>',
+                postedAt: new Date().toISOString(),
+                baseScore: 5,
+                voteCount: 1,
+                extendedScore: { reacts: {} },
+                currentUserVote: null,
+                currentUserExtendedVote: { reacts: [] },
+                user: { _id: 'u2', username: 'Poster' },
+                post: { _id: 'p1', title: 'Test Post' }
+            }],
+            onMutation: `
+                if (query.includes('performVoteComment') || query.includes('mutation Vote')) {
+                    return {
+                        data: {
+                            performVoteComment: {
+                                document: {
+                                    _id: variables.documentId,
+                                    baseScore: 6,
+                                    voteCount: 2,
+                                    extendedScore: { reacts: {} },
+                                    currentUserVote: variables.voteType || 'smallUpvote',
+                                    currentUserExtendedVote: variables.extendedVote || { reacts: [] },
+                                    afExtendedScore: { agreement: 0 }
+                                }
+                            }
+                        }
+                    };
+                }
+            `
+        });
+
+        const comment = page.locator('.pr-comment[data-id="c-no-dupe"]');
+        await expect(comment.locator('[data-action="open-picker"]')).toHaveCount(1);
+
+        await comment.locator('[data-action="karma-up"]').click();
+        await expect(comment.locator('.pr-karma-score')).toHaveText('6');
+
+        await expect(comment.locator('[data-action="open-picker"]')).toHaveCount(1);
+        await expect(comment.locator('.pr-reactions-container .pr-reactions-inner')).toHaveCount(1);
+    });
 });

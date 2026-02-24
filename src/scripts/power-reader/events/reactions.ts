@@ -6,7 +6,6 @@ import type { ReaderState } from '../state';
 import { ReactionPicker } from '../components/ReactionPicker';
 import {
   castReactionVote,
-  updateVoteUI,
   type KarmaVote,
   type CurrentUserExtendedVote,
 } from '../utils/voting';
@@ -82,7 +81,6 @@ export const handleReactionVote = async (
   }
 
   if (res) {
-    updateVoteUI(commentId, res);
     syncVoteToState(state, commentId, res);
 
     // Clear selection & UI

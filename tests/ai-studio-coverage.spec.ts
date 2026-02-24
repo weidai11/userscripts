@@ -40,7 +40,7 @@ test.describe('Power Reader AI Studio Coverage', () => {
         }).toContain('aistudio.google.com');
     });
 
-    test('[PR-AI-04] Responses are cached in-memory', async ({ page }) => {
+    test('[PR-AI-04] Responses are cached in-memory under provider+mode key', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,
             comments: [{
@@ -52,14 +52,72 @@ test.describe('Power Reader AI Studio Coverage', () => {
         // Manually inject a cached response into state
         await page.evaluate(() => {
             const state = (window as any).getState();
-            state.sessionAICache['c1'] = 'Cached Response Content';
+            state.sessionAICache['ai_studio:c1:base'] = 'Cached Response Content';
         });
 
         const comment = page.locator('.pr-comment').first();
         await comment.hover();
 
         // Verify state injection works
-        const cache = await page.evaluate(() => (window as any).getState().sessionAICache['c1']);
+        const cache = await page.evaluate(() => (window as any).getState().sessionAICache['ai_studio:c1:base']);
         expect(cache).toBe('Cached Response Content');
+    });
+
+    test('AI Studio cache keeps separate entries for g and Shift+g', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [{
+                _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
+                htmlBody: 'Test', user: { username: 'U' }, post: { _id: 'p1', title: 'T' }
+            }],
+            onInit: `
+                window.__GM_LISTENERS = {};
+                window.__GM_LISTENER_ID = 0;
+                window.GM_addValueChangeListener = function (key, cb) {
+                    if (!window.__GM_LISTENERS[key]) window.__GM_LISTENERS[key] = [];
+                    window.__GM_LISTENERS[key].push(cb);
+                    window.__GM_LISTENER_ID += 1;
+                    return window.__GM_LISTENER_ID;
+                };
+                window.__TRIGGER_GM_CHANGE = function (key, value, remote) {
+                    var listeners = window.__GM_LISTENERS[key] || [];
+                    listeners.forEach(function (cb) { cb(key, null, value, remote !== false); });
+                };
+            `
+        });
+
+        await page.evaluate(() => {
+            const target = document.querySelector('.pr-comment[data-id="c1"]') as HTMLElement;
+            if (target) target.classList.add('being-summarized');
+            const state = (window as any).getState();
+            state.currentAIRequestId = 'req-ai-base';
+            (window as any).__TRIGGER_GM_CHANGE('ai_studio_response_payload', {
+                text: 'AI Studio Base Response',
+                requestId: 'req-ai-base',
+                includeDescendants: false
+            }, true);
+        });
+
+        await page.evaluate(() => {
+            const state = (window as any).getState();
+            state.currentAIRequestId = 'req-ai-desc';
+            (window as any).__TRIGGER_GM_CHANGE('ai_studio_response_payload', {
+                text: 'AI Studio Descendants Response',
+                requestId: 'req-ai-desc',
+                includeDescendants: true
+            }, true);
+        });
+
+        const cacheState = await page.evaluate(() => {
+            const state = (window as any).getState();
+            return {
+                base: state.sessionAICache['ai_studio:c1:base'],
+                descendants: state.sessionAICache['ai_studio:c1:with_descendants']
+            };
+        });
+
+        expect(cacheState.base).toContain('AI Studio Base Response');
+        expect(cacheState.descendants).toContain('AI Studio Descendants Response');
+        expect(cacheState.base).not.toBe(cacheState.descendants);
     });
 });

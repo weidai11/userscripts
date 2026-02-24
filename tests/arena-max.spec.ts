@@ -124,7 +124,7 @@ test.describe('Power Reader Arena Max Integration', () => {
         expect(payload).toContain('Child');
     });
 
-    test('Arena listener displays popup and caches response under provider-scoped key', async ({ page }) => {
+    test('Arena listener displays popup and caches response under provider+mode key', async ({ page }) => {
         const comments = [
             {
                 _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
@@ -173,12 +173,79 @@ test.describe('Power Reader Arena Max Integration', () => {
         const cacheState = await page.evaluate(() => {
             const state = (window as any).getState();
             return {
-                arena: state.sessionAICache['arena_max:c1'],
-                aiStudio: state.sessionAICache['ai_studio:c1']
+                arenaBase: state.sessionAICache['arena_max:c1:base'],
+                arenaWithDescendants: state.sessionAICache['arena_max:c1:with_descendants'],
+                aiStudioBase: state.sessionAICache['ai_studio:c1:base']
             };
         });
-        expect(cacheState.arena).toContain('Arena Response Content');
-        expect(cacheState.aiStudio).toBeUndefined();
+        expect(cacheState.arenaBase).toContain('Arena Response Content');
+        expect(cacheState.arenaWithDescendants).toBeUndefined();
+        expect(cacheState.aiStudioBase).toBeUndefined();
+    });
+
+    test('Arena cache keeps separate entries for m and Shift+m', async ({ page }) => {
+        const comments = [
+            {
+                _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
+                htmlBody: '<p>Target</p>', baseScore: 10,
+                user: { _id: 'u1', username: 'Author', karma: 100 },
+                post: { _id: 'p1', title: 'Post 1', baseScore: 10, user: { karma: 100 } },
+                contents: { markdown: 'Target Markdown' }
+            }
+        ];
+
+        await initPowerReader(page, {
+            testMode: true,
+            comments,
+            onInit: `
+                window.__GM_LISTENERS = {};
+                window.__GM_LISTENER_ID = 0;
+                window.GM_addValueChangeListener = function (key, cb) {
+                    if (!window.__GM_LISTENERS[key]) window.__GM_LISTENERS[key] = [];
+                    window.__GM_LISTENERS[key].push(cb);
+                    window.__GM_LISTENER_ID += 1;
+                    return window.__GM_LISTENER_ID;
+                };
+                window.__TRIGGER_GM_CHANGE = function (key, value, remote) {
+                    var listeners = window.__GM_LISTENERS[key] || [];
+                    listeners.forEach(function (cb) { cb(key, null, value, remote !== false); });
+                };
+            `
+        });
+
+        await page.evaluate(() => {
+            const target = document.querySelector('.pr-comment[data-id="c1"]') as HTMLElement;
+            if (target) target.classList.add('being-summarized');
+            const state = (window as any).getState();
+            state.currentAIRequestId = 'req-arena-base';
+            (window as any).__TRIGGER_GM_CHANGE('arena_max_response_payload', {
+                text: 'Arena Base Response',
+                requestId: 'req-arena-base',
+                includeDescendants: false
+            }, true);
+        });
+
+        await page.evaluate(() => {
+            const state = (window as any).getState();
+            state.currentAIRequestId = 'req-arena-desc';
+            (window as any).__TRIGGER_GM_CHANGE('arena_max_response_payload', {
+                text: 'Arena Descendants Response',
+                requestId: 'req-arena-desc',
+                includeDescendants: true
+            }, true);
+        });
+
+        const cacheState = await page.evaluate(() => {
+            const state = (window as any).getState();
+            return {
+                base: state.sessionAICache['arena_max:c1:base'],
+                descendants: state.sessionAICache['arena_max:c1:with_descendants']
+            };
+        });
+
+        expect(cacheState.base).toContain('Arena Base Response');
+        expect(cacheState.descendants).toContain('Arena Descendants Response');
+        expect(cacheState.base).not.toBe(cacheState.descendants);
     });
 
     test('Arena popup regenerate works when pointer is over popup (uses focal item fallback)', async ({ page }) => {

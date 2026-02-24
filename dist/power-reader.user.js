@@ -5424,7 +5424,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
   }
-  function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true) {
+  function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true, reactionsHtml = "") {
     const isUpvoted = currentKarmaVote === "smallUpvote" || currentKarmaVote === "bigUpvote" || currentKarmaVote === 1;
     const isDownvoted = currentKarmaVote === "smallDownvote" || currentKarmaVote === "bigDownvote" || currentKarmaVote === -1;
     const agreeVote = currentAgreement?.agreement;
@@ -5464,7 +5464,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     </span>
     ${agreementHtml}
     <span class="pr-reactions-container" data-id="${itemId}">
-      <!-- Reactions will be injected here during main render or update -->
+      ${reactionsHtml}
     </span>
   `;
   }
@@ -5596,6 +5596,11 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const afExtendedScore = item.afExtendedScore;
     const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
     const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
+    const reactionsHtml = renderReactions(
+      item._id,
+      item.extendedScore,
+      item.currentUserExtendedVote
+    );
     const voteButtonsHtml = renderVoteButtons(
       item._id,
       item.baseScore || 0,
@@ -5605,12 +5610,8 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       isPost2 ? item.voteCount || 0 : 0,
       agreementVoteCount,
       showAgreement,
-      isFullPost
-);
-    const reactionsHtml = renderReactions(
-      item._id,
-      item.extendedScore,
-      item.currentUserExtendedVote
+      isFullPost,
+reactionsHtml
     );
     const authorPrefs = getAuthorPreferences();
     let authorPref = authorPrefs[authorHandle];
@@ -5627,7 +5628,6 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     return `
     <div class="${containerClass}" style="${style}">
       ${voteButtonsHtml}
-      ${reactionsHtml}
       <span class="pr-author-controls">
         <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" 
               data-action="author-down" 
@@ -8248,7 +8248,6 @@ currentCommentId = null;
       });
     }
     if (res) {
-      updateVoteUI(commentId, res);
       syncVoteToState(state2, commentId, res);
       window.getSelection()?.removeAllRanges();
       state2.currentSelection = null;
@@ -9838,7 +9837,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     }
   };
   const createAIProviderFeature = (config) => {
-    const getCacheKey = (id) => `${config.cacheKeyPrefix}:${id}`;
+    const getCacheKey = (id, includeDescendants = false) => `${config.cacheKeyPrefix}:${id}:${includeDescendants ? "with_descendants" : "base"}`;
     const closePopup = (state2) => {
       if (state2.activeAIPopup) {
         state2.activeAIPopup.remove();
@@ -9874,10 +9873,10 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
         Logger.warn(`${config.name}: Element has no ID.`);
         return;
       }
-      const cacheKey = getCacheKey(id);
-      if (!includeDescendants && state2.sessionAICache[cacheKey] && !window.PR_FORCE_AI_REGEN) {
+      const cacheKey = getCacheKey(id, includeDescendants);
+      if (state2.sessionAICache[cacheKey] && !window.PR_FORCE_AI_REGEN) {
         Logger.info(`${config.name}: Using session-cached answer for ${id}`);
-        displayPopup(state2.sessionAICache[cacheKey], state2);
+        displayPopup(state2.sessionAICache[cacheKey], state2, includeDescendants);
         return;
       }
       window.PR_FORCE_AI_REGEN = false;
@@ -10025,13 +10024,14 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       GM_addValueChangeListener(config.responsePayloadKey, (_key, _oldVal, newVal, remote) => {
         if (!newVal || !remote) return;
         const { text: text2, requestId, includeDescendants } = newVal;
+        const includeDescendantsMode = !!includeDescendants;
         if (requestId === state2.currentAIRequestId) {
           Logger.info(`${config.name}: Received matching response!`);
           const target = document.querySelector(".being-summarized");
           if (target?.dataset.id) {
-            state2.sessionAICache[getCacheKey(target.dataset.id)] = text2;
+            state2.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text2;
           }
-          displayPopup(text2, state2, !!includeDescendants);
+          displayPopup(text2, state2, includeDescendantsMode);
           setStatusMessage(`${config.name} response received.`);
           const stickyEl = document.getElementById("pr-sticky-ai-status");
           if (stickyEl) {

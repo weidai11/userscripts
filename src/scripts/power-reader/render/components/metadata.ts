@@ -117,6 +117,12 @@ export const renderMetadata = (
   const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
   const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
 
+  const reactionsHtml = renderReactions(
+    item._id,
+    item.extendedScore as NamesAttachedReactionsScore,
+    item.currentUserExtendedVote as CurrentUserExtendedVote
+  );
+
   const voteButtonsHtml = renderVoteButtons(
     item._id,
     item.baseScore || 0,
@@ -126,13 +132,8 @@ export const renderMetadata = (
     isPost ? (item as Post).voteCount || 0 : 0,
     agreementVoteCount,
     showAgreement,
-    isFullPost // showButtons
-  );
-
-  const reactionsHtml = renderReactions(
-    item._id,
-    item.extendedScore as NamesAttachedReactionsScore,
-    item.currentUserExtendedVote as CurrentUserExtendedVote
+    isFullPost, // showButtons
+    reactionsHtml
   );
 
   // Author preferences
@@ -158,7 +159,6 @@ export const renderMetadata = (
   return `
     <div class="${containerClass}" style="${style}">
       ${voteButtonsHtml}
-      ${reactionsHtml}
       <span class="pr-author-controls">
         <span class="pr-author-down ${authorPref < 0 ? 'active-down' : ''}" 
               data-action="author-down" 
