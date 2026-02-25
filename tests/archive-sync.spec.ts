@@ -45,7 +45,7 @@ test.describe('Power Reader Archive Sync', () => {
             `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -150,7 +150,7 @@ test.describe('Power Reader Archive Sync', () => {
             `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -282,7 +282,7 @@ if (query.includes('GetCommentsByIds')) {
 `
   });
 
-  await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+  await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
   await page.evaluate(scriptContent);
   await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -367,7 +367,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
             `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -506,7 +506,7 @@ return { data: {} };
 `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -651,7 +651,7 @@ return { data: {} };
 `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -737,7 +737,7 @@ return { data: {} };
 `
         });
 
-        await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -748,4 +748,6 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-second-page"]')).toBeVisible();
     });
 });
+
+
 

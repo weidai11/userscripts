@@ -68,7 +68,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -139,7 +139,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -203,7 +203,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -268,7 +268,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -343,7 +343,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -394,7 +394,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -463,7 +463,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -542,7 +542,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -598,7 +598,7 @@ test.describe('User Archive Context Type & View Modes', () => {
       `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`);
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -652,4 +652,6 @@ test.describe('User Archive Context Type & View Modes', () => {
     expect(replyToOptionPlaceholder).toBe(true);
   });
 });
+
+
 

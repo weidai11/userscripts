@@ -52,7 +52,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
             `
         });
 
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=' + username);
+        await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
@@ -106,7 +106,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
             `
         });
 
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=' + username);
+        await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
@@ -154,7 +154,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
             `
         });
 
-        await page.goto('https://www.lesswrong.com/reader?view=archive&username=' + username);
+        await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
 
@@ -167,3 +167,5 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await expect(timestampLink).toHaveAttribute('href', '#');
     });
 });
+
+

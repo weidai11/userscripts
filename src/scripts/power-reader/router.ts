@@ -46,26 +46,26 @@ export const getRoute = (): RouteResult => {
     return { type: 'arena-max' };
   }
 
-  // LessWrong / EA Forum / GreaterWrong
+  // LessWrong / EA Forum
   const isForumDomain =
     isHost('lesswrong.com') ||
-    isHost('forum.effectivealtruism.org') ||
-    isHost('greaterwrong.com');
+    isHost('forum.effectivealtruism.org');
 
   if (!isForumDomain) {
     return { type: 'skip' };
   }
 
-  if (!pathname.startsWith('/reader')) {
-    return { type: 'forum-injection' };
-  }
-
-  // /reader?view=archive&username=...
-  if (params.get('view') === 'archive') {
+  // /archive?username=...
+  if (pathname === '/archive' || pathname === '/archive/') {
     const username = params.get('username');
     if (username) {
       return { type: 'archive', username };
     }
+    return { type: 'reader', path: 'main' };
+  }
+
+  if (!pathname.startsWith('/reader')) {
+    return { type: 'forum-injection' };
   }
 
   // /reader/reset - clear state and show setup

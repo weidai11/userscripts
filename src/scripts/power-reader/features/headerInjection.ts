@@ -95,7 +95,7 @@ const createReaderLink = (): HTMLAnchorElement => {
 const createArchiveLink = (username: string): HTMLAnchorElement => {
   const link = document.createElement('a');
   link.id = 'pr-archive-link';
-  link.href = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+  link.href = `/archive?username=${encodeURIComponent(username)}`;
   link.className = 'MuiButtonBase-root MuiButton-root MuiButton-text UsersMenu-userButtonRoot';
   link.style.color = 'inherit';
   link.style.display = 'inline-flex';
@@ -151,7 +151,7 @@ const injectLinks = (): void => {
       Logger.debug(`Header Injection: Added Archive link for ${username}`);
     } else {
       // Update href if username changed (e.g. navigation between profiles)
-      const expectedHref = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+      const expectedHref = `/archive?username=${encodeURIComponent(username)}`;
       if (existingArchiveLink.getAttribute('href') !== expectedHref) {
         existingArchiveLink.setAttribute('href', expectedHref);
       }

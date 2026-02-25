@@ -23,7 +23,7 @@ test.describe('Power Reader Archive Route', () => {
     });
 
     // Navigate to archive view WITHOUT username parameter
-    await page.goto('https://www.lesswrong.com/reader?view=archive', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -90,7 +90,7 @@ test.describe('Power Reader Archive Route', () => {
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Wei_Dai', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -171,7 +171,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Race_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Race_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -239,78 +239,13 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerDefault_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=WorkerDefault_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
 
     await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0)).toBeGreaterThan(0);
     await expect.poll(async () => page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0)).toBeGreaterThan(0);
-  });
-
-  test('[PR-UARCH-41] archive search worker can be disabled via global opt-out', async ({ page }) => {
-    await setupMockEnvironment(page, {
-      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
-      testMode: true,
-      onInit: `
-const win = window;
-win.__PR_ARCHIVE_SEARCH_USE_WORKER = false;
-win.__TEST_WORKER_CTOR_COUNT__ = 0;
-win.__TEST_WORKER_POST_COUNT__ = 0;
-const OriginalWorker = win.Worker;
-win.Worker = class WorkerSpy extends OriginalWorker {
-  constructor(...args) {
-    super(...args);
-    win.__TEST_WORKER_CTOR_COUNT__ += 1;
-  }
-  postMessage(...args) {
-    win.__TEST_WORKER_POST_COUNT__ += 1;
-    return super.postMessage(...args);
-  }
-};
-`,
-      onGraphQL: `
-const userId = 'u-worker-off';
-const userObj = { _id: userId, username: 'WorkerOff_User', displayName: 'Worker Off User', slug: 'worker-off-user', karma: 100 };
-if (query.includes('UserBySlug') || query.includes('user(input:')) {
-  return { data: { user: userObj } };
-}
-if (query.includes('GetUserPosts')) {
-  return { data: { posts: { results: [] } } };
-}
-if (query.includes('GetUserComments')) {
-  return {
-    data: {
-      comments: {
-        results: [
-          {
-            _id: 'c-worker-off',
-            postedAt: '2025-01-10T12:00:00Z',
-            baseScore: 5,
-            htmlBody: '<p>Worker opt-out path comment</p>',
-            user: userObj,
-            postId: 'p-worker-off',
-            post: { _id: 'p-worker-off', title: 'Worker Off Post', pageUrl: 'https://lesswrong.com/posts/p-worker-off', user: userObj },
-            parentComment: null
-          }
-        ]
-      }
-    }
-  };
-}
-return { data: {} };
-`
-    });
-
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=WorkerOff_User', { waitUntil: 'commit' });
-    await page.evaluate(scriptContent);
-    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
-    await waitForArchiveRenderComplete(page);
-
-    const workerCtorCount = await page.evaluate(() => (window as any).__TEST_WORKER_CTOR_COUNT__ || 0);
-    const workerPostCount = await page.evaluate(() => (window as any).__TEST_WORKER_POST_COUNT__ || 0);
-    expect(workerCtorCount).toBe(0);
-    expect(workerPostCount).toBe(0);
   });
 
   test('[PR-UARCH-11] supports thread view with context fetching', async ({ page }) => {
@@ -373,7 +308,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Wei_Dai', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -463,7 +398,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Wei_Dai', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Wei_Dai', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -547,7 +482,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ThreadSort_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=ThreadSort_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -625,7 +560,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=KarmaSort_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=KarmaSort_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -709,7 +644,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Search_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Search_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -793,7 +728,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Help_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Help_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -909,7 +844,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=SearchRefresh_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=SearchRefresh_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -988,7 +923,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=alignment`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}&q=alignment`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1091,7 +1026,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1189,7 +1124,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=RegexFail_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=RegexFail_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1296,7 +1231,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=Field_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=Field_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1366,7 +1301,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=StatusCount_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=StatusCount_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1471,7 +1406,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=DirectiveCount_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=DirectiveCount_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1558,7 +1493,7 @@ return { data: {} };
     });
 
     const q = encodeURIComponent('scope:all type:post');
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=UrlSearch_User&q=${q}&sort=score-asc`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=UrlSearch_User&q=${q}&sort=score-asc`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1634,7 +1569,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ScopeAll_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=ScopeAll_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1748,7 +1683,7 @@ return { data: {} };
             `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1849,7 +1784,7 @@ return { data: {} };
             `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=View_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=View_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1899,7 +1834,7 @@ return { data: {} };
             `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -1941,7 +1876,7 @@ return { data: {} };
                                         
                                         return { data: { posts: { results: [] }, comments: { results: [] } } };
                                     `
-    }); await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    }); await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2001,7 +1936,7 @@ return { data: {} };
             `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2098,7 +2033,7 @@ return { data: {} };
     `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2206,7 +2141,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=AuthTest_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=AuthTest_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2298,7 +2233,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=SortPersist_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=SortPersist_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2399,7 +2334,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=ContextTest_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=ContextTest_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2482,7 +2417,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=PreviewTest_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=PreviewTest_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2544,7 +2479,7 @@ return { data: {} };
 `
     });
 
-    await page.goto('https://www.lesswrong.com/reader?view=archive&username=HooksTest_User', { waitUntil: 'commit' });
+    await page.goto('https://www.lesswrong.com/archive?username=HooksTest_User', { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2630,7 +2565,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}&q=optimizer&sort=date`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}&q=optimizer&sort=date`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2689,7 +2624,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2754,7 +2689,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2814,7 +2749,7 @@ return { data: {} };
 `
     });
 
-    await page.goto(`https://www.lesswrong.com/reader?view=archive&username=${username}`, { waitUntil: 'commit' });
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
     await page.evaluate(scriptContent);
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
@@ -2832,4 +2767,6 @@ return { data: {} };
     await expectArchiveViewSelected(page, 'card');
   });
 });
+
+
 

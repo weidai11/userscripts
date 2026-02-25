@@ -145,7 +145,7 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
     await page.route('**/*', route => {
         const url = route.request().url();
         if (url.includes('lesswrong.com') || url.includes('effectivealtruism.org')) {
-            if (url.includes('/reader') || url.includes('/reader/reset') || url === 'https://www.lesswrong.com/') {
+            if (url.includes('/reader') || url.includes('/reader/reset') || url.includes('/archive') || url === 'https://www.lesswrong.com/') {
                 return route.fulfill({ status: 200, contentType: 'text/html', body: mockHtml });
             }
             if (url.includes('chunks') || url.includes('bundle.js')) {

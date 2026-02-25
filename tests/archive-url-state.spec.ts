@@ -12,7 +12,7 @@ test.describe('archive url state', () => {
     const previousWindow = globalRef.window;
     let replacedUrl = '';
     const mockWindow: WindowLike = {
-      location: { search: '?view=archive&username=test-user', pathname: '/reader' },
+      location: { search: '?username=test-user', pathname: '/archive' },
       history: {
         replaceState: (_state, _title, url) => {
           replacedUrl = url;
@@ -44,7 +44,7 @@ test.describe('archive url state', () => {
     const globalRef = globalThis as typeof globalThis & { window?: WindowLike };
     const previousWindow = globalRef.window;
     const mockWindow: WindowLike = {
-      location: { search: '?view=archive&username=test-user&q=foo', pathname: '/reader' },
+      location: { search: '?username=test-user&q=foo', pathname: '/archive' },
       history: {
         replaceState: () => { }
       }
@@ -66,3 +66,4 @@ test.describe('archive url state', () => {
     }
   });
 });
+

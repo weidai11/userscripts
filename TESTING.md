@@ -64,7 +64,7 @@ The primary integration test.
 
 #### 🟣 User Archive (`archive-route.spec.ts`)
 Validates the new User Archive 2.0 subsystem.
-- **Routing**: Verifies that `?view=archive&username=...` triggers the archive takeover.
+- **Routing**: Verifies that `/archive?username=...` triggers the archive takeover.
 - **Bulk Loading**: Mocks the paginated `GetUserPosts` and `GetUserComments` queries.
 - **Rendering**: Ensures unified chronological feed displays both posts and comments correctly.
 - **Pagination Guardrail**: Confirms archive does not expose bottom-of-list "Load More" item pagination controls.
@@ -137,7 +137,7 @@ Since userscripts run in a unique environment, our tests mimic this:
 
 1.  **Build**: `npm run build:power-reader` compiles the TS to a single `.user.js` file.
 2.  **Read**: Test file reads the content of `dist/power-reader.user.js`.
-3.  **Route**: Playwright intercepts `https://www.lesswrong.com/reader` to serve a mock HTML skeleton.
+3.  **Route**: Playwright intercepts `https://www.lesswrong.com/reader` and `https://www.lesswrong.com/archive` to serve a mock HTML skeleton.
 4.  **Inject**: `page.addInitScript()` injects the userscript content *before* page load.
 5.  **Mock GM**: `window.GM_xmlhttpRequest` and others are polyfilled in the test context to intercept requests and return mock data.
 6.  **Wait**: Tests wait for `#lw-power-reader-ready-signal`, a DOM element added by `main.ts` when initialization is complete.
@@ -250,3 +250,4 @@ If a hover test fails like "Element not found":
     3. Awaits a **double `requestAnimationFrame`** (essential for the browser to complete a paint cycle).
     4. Performs the measurement/hit-test in the callback.
     5. Restores original layout after a brief delay.
+

@@ -582,8 +582,8 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 ### 26. User Archive Mode
 The Power Reader supports a dedicated "User Archive" mode for browsing a user's entire history (posts and comments) in a unified, searchable feed.
 
-- **[PR-UARCH-01] Route Activation**: Archive mode activates only on `/reader?view=archive&username=[username]`.
-- **[PR-UARCH-02] Missing Username Fallback**: If `view=archive` is present but `username` is missing, the route falls back to normal `/reader` mode (no archive init).
+- **[PR-UARCH-01] Route Activation**: Archive mode activates only on `/archive?username=[username]`.
+- **[PR-UARCH-02] Missing Username Fallback**: If `/archive` is present but `username` is missing, the route falls back to normal `/reader` mode (no archive init).
 - **[PR-UARCH-03] Cache-First Boot**: On init, the archive MUST load IndexedDB data first and render cached items immediately when available.
 - **[PR-UARCH-04] Background Sync**: After cache load, archive mode performs an incremental sync for posts and comments newer than the stored watermark.
 - **[PR-UARCH-15] Adaptive Cursor Pagination**: The background sync loader uses cursor-based pagination (via the `after` filter) to bypass API offset limits (typically 2000 items). It dynamically adjusts the pagination limit (between 50 and 1000 items) based on the measured duration of previous requests, targeting a ~2.5 second response time per batch to ensure reliability on unstable networks. Forward sync starts from the `lastSyncDate` and fetches newer items using `sortBy: "oldest"`.
@@ -610,7 +610,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-24] Sort Stability Across Rerenders**: The active sort mode (including thread-specific group sorting) MUST persist and correctly apply when archive rerenders are triggered by UI state changes.
 - **[PR-UARCH-26] Post-Rerender Initialization**: UI hooks like link previews and post action buttons MUST be re-initialized after archive rerenders.
 - **[PR-UARCH-18] Large Dataset Safety**: When an archive contains > 10,000 items, the UI MUST show a confirmation dialog before rendering to protect browser performance. Once the user selects a render count (or "Render All"), this preference MUST persist across sorting, filtering, and view mode changes for the duration of the session.
-- **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/reader?view=archive&username=[slug-or-username]`.
+- **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/archive?username=[slug-or-username]`.
 - **[PR-UARCH-19] ReaderState Identity Stability**: After archive rerenders (triggered by sort/filter changes or sync updates), event handlers bound to the ReaderState reference MUST continue to function correctly. The ReaderState object identity MUST be preserved across rerenders (mutated in place rather than replaced) to prevent stale references in event listener closures.
 - **[PR-UARCH-23] Authentication Context**: The archive `ReaderState` MUST be correctly populated with the `currentUserId` and `currentUsername` of the logged-in user to enable authenticated actions like voting and reactions within the archive view.
 - **[PR-UARCH-20] Thread Group Date Sorting**: In `thread` view, post groups are sorted based on the timestamp of the newest item within that group (post or comment).
@@ -622,7 +622,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-31] Placeholder Context Rendering**: Comments with `contextType: 'stub'` render as header-only placeholders without vote buttons, using `.pr-context-placeholder` CSS class.
 - **[PR-UARCH-32] Context Persistence Across Modes**: Context comments (both `'fetched'` and `'stub'`) are preserved in ReaderState when switching between thread, card, and index views within the same session.
 - **[PR-UARCH-33] Thread Mode IsThread Helper**: A helper function `isThreadMode()` identifies both `thread-full` and `thread-placeholder` as thread variants without requiring multiple equality checks.
-- **[PR-UARCH-41] Search Worker Default + Opt-Out**: Archive search uses a Web Worker by default. Setting `window.__PR_ARCHIVE_SEARCH_USE_WORKER = false` before initialization disables worker creation and uses runtime search. If worker initialization fails, archive search falls back to runtime mode without breaking the UI.
+- **[PR-UARCH-41] Search Worker Required**: Archive search MUST run in a Web Worker. Runtime/fallback search paths are not supported. If worker initialization fails, archive initialization fails with an explicit error.
 - **[PR-UARCH-42] Engine Initialization Warning Resilience**: Initialization handles partial index building gracefully. If `Worker` throws warnings during initial sync or cache loading, it resolves correctly instead of throwing fatal exceptions.
 - **[PR-UARCH-43] Segmented Scope Toggle**: The UI utilizes a custom segmented control (`.pr-segmented-control`) for the authored vs. all scopes. This logic securely bounds state switches and updates `ArchiveState` uniformly relative to URLs.
 - **[PR-UARCH-44] Custom View Mode Selection**: The UI uses an icon-tab structure (`.pr-view-tabs`) matching Power Reader norms instead of standard dropdowns. Values trigger correct event emission and URL synchronization.
@@ -633,7 +633,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 
 ### 27. User Archive Link Injection
 
-- **[PR-INJECT-02] Archive Link Injection**: On user profile routes (`/users/slug` and `/users/id/slug`), a "User Archive" link is injected into the site header next to the "POWER Reader" link. The link targets `/reader?view=archive&username=[slug]`.
+- **[PR-INJECT-02] Archive Link Injection**: On user profile routes (`/users/slug` and `/users/id/slug`), a "User Archive" link is injected into the site header next to the "POWER Reader" link. The link targets `/archive?username=[slug]`.
 - **[PR-INJECT-03] Shared Container**: Both the Reader link and Archive link (when present) are wrapped in a shared container (`#pr-header-links-container`) for consistent styling and positioning.
 - **[PR-INJECT-04] URL-Based Visibility**: The Archive link is only visible when the current URL path starts with `/users/`. No SPA navigation handling is required since LW is not a SPA.
 
@@ -650,8 +650,8 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @namespace    http://weidai.com/
 // @match        https://www.lesswrong.com/*
 // @match        https://forum.effectivealtruism.org/*
-// @match        https://www.greaterwrong.com/*
 // @match        https://aistudio.google.com/*
+// @require      https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -660,6 +660,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @run-at       document-start
 // @connect      lesswrong.com
 // @connect      forum.effectivealtruism.org
-// @connect      greaterwrong.com
 // ==/UserScript==
 ```
+
+

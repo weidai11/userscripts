@@ -1,10 +1,5 @@
 import { expect, test } from '@playwright/test';
 import {
-  executeFallbackQuery,
-  FALLBACK_TOTAL_BUDGET_MS
-} from '../src/scripts/power-reader/archive/search/fallback';
-import { ArchiveSearchRuntime } from '../src/scripts/power-reader/archive/search/engine';
-import {
   ArchiveSearchManager
 } from '../src/scripts/power-reader/archive/search';
 import {
@@ -155,6 +150,13 @@ class FakeWorkerClient {
     });
   }
 
+  rejectLatestQuery(error: Error): void {
+    const latest = Array.from(this.pendingQueries.values()).at(-1);
+    if (!latest) return;
+    this.pendingQueries.delete(latest.requestId);
+    latest.reject(error);
+  }
+
   cancelQuery(requestId: string): void {
     const pending = this.pendingQueries.get(requestId);
     if (!pending) return;
@@ -225,115 +227,7 @@ class FakeProtocolWorker {
   }
 }
 
-test.describe('Archive Search Manager/Fallback', () => {
-  test('fallback downgrades regex literals to plain-text contains checks', () => {
-    const runtime = new ArchiveSearchRuntime();
-    runtime.setAuthoredItems([
-      makePost({
-        _id: 'p-regex',
-        title: 'Regex Sample',
-        contents: { markdown: 'foo bar baz' }
-      }) as any
-    ]);
-    runtime.setContextItems([]);
-
-    const result = executeFallbackQuery(runtime, {
-      query: '/foo.*bar/i',
-      scopeParam: 'authored',
-      sortMode: 'relevance',
-      limit: 20
-    });
-
-    expect(result.ids).toContain('p-regex');
-    expect(result.diagnostics.warnings.some(w => w.message.includes('downgraded regex'))).toBeTruthy();
-    expect(result.diagnostics.degradedMode).toBeTruthy();
-  });
-
-  test('fallback does not report regex downgrade when regex literal cannot be transformed', () => {
-    const runtime = new ArchiveSearchRuntime();
-    runtime.setAuthoredItems([
-      makePost({
-        _id: 'p-invalid-regex',
-        title: 'Invalid Regex Sample',
-        contents: { markdown: 'foo bar baz' }
-      }) as any
-    ]);
-    runtime.setContextItems([]);
-
-    const result = executeFallbackQuery(runtime, {
-      query: '/foo/z',
-      scopeParam: 'authored',
-      sortMode: 'relevance',
-      limit: 20
-    });
-
-    expect(result.diagnostics.warnings.some(w => w.message.includes('downgraded regex'))).toBeFalsy();
-    expect(result.diagnostics.degradedMode).toBeFalsy();
-  });
-
-  test('search manager defaults to runtime mode and returns results', async () => {
-    const manager = new ArchiveSearchManager();
-    manager.setAuthoredItems([
-      makePost({
-        _id: 'p-manager',
-        title: 'Manager Result',
-        contents: { markdown: 'manager query target' }
-      }) as any
-    ]);
-    manager.setContextItems([]);
-
-    const result = await manager.runSearch({
-      query: 'manager target',
-      scopeParam: 'authored',
-      sortMode: 'relevance',
-      limit: 20
-    });
-
-    expect(manager.getStatus().mode).toBe('runtime');
-    expect(result.ids).toContain('p-manager');
-    expect(result.diagnostics.tookMs).toBeGreaterThanOrEqual(0);
-    manager.destroy();
-  });
-
-  test('runtime search emits debug relevance payload only when requested', async () => {
-    const manager = new ArchiveSearchManager();
-    manager.setAuthoredItems([
-      makePost({
-        _id: 'p-runtime-debug',
-        title: 'Runtime Debug Result',
-        contents: { markdown: 'runtime debug token payload' }
-      }) as any
-    ]);
-    manager.setContextItems([]);
-
-    const withoutDebug = await manager.runSearch({
-      query: 'runtime debug',
-      scopeParam: 'authored',
-      sortMode: 'relevance',
-      limit: 20
-    });
-    expect(withoutDebug.debugExplain).toBeUndefined();
-
-    const withDebug = await manager.runSearch({
-      query: 'runtime debug',
-      scopeParam: 'authored',
-      sortMode: 'relevance',
-      limit: 20,
-      debugExplain: true
-    });
-    expect(withDebug.debugExplain).toBeDefined();
-    expect(withDebug.debugExplain?.relevanceSignalsById['p-runtime-debug']?.tokenHits).toBeGreaterThan(0);
-    manager.destroy();
-  });
-
-  test('worker requested without client falls back to runtime mode when Worker unavailable', () => {
-    const manager = new ArchiveSearchManager({ useWorker: true });
-    const status = manager.getStatus();
-    expect(status.mode).toBe('runtime');
-    expect(status.lastError).toContain('runtime mode');
-    manager.destroy();
-  });
-
+test.describe('Archive Search Manager (Worker)', () => {
   test('manager waits for worker index sync before sending query', async () => {
     const client = new FakeWorkerClient(true);
     const manager = new ArchiveSearchManager({ workerClient: client as any });
@@ -603,6 +497,35 @@ test.describe('Archive Search Manager/Fallback', () => {
     manager.destroy();
   });
 
+  test('manager returns diagnostics when worker query fails', async () => {
+    const client = new FakeWorkerClient(false);
+    const manager = new ArchiveSearchManager({ workerClient: client as any });
+    manager.setAuthoredItems([
+      makePost({
+        _id: 'p-manager-worker-error',
+        title: 'Manager Worker Error Result',
+        contents: { markdown: 'worker error payload' }
+      }) as any
+    ]);
+    manager.setContextItems([]);
+
+    const searchPromise = manager.runSearch({
+      query: 'worker error',
+      scopeParam: 'authored',
+      sortMode: 'relevance',
+      limit: 20
+    });
+    await expect.poll(() => client.getPendingQueryCount()).toBe(1);
+    client.rejectLatestQuery(new Error('worker boom'));
+
+    const result = await searchPromise;
+    expect(result.ids).toEqual([]);
+    expect(result.diagnostics.parseState).toBe('invalid');
+    expect(result.diagnostics.warnings.at(0)?.message).toContain('Search worker error');
+    expect(manager.getStatus().lastError).toContain('worker boom');
+    manager.destroy();
+  });
+
   test('manager skips redundant context worker full-index when context references are unchanged', () => {
     const client = new FakeWorkerClient(false);
     const manager = new ArchiveSearchManager({ workerClient: client as any });
@@ -740,7 +663,4 @@ test.describe('Archive Search Manager/Fallback', () => {
     expect(chunks[0].source).toBe('authored');
   });
 
-  test('fallback default budget constant remains 150ms', () => {
-    expect(FALLBACK_TOTAL_BUDGET_MS).toBe(150);
-  });
 });

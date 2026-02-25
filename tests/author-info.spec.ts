@@ -152,7 +152,7 @@ test.describe('Author Info Features', () => {
         // Archive link should use slug when available
         const archiveLink = preview.locator('.pr-archive-link');
         await expect(archiveLink).toBeVisible();
-        await expect(archiveLink).toHaveAttribute('href', '/reader?view=archive&username=john-doe');
+        await expect(archiveLink).toHaveAttribute('href', '/archive?username=john-doe');
         await expect(archiveLink).toContainText('Archive');
     });
 
@@ -200,6 +200,8 @@ test.describe('Author Info Features', () => {
         
         const archiveLink = preview.locator('.pr-archive-link');
         await expect(archiveLink).toBeVisible();
-        await expect(archiveLink).toHaveAttribute('href', '/reader?view=archive&username=noslug_user');
+        await expect(archiveLink).toHaveAttribute('href', '/archive?username=noslug_user');
     });
 });
+
+

@@ -58,7 +58,7 @@ jj git push
 
 ## User Archive Status
 User Archive is live and usable in Power Reader at:
-`https://www.lesswrong.com/reader?view=archive&username=[username]`
+`https://www.lesswrong.com/archive?username=[username]`
 
 For architecture notes and longer-term direction, see [ARCH_USER_ARCHIVE.md](./ARCH_USER_ARCHIVE.md).
 
@@ -90,3 +90,5 @@ For architecture notes and longer-term direction, see [ARCH_USER_ARCHIVE.md](./A
 
 ## 🔗 References
 [CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./archive/old_power_reader_doc.md) | [Old Source](./archive/old_power_reader.js)
+
+

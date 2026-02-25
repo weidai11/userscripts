@@ -47,6 +47,7 @@ const INITIAL_BACKOFF_MS = 2000;
 const SEARCH_DEBOUNCE_MS = 180;
 const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
 const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
+const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
 
 let activeArchiveInitRunId = 0;
 let activeArchiveInitAbortController: AbortController | null = null;
@@ -842,19 +843,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     renderTopStatusLine();
 
     let activeItems = state.items;
-    const workerPreference = (window as any).__PR_ARCHIVE_SEARCH_USE_WORKER;
-    const shouldUseSearchWorker = workerPreference !== false;
-    let workerClient: SearchWorkerClient | null = null;
-    if (shouldUseSearchWorker) {
-      try {
-        workerClient = createSearchWorkerClient();
-      } catch (error) {
-        Logger.warn('Archive search worker unavailable; falling back to runtime search.', error);
-      }
+    let workerClient: SearchWorkerClient;
+    try {
+      workerClient = createSearchWorkerClient();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Archive search worker unavailable: ${reason}`);
     }
 
     const searchManager = new ArchiveSearchManager({
-      useWorker: shouldUseSearchWorker,
       workerClient
     });
 
@@ -1190,7 +1187,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       const terms = getHighlightTermsFromQuery(searchInput.value);
       const termsKey = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b)).join('\u001F');
       const highlightTargets = feedEl.querySelectorAll('.pr-comment-body, .pr-post-body, .pr-index-title');
-      if (highlightTargets.length > 1200) return;
+      if (highlightTargets.length > MAX_SEARCH_HIGHLIGHT_TARGETS) return;
 
       highlightTargets.forEach((el) => {
         const node = el as HTMLElement;
@@ -1504,7 +1501,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
               }
             });
             setArchiveRenderProgress(100);
-            runPostRenderHooks();
+            if (!hooksPrimed) {
+              runPostRenderHooks();
+            }
           });
           return;
         }
@@ -1553,7 +1552,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         setArchiveRenderProgress(100);
         renderTopStatusLine();
 
-        runPostRenderHooks();
+        if (!hooksPrimed) {
+          runPostRenderHooks();
+        }
       } finally {
         if (requestId === activeQueryRequestId) {
           setSearchLoading(false);
@@ -1655,7 +1656,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     });
 
     clearBtn?.addEventListener('click', async () => {
-      if (searchInput.value.length === 0) return;
+      if (!searchInput.value) return;
       searchInput.value = '';
       updateClearButton();
       if (searchDispatchTimer) {

@@ -98,7 +98,7 @@ test.describe('Header Injection [PR-INJECT-01]', () => {
         await expect(archiveLink).toBeVisible({ timeout: 5000 });
 
         await expect(readerLink).toHaveAttribute('href', '/reader');
-        await expect(archiveLink).toHaveAttribute('href', `/reader?view=archive&username=${username}`);
+        await expect(archiveLink).toHaveAttribute('href', `/archive?username=${username}`);
 
         // Verify shared container [PR-INJECT-03]
         const container = page.locator('#pr-header-links-container');
@@ -184,6 +184,8 @@ test.describe('Header Injection [PR-INJECT-01]', () => {
         // Verify Archive link uses slug as username
         const archiveLink = page.locator('#pr-archive-link');
         await expect(archiveLink).toBeVisible({ timeout: 5000 });
-        await expect(archiveLink).toHaveAttribute('href', `/reader?view=archive&username=${slug}`);
+        await expect(archiveLink).toHaveAttribute('href', `/archive?username=${slug}`);
     });
 });
+
+

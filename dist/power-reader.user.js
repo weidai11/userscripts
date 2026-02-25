@@ -5,13 +5,12 @@
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
-// @match      https://www.greaterwrong.com/*
 // @match      https://aistudio.google.com/*
 // @match      https://arena.ai/*
 // @match      https://www.arena.ai/*
+// @require    https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js
 // @connect    lesswrong.com
 // @connect    forum.effectivealtruism.org
-// @connect    greaterwrong.com
 // @connect    arena.ai
 // @grant      GM_addStyle
 // @grant      GM_addValueChangeListener
@@ -46,1011 +45,128 @@ reset: () => {
       console.error(`${PREFIX} ❌ ${msg}`, ...args);
     }
   };
-  const {
-    entries,
-    setPrototypeOf,
-    isFrozen,
-    getPrototypeOf,
-    getOwnPropertyDescriptor
-  } = Object;
-  let {
-    freeze,
-    seal,
-    create
-  } = Object;
-  let {
-    apply,
-    construct
-  } = typeof Reflect !== "undefined" && Reflect;
-  if (!freeze) {
-    freeze = function freeze2(x) {
-      return x;
-    };
-  }
-  if (!seal) {
-    seal = function seal2(x) {
-      return x;
-    };
-  }
-  if (!apply) {
-    apply = function apply2(func, thisArg) {
-      for (var _len = arguments.length, args = new Array(_len > 2 ? _len - 2 : 0), _key = 2; _key < _len; _key++) {
-        args[_key - 2] = arguments[_key];
-      }
-      return func.apply(thisArg, args);
-    };
-  }
-  if (!construct) {
-    construct = function construct2(Func) {
-      for (var _len2 = arguments.length, args = new Array(_len2 > 1 ? _len2 - 1 : 0), _key2 = 1; _key2 < _len2; _key2++) {
-        args[_key2 - 1] = arguments[_key2];
-      }
-      return new Func(...args);
-    };
-  }
-  const arrayForEach = unapply(Array.prototype.forEach);
-  const arrayLastIndexOf = unapply(Array.prototype.lastIndexOf);
-  const arrayPop = unapply(Array.prototype.pop);
-  const arrayPush = unapply(Array.prototype.push);
-  const arraySplice = unapply(Array.prototype.splice);
-  const stringToLowerCase = unapply(String.prototype.toLowerCase);
-  const stringToString = unapply(String.prototype.toString);
-  const stringMatch = unapply(String.prototype.match);
-  const stringReplace = unapply(String.prototype.replace);
-  const stringIndexOf = unapply(String.prototype.indexOf);
-  const stringTrim = unapply(String.prototype.trim);
-  const objectHasOwnProperty = unapply(Object.prototype.hasOwnProperty);
-  const regExpTest = unapply(RegExp.prototype.test);
-  const typeErrorCreate = unconstruct(TypeError);
-  function unapply(func) {
-    return function(thisArg) {
-      if (thisArg instanceof RegExp) {
-        thisArg.lastIndex = 0;
-      }
-      for (var _len3 = arguments.length, args = new Array(_len3 > 1 ? _len3 - 1 : 0), _key3 = 1; _key3 < _len3; _key3++) {
-        args[_key3 - 1] = arguments[_key3];
-      }
-      return apply(func, thisArg, args);
-    };
-  }
-  function unconstruct(Func) {
-    return function() {
-      for (var _len4 = arguments.length, args = new Array(_len4), _key4 = 0; _key4 < _len4; _key4++) {
-        args[_key4] = arguments[_key4];
-      }
-      return construct(Func, args);
-    };
-  }
-  function addToSet(set, array) {
-    let transformCaseFunc = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : stringToLowerCase;
-    if (setPrototypeOf) {
-      setPrototypeOf(set, null);
-    }
-    let l = array.length;
-    while (l--) {
-      let element = array[l];
-      if (typeof element === "string") {
-        const lcElement = transformCaseFunc(element);
-        if (lcElement !== element) {
-          if (!isFrozen(array)) {
-            array[l] = lcElement;
-          }
-          element = lcElement;
-        }
-      }
-      set[element] = true;
-    }
-    return set;
-  }
-  function cleanArray(array) {
-    for (let index = 0; index < array.length; index++) {
-      const isPropertyExist = objectHasOwnProperty(array, index);
-      if (!isPropertyExist) {
-        array[index] = null;
-      }
-    }
-    return array;
-  }
-  function clone(object) {
-    const newObject = create(null);
-    for (const [property, value] of entries(object)) {
-      const isPropertyExist = objectHasOwnProperty(object, property);
-      if (isPropertyExist) {
-        if (Array.isArray(value)) {
-          newObject[property] = cleanArray(value);
-        } else if (value && typeof value === "object" && value.constructor === Object) {
-          newObject[property] = clone(value);
-        } else {
-          newObject[property] = value;
-        }
-      }
-    }
-    return newObject;
-  }
-  function lookupGetter(object, prop) {
-    while (object !== null) {
-      const desc = getOwnPropertyDescriptor(object, prop);
-      if (desc) {
-        if (desc.get) {
-          return unapply(desc.get);
-        }
-        if (typeof desc.value === "function") {
-          return unapply(desc.value);
-        }
-      }
-      object = getPrototypeOf(object);
-    }
-    function fallbackValue() {
-      return null;
-    }
-    return fallbackValue;
-  }
-  const html$1 = freeze(["a", "abbr", "acronym", "address", "area", "article", "aside", "audio", "b", "bdi", "bdo", "big", "blink", "blockquote", "body", "br", "button", "canvas", "caption", "center", "cite", "code", "col", "colgroup", "content", "data", "datalist", "dd", "decorator", "del", "details", "dfn", "dialog", "dir", "div", "dl", "dt", "element", "em", "fieldset", "figcaption", "figure", "font", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr", "html", "i", "img", "input", "ins", "kbd", "label", "legend", "li", "main", "map", "mark", "marquee", "menu", "menuitem", "meter", "nav", "nobr", "ol", "optgroup", "option", "output", "p", "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "search", "section", "select", "shadow", "slot", "small", "source", "spacer", "span", "strike", "strong", "style", "sub", "summary", "sup", "table", "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "tr", "track", "tt", "u", "ul", "var", "video", "wbr"]);
-  const svg$1 = freeze(["svg", "a", "altglyph", "altglyphdef", "altglyphitem", "animatecolor", "animatemotion", "animatetransform", "circle", "clippath", "defs", "desc", "ellipse", "enterkeyhint", "exportparts", "filter", "font", "g", "glyph", "glyphref", "hkern", "image", "inputmode", "line", "lineargradient", "marker", "mask", "metadata", "mpath", "part", "path", "pattern", "polygon", "polyline", "radialgradient", "rect", "stop", "style", "switch", "symbol", "text", "textpath", "title", "tref", "tspan", "view", "vkern"]);
-  const svgFilters = freeze(["feBlend", "feColorMatrix", "feComponentTransfer", "feComposite", "feConvolveMatrix", "feDiffuseLighting", "feDisplacementMap", "feDistantLight", "feDropShadow", "feFlood", "feFuncA", "feFuncB", "feFuncG", "feFuncR", "feGaussianBlur", "feImage", "feMerge", "feMergeNode", "feMorphology", "feOffset", "fePointLight", "feSpecularLighting", "feSpotLight", "feTile", "feTurbulence"]);
-  const svgDisallowed = freeze(["animate", "color-profile", "cursor", "discard", "font-face", "font-face-format", "font-face-name", "font-face-src", "font-face-uri", "foreignobject", "hatch", "hatchpath", "mesh", "meshgradient", "meshpatch", "meshrow", "missing-glyph", "script", "set", "solidcolor", "unknown", "use"]);
-  const mathMl$1 = freeze(["math", "menclose", "merror", "mfenced", "mfrac", "mglyph", "mi", "mlabeledtr", "mmultiscripts", "mn", "mo", "mover", "mpadded", "mphantom", "mroot", "mrow", "ms", "mspace", "msqrt", "mstyle", "msub", "msup", "msubsup", "mtable", "mtd", "mtext", "mtr", "munder", "munderover", "mprescripts"]);
-  const mathMlDisallowed = freeze(["maction", "maligngroup", "malignmark", "mlongdiv", "mscarries", "mscarry", "msgroup", "mstack", "msline", "msrow", "semantics", "annotation", "annotation-xml", "mprescripts", "none"]);
-  const text = freeze(["#text"]);
-  const html = freeze(["accept", "action", "align", "alt", "autocapitalize", "autocomplete", "autopictureinpicture", "autoplay", "background", "bgcolor", "border", "capture", "cellpadding", "cellspacing", "checked", "cite", "class", "clear", "color", "cols", "colspan", "controls", "controlslist", "coords", "crossorigin", "datetime", "decoding", "default", "dir", "disabled", "disablepictureinpicture", "disableremoteplayback", "download", "draggable", "enctype", "enterkeyhint", "exportparts", "face", "for", "headers", "height", "hidden", "high", "href", "hreflang", "id", "inert", "inputmode", "integrity", "ismap", "kind", "label", "lang", "list", "loading", "loop", "low", "max", "maxlength", "media", "method", "min", "minlength", "multiple", "muted", "name", "nonce", "noshade", "novalidate", "nowrap", "open", "optimum", "part", "pattern", "placeholder", "playsinline", "popover", "popovertarget", "popovertargetaction", "poster", "preload", "pubdate", "radiogroup", "readonly", "rel", "required", "rev", "reversed", "role", "rows", "rowspan", "spellcheck", "scope", "selected", "shape", "size", "sizes", "slot", "span", "srclang", "start", "src", "srcset", "step", "style", "summary", "tabindex", "title", "translate", "type", "usemap", "valign", "value", "width", "wrap", "xmlns", "slot"]);
-  const svg = freeze(["accent-height", "accumulate", "additive", "alignment-baseline", "amplitude", "ascent", "attributename", "attributetype", "azimuth", "basefrequency", "baseline-shift", "begin", "bias", "by", "class", "clip", "clippathunits", "clip-path", "clip-rule", "color", "color-interpolation", "color-interpolation-filters", "color-profile", "color-rendering", "cx", "cy", "d", "dx", "dy", "diffuseconstant", "direction", "display", "divisor", "dur", "edgemode", "elevation", "end", "exponent", "fill", "fill-opacity", "fill-rule", "filter", "filterunits", "flood-color", "flood-opacity", "font-family", "font-size", "font-size-adjust", "font-stretch", "font-style", "font-variant", "font-weight", "fx", "fy", "g1", "g2", "glyph-name", "glyphref", "gradientunits", "gradienttransform", "height", "href", "id", "image-rendering", "in", "in2", "intercept", "k", "k1", "k2", "k3", "k4", "kerning", "keypoints", "keysplines", "keytimes", "lang", "lengthadjust", "letter-spacing", "kernelmatrix", "kernelunitlength", "lighting-color", "local", "marker-end", "marker-mid", "marker-start", "markerheight", "markerunits", "markerwidth", "maskcontentunits", "maskunits", "max", "mask", "mask-type", "media", "method", "mode", "min", "name", "numoctaves", "offset", "operator", "opacity", "order", "orient", "orientation", "origin", "overflow", "paint-order", "path", "pathlength", "patterncontentunits", "patterntransform", "patternunits", "points", "preservealpha", "preserveaspectratio", "primitiveunits", "r", "rx", "ry", "radius", "refx", "refy", "repeatcount", "repeatdur", "restart", "result", "rotate", "scale", "seed", "shape-rendering", "slope", "specularconstant", "specularexponent", "spreadmethod", "startoffset", "stddeviation", "stitchtiles", "stop-color", "stop-opacity", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke", "stroke-width", "style", "surfacescale", "systemlanguage", "tabindex", "tablevalues", "targetx", "targety", "transform", "transform-origin", "text-anchor", "text-decoration", "text-rendering", "textlength", "type", "u1", "u2", "unicode", "values", "viewbox", "visibility", "version", "vert-adv-y", "vert-origin-x", "vert-origin-y", "width", "word-spacing", "wrap", "writing-mode", "xchannelselector", "ychannelselector", "x", "x1", "x2", "xmlns", "y", "y1", "y2", "z", "zoomandpan"]);
-  const mathMl = freeze(["accent", "accentunder", "align", "bevelled", "close", "columnsalign", "columnlines", "columnspan", "denomalign", "depth", "dir", "display", "displaystyle", "encoding", "fence", "frame", "height", "href", "id", "largeop", "length", "linethickness", "lspace", "lquote", "mathbackground", "mathcolor", "mathsize", "mathvariant", "maxsize", "minsize", "movablelimits", "notation", "numalign", "open", "rowalign", "rowlines", "rowspacing", "rowspan", "rspace", "rquote", "scriptlevel", "scriptminsize", "scriptsizemultiplier", "selection", "separator", "separators", "stretchy", "subscriptshift", "supscriptshift", "symmetric", "voffset", "width", "xmlns"]);
-  const xml = freeze(["xlink:href", "xml:id", "xlink:title", "xml:space", "xmlns:xlink"]);
-  const MUSTACHE_EXPR = seal(/\{\{[\w\W]*|[\w\W]*\}\}/gm);
-  const ERB_EXPR = seal(/<%[\w\W]*|[\w\W]*%>/gm);
-  const TMPLIT_EXPR = seal(/\$\{[\w\W]*/gm);
-  const DATA_ATTR = seal(/^data-[\-\w.\u00B7-\uFFFF]+$/);
-  const ARIA_ATTR = seal(/^aria-[\-\w]+$/);
-  const IS_ALLOWED_URI = seal(
-    /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
-);
-  const IS_SCRIPT_OR_DATA = seal(/^(?:\w+script|data):/i);
-  const ATTR_WHITESPACE = seal(
-    /[\u0000-\u0020\u00A0\u1680\u180E\u2000-\u2029\u205F\u3000]/g
-);
-  const DOCTYPE_NAME = seal(/^html$/i);
-  const CUSTOM_ELEMENT = seal(/^[a-z][.\w]*(-[.\w]+)+$/i);
-  var EXPRESSIONS = Object.freeze({
-    __proto__: null,
-    ARIA_ATTR,
-    ATTR_WHITESPACE,
-    CUSTOM_ELEMENT,
-    DATA_ATTR,
-    DOCTYPE_NAME,
-    ERB_EXPR,
-    IS_ALLOWED_URI,
-    IS_SCRIPT_OR_DATA,
-    MUSTACHE_EXPR,
-    TMPLIT_EXPR
-  });
-  const NODE_TYPE = {
-    element: 1,
-    text: 3,
-progressingInstruction: 7,
-    comment: 8,
-    document: 9
-  };
-  const getGlobal = function getGlobal2() {
-    return typeof window === "undefined" ? null : window;
-  };
-  const _createTrustedTypesPolicy = function _createTrustedTypesPolicy2(trustedTypes, purifyHostElement) {
-    if (typeof trustedTypes !== "object" || typeof trustedTypes.createPolicy !== "function") {
-      return null;
-    }
-    let suffix = null;
-    const ATTR_NAME = "data-tt-policy-suffix";
-    if (purifyHostElement && purifyHostElement.hasAttribute(ATTR_NAME)) {
-      suffix = purifyHostElement.getAttribute(ATTR_NAME);
-    }
-    const policyName = "dompurify" + (suffix ? "#" + suffix : "");
-    try {
-      return trustedTypes.createPolicy(policyName, {
-        createHTML(html2) {
-          return html2;
-        },
-        createScriptURL(scriptUrl) {
-          return scriptUrl;
-        }
-      });
-    } catch (_) {
-      console.warn("TrustedTypes policy " + policyName + " could not be created.");
-      return null;
-    }
-  };
-  const _createHooksMap = function _createHooksMap2() {
-    return {
-      afterSanitizeAttributes: [],
-      afterSanitizeElements: [],
-      afterSanitizeShadowDOM: [],
-      beforeSanitizeAttributes: [],
-      beforeSanitizeElements: [],
-      beforeSanitizeShadowDOM: [],
-      uponSanitizeAttribute: [],
-      uponSanitizeElement: [],
-      uponSanitizeShadowNode: []
-    };
-  };
-  function createDOMPurify() {
-    let window2 = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : getGlobal();
-    const DOMPurify = (root) => createDOMPurify(root);
-    DOMPurify.version = "3.3.1";
-    DOMPurify.removed = [];
-    if (!window2 || !window2.document || window2.document.nodeType !== NODE_TYPE.document || !window2.Element) {
-      DOMPurify.isSupported = false;
-      return DOMPurify;
-    }
-    let {
-      document: document2
-    } = window2;
-    const originalDocument = document2;
-    const currentScript = originalDocument.currentScript;
-    const {
-      DocumentFragment,
-      HTMLTemplateElement,
-      Node,
-      Element: Element2,
-      NodeFilter: NodeFilter2,
-      NamedNodeMap = window2.NamedNodeMap || window2.MozNamedAttrMap,
-      HTMLFormElement,
-      DOMParser: DOMParser2,
-      trustedTypes
-    } = window2;
-    const ElementPrototype = Element2.prototype;
-    const cloneNode = lookupGetter(ElementPrototype, "cloneNode");
-    const remove = lookupGetter(ElementPrototype, "remove");
-    const getNextSibling = lookupGetter(ElementPrototype, "nextSibling");
-    const getChildNodes = lookupGetter(ElementPrototype, "childNodes");
-    const getParentNode = lookupGetter(ElementPrototype, "parentNode");
-    if (typeof HTMLTemplateElement === "function") {
-      const template = document2.createElement("template");
-      if (template.content && template.content.ownerDocument) {
-        document2 = template.content.ownerDocument;
-      }
-    }
-    let trustedTypesPolicy;
-    let emptyHTML = "";
-    const {
-      implementation,
-      createNodeIterator,
-      createDocumentFragment,
-      getElementsByTagName
-    } = document2;
-    const {
-      importNode
-    } = originalDocument;
-    let hooks = _createHooksMap();
-    DOMPurify.isSupported = typeof entries === "function" && typeof getParentNode === "function" && implementation && implementation.createHTMLDocument !== void 0;
-    const {
-      MUSTACHE_EXPR: MUSTACHE_EXPR2,
-      ERB_EXPR: ERB_EXPR2,
-      TMPLIT_EXPR: TMPLIT_EXPR2,
-      DATA_ATTR: DATA_ATTR2,
-      ARIA_ATTR: ARIA_ATTR2,
-      IS_SCRIPT_OR_DATA: IS_SCRIPT_OR_DATA2,
-      ATTR_WHITESPACE: ATTR_WHITESPACE2,
-      CUSTOM_ELEMENT: CUSTOM_ELEMENT2
-    } = EXPRESSIONS;
-    let {
-      IS_ALLOWED_URI: IS_ALLOWED_URI$1
-    } = EXPRESSIONS;
-    let ALLOWED_TAGS = null;
-    const DEFAULT_ALLOWED_TAGS = addToSet({}, [...html$1, ...svg$1, ...svgFilters, ...mathMl$1, ...text]);
-    let ALLOWED_ATTR = null;
-    const DEFAULT_ALLOWED_ATTR = addToSet({}, [...html, ...svg, ...mathMl, ...xml]);
-    let CUSTOM_ELEMENT_HANDLING = Object.seal(create(null, {
-      tagNameCheck: {
-        writable: true,
-        configurable: false,
-        enumerable: true,
-        value: null
-      },
-      attributeNameCheck: {
-        writable: true,
-        configurable: false,
-        enumerable: true,
-        value: null
-      },
-      allowCustomizedBuiltInElements: {
-        writable: true,
-        configurable: false,
-        enumerable: true,
-        value: false
-      }
-    }));
-    let FORBID_TAGS = null;
-    let FORBID_ATTR = null;
-    const EXTRA_ELEMENT_HANDLING = Object.seal(create(null, {
-      tagCheck: {
-        writable: true,
-        configurable: false,
-        enumerable: true,
-        value: null
-      },
-      attributeCheck: {
-        writable: true,
-        configurable: false,
-        enumerable: true,
-        value: null
-      }
-    }));
-    let ALLOW_ARIA_ATTR = true;
-    let ALLOW_DATA_ATTR = true;
-    let ALLOW_UNKNOWN_PROTOCOLS = false;
-    let ALLOW_SELF_CLOSE_IN_ATTR = true;
-    let SAFE_FOR_TEMPLATES = false;
-    let SAFE_FOR_XML = true;
-    let WHOLE_DOCUMENT = false;
-    let SET_CONFIG = false;
-    let FORCE_BODY = false;
-    let RETURN_DOM = false;
-    let RETURN_DOM_FRAGMENT = false;
-    let RETURN_TRUSTED_TYPE = false;
-    let SANITIZE_DOM = true;
-    let SANITIZE_NAMED_PROPS = false;
-    const SANITIZE_NAMED_PROPS_PREFIX = "user-content-";
-    let KEEP_CONTENT = true;
-    let IN_PLACE = false;
-    let USE_PROFILES = {};
-    let FORBID_CONTENTS = null;
-    const DEFAULT_FORBID_CONTENTS = addToSet({}, ["annotation-xml", "audio", "colgroup", "desc", "foreignobject", "head", "iframe", "math", "mi", "mn", "mo", "ms", "mtext", "noembed", "noframes", "noscript", "plaintext", "script", "style", "svg", "template", "thead", "title", "video", "xmp"]);
-    let DATA_URI_TAGS = null;
-    const DEFAULT_DATA_URI_TAGS = addToSet({}, ["audio", "video", "img", "source", "image", "track"]);
-    let URI_SAFE_ATTRIBUTES = null;
-    const DEFAULT_URI_SAFE_ATTRIBUTES = addToSet({}, ["alt", "class", "for", "id", "label", "name", "pattern", "placeholder", "role", "summary", "title", "value", "style", "xmlns"]);
-    const MATHML_NAMESPACE = "http://www.w3.org/1998/Math/MathML";
-    const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
-    const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
-    let NAMESPACE = HTML_NAMESPACE;
-    let IS_EMPTY_INPUT = false;
-    let ALLOWED_NAMESPACES = null;
-    const DEFAULT_ALLOWED_NAMESPACES = addToSet({}, [MATHML_NAMESPACE, SVG_NAMESPACE, HTML_NAMESPACE], stringToString);
-    let MATHML_TEXT_INTEGRATION_POINTS = addToSet({}, ["mi", "mo", "mn", "ms", "mtext"]);
-    let HTML_INTEGRATION_POINTS = addToSet({}, ["annotation-xml"]);
-    const COMMON_SVG_AND_HTML_ELEMENTS = addToSet({}, ["title", "style", "font", "a", "script"]);
-    let PARSER_MEDIA_TYPE = null;
-    const SUPPORTED_PARSER_MEDIA_TYPES = ["application/xhtml+xml", "text/html"];
-    const DEFAULT_PARSER_MEDIA_TYPE = "text/html";
-    let transformCaseFunc = null;
-    let CONFIG2 = null;
-    const formElement = document2.createElement("form");
-    const isRegexOrFunction = function isRegexOrFunction2(testValue) {
-      return testValue instanceof RegExp || testValue instanceof Function;
-    };
-    const _parseConfig = function _parseConfig2() {
-      let cfg = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : {};
-      if (CONFIG2 && CONFIG2 === cfg) {
-        return;
-      }
-      if (!cfg || typeof cfg !== "object") {
-        cfg = {};
-      }
-      cfg = clone(cfg);
-      PARSER_MEDIA_TYPE =
-SUPPORTED_PARSER_MEDIA_TYPES.indexOf(cfg.PARSER_MEDIA_TYPE) === -1 ? DEFAULT_PARSER_MEDIA_TYPE : cfg.PARSER_MEDIA_TYPE;
-      transformCaseFunc = PARSER_MEDIA_TYPE === "application/xhtml+xml" ? stringToString : stringToLowerCase;
-      ALLOWED_TAGS = objectHasOwnProperty(cfg, "ALLOWED_TAGS") ? addToSet({}, cfg.ALLOWED_TAGS, transformCaseFunc) : DEFAULT_ALLOWED_TAGS;
-      ALLOWED_ATTR = objectHasOwnProperty(cfg, "ALLOWED_ATTR") ? addToSet({}, cfg.ALLOWED_ATTR, transformCaseFunc) : DEFAULT_ALLOWED_ATTR;
-      ALLOWED_NAMESPACES = objectHasOwnProperty(cfg, "ALLOWED_NAMESPACES") ? addToSet({}, cfg.ALLOWED_NAMESPACES, stringToString) : DEFAULT_ALLOWED_NAMESPACES;
-      URI_SAFE_ATTRIBUTES = objectHasOwnProperty(cfg, "ADD_URI_SAFE_ATTR") ? addToSet(clone(DEFAULT_URI_SAFE_ATTRIBUTES), cfg.ADD_URI_SAFE_ATTR, transformCaseFunc) : DEFAULT_URI_SAFE_ATTRIBUTES;
-      DATA_URI_TAGS = objectHasOwnProperty(cfg, "ADD_DATA_URI_TAGS") ? addToSet(clone(DEFAULT_DATA_URI_TAGS), cfg.ADD_DATA_URI_TAGS, transformCaseFunc) : DEFAULT_DATA_URI_TAGS;
-      FORBID_CONTENTS = objectHasOwnProperty(cfg, "FORBID_CONTENTS") ? addToSet({}, cfg.FORBID_CONTENTS, transformCaseFunc) : DEFAULT_FORBID_CONTENTS;
-      FORBID_TAGS = objectHasOwnProperty(cfg, "FORBID_TAGS") ? addToSet({}, cfg.FORBID_TAGS, transformCaseFunc) : clone({});
-      FORBID_ATTR = objectHasOwnProperty(cfg, "FORBID_ATTR") ? addToSet({}, cfg.FORBID_ATTR, transformCaseFunc) : clone({});
-      USE_PROFILES = objectHasOwnProperty(cfg, "USE_PROFILES") ? cfg.USE_PROFILES : false;
-      ALLOW_ARIA_ATTR = cfg.ALLOW_ARIA_ATTR !== false;
-      ALLOW_DATA_ATTR = cfg.ALLOW_DATA_ATTR !== false;
-      ALLOW_UNKNOWN_PROTOCOLS = cfg.ALLOW_UNKNOWN_PROTOCOLS || false;
-      ALLOW_SELF_CLOSE_IN_ATTR = cfg.ALLOW_SELF_CLOSE_IN_ATTR !== false;
-      SAFE_FOR_TEMPLATES = cfg.SAFE_FOR_TEMPLATES || false;
-      SAFE_FOR_XML = cfg.SAFE_FOR_XML !== false;
-      WHOLE_DOCUMENT = cfg.WHOLE_DOCUMENT || false;
-      RETURN_DOM = cfg.RETURN_DOM || false;
-      RETURN_DOM_FRAGMENT = cfg.RETURN_DOM_FRAGMENT || false;
-      RETURN_TRUSTED_TYPE = cfg.RETURN_TRUSTED_TYPE || false;
-      FORCE_BODY = cfg.FORCE_BODY || false;
-      SANITIZE_DOM = cfg.SANITIZE_DOM !== false;
-      SANITIZE_NAMED_PROPS = cfg.SANITIZE_NAMED_PROPS || false;
-      KEEP_CONTENT = cfg.KEEP_CONTENT !== false;
-      IN_PLACE = cfg.IN_PLACE || false;
-      IS_ALLOWED_URI$1 = cfg.ALLOWED_URI_REGEXP || IS_ALLOWED_URI;
-      NAMESPACE = cfg.NAMESPACE || HTML_NAMESPACE;
-      MATHML_TEXT_INTEGRATION_POINTS = cfg.MATHML_TEXT_INTEGRATION_POINTS || MATHML_TEXT_INTEGRATION_POINTS;
-      HTML_INTEGRATION_POINTS = cfg.HTML_INTEGRATION_POINTS || HTML_INTEGRATION_POINTS;
-      CUSTOM_ELEMENT_HANDLING = cfg.CUSTOM_ELEMENT_HANDLING || {};
-      if (cfg.CUSTOM_ELEMENT_HANDLING && isRegexOrFunction(cfg.CUSTOM_ELEMENT_HANDLING.tagNameCheck)) {
-        CUSTOM_ELEMENT_HANDLING.tagNameCheck = cfg.CUSTOM_ELEMENT_HANDLING.tagNameCheck;
-      }
-      if (cfg.CUSTOM_ELEMENT_HANDLING && isRegexOrFunction(cfg.CUSTOM_ELEMENT_HANDLING.attributeNameCheck)) {
-        CUSTOM_ELEMENT_HANDLING.attributeNameCheck = cfg.CUSTOM_ELEMENT_HANDLING.attributeNameCheck;
-      }
-      if (cfg.CUSTOM_ELEMENT_HANDLING && typeof cfg.CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements === "boolean") {
-        CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements = cfg.CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements;
-      }
-      if (SAFE_FOR_TEMPLATES) {
-        ALLOW_DATA_ATTR = false;
-      }
-      if (RETURN_DOM_FRAGMENT) {
-        RETURN_DOM = true;
-      }
-      if (USE_PROFILES) {
-        ALLOWED_TAGS = addToSet({}, text);
-        ALLOWED_ATTR = [];
-        if (USE_PROFILES.html === true) {
-          addToSet(ALLOWED_TAGS, html$1);
-          addToSet(ALLOWED_ATTR, html);
-        }
-        if (USE_PROFILES.svg === true) {
-          addToSet(ALLOWED_TAGS, svg$1);
-          addToSet(ALLOWED_ATTR, svg);
-          addToSet(ALLOWED_ATTR, xml);
-        }
-        if (USE_PROFILES.svgFilters === true) {
-          addToSet(ALLOWED_TAGS, svgFilters);
-          addToSet(ALLOWED_ATTR, svg);
-          addToSet(ALLOWED_ATTR, xml);
-        }
-        if (USE_PROFILES.mathMl === true) {
-          addToSet(ALLOWED_TAGS, mathMl$1);
-          addToSet(ALLOWED_ATTR, mathMl);
-          addToSet(ALLOWED_ATTR, xml);
-        }
-      }
-      if (cfg.ADD_TAGS) {
-        if (typeof cfg.ADD_TAGS === "function") {
-          EXTRA_ELEMENT_HANDLING.tagCheck = cfg.ADD_TAGS;
-        } else {
-          if (ALLOWED_TAGS === DEFAULT_ALLOWED_TAGS) {
-            ALLOWED_TAGS = clone(ALLOWED_TAGS);
-          }
-          addToSet(ALLOWED_TAGS, cfg.ADD_TAGS, transformCaseFunc);
-        }
-      }
-      if (cfg.ADD_ATTR) {
-        if (typeof cfg.ADD_ATTR === "function") {
-          EXTRA_ELEMENT_HANDLING.attributeCheck = cfg.ADD_ATTR;
-        } else {
-          if (ALLOWED_ATTR === DEFAULT_ALLOWED_ATTR) {
-            ALLOWED_ATTR = clone(ALLOWED_ATTR);
-          }
-          addToSet(ALLOWED_ATTR, cfg.ADD_ATTR, transformCaseFunc);
-        }
-      }
-      if (cfg.ADD_URI_SAFE_ATTR) {
-        addToSet(URI_SAFE_ATTRIBUTES, cfg.ADD_URI_SAFE_ATTR, transformCaseFunc);
-      }
-      if (cfg.FORBID_CONTENTS) {
-        if (FORBID_CONTENTS === DEFAULT_FORBID_CONTENTS) {
-          FORBID_CONTENTS = clone(FORBID_CONTENTS);
-        }
-        addToSet(FORBID_CONTENTS, cfg.FORBID_CONTENTS, transformCaseFunc);
-      }
-      if (cfg.ADD_FORBID_CONTENTS) {
-        if (FORBID_CONTENTS === DEFAULT_FORBID_CONTENTS) {
-          FORBID_CONTENTS = clone(FORBID_CONTENTS);
-        }
-        addToSet(FORBID_CONTENTS, cfg.ADD_FORBID_CONTENTS, transformCaseFunc);
-      }
-      if (KEEP_CONTENT) {
-        ALLOWED_TAGS["#text"] = true;
-      }
-      if (WHOLE_DOCUMENT) {
-        addToSet(ALLOWED_TAGS, ["html", "head", "body"]);
-      }
-      if (ALLOWED_TAGS.table) {
-        addToSet(ALLOWED_TAGS, ["tbody"]);
-        delete FORBID_TAGS.tbody;
-      }
-      if (cfg.TRUSTED_TYPES_POLICY) {
-        if (typeof cfg.TRUSTED_TYPES_POLICY.createHTML !== "function") {
-          throw typeErrorCreate('TRUSTED_TYPES_POLICY configuration option must provide a "createHTML" hook.');
-        }
-        if (typeof cfg.TRUSTED_TYPES_POLICY.createScriptURL !== "function") {
-          throw typeErrorCreate('TRUSTED_TYPES_POLICY configuration option must provide a "createScriptURL" hook.');
-        }
-        trustedTypesPolicy = cfg.TRUSTED_TYPES_POLICY;
-        emptyHTML = trustedTypesPolicy.createHTML("");
-      } else {
-        if (trustedTypesPolicy === void 0) {
-          trustedTypesPolicy = _createTrustedTypesPolicy(trustedTypes, currentScript);
-        }
-        if (trustedTypesPolicy !== null && typeof emptyHTML === "string") {
-          emptyHTML = trustedTypesPolicy.createHTML("");
-        }
-      }
-      if (freeze) {
-        freeze(cfg);
-      }
-      CONFIG2 = cfg;
-    };
-    const ALL_SVG_TAGS = addToSet({}, [...svg$1, ...svgFilters, ...svgDisallowed]);
-    const ALL_MATHML_TAGS = addToSet({}, [...mathMl$1, ...mathMlDisallowed]);
-    const _checkValidNamespace = function _checkValidNamespace2(element) {
-      let parent = getParentNode(element);
-      if (!parent || !parent.tagName) {
-        parent = {
-          namespaceURI: NAMESPACE,
-          tagName: "template"
-        };
-      }
-      const tagName = stringToLowerCase(element.tagName);
-      const parentTagName = stringToLowerCase(parent.tagName);
-      if (!ALLOWED_NAMESPACES[element.namespaceURI]) {
-        return false;
-      }
-      if (element.namespaceURI === SVG_NAMESPACE) {
-        if (parent.namespaceURI === HTML_NAMESPACE) {
-          return tagName === "svg";
-        }
-        if (parent.namespaceURI === MATHML_NAMESPACE) {
-          return tagName === "svg" && (parentTagName === "annotation-xml" || MATHML_TEXT_INTEGRATION_POINTS[parentTagName]);
-        }
-        return Boolean(ALL_SVG_TAGS[tagName]);
-      }
-      if (element.namespaceURI === MATHML_NAMESPACE) {
-        if (parent.namespaceURI === HTML_NAMESPACE) {
-          return tagName === "math";
-        }
-        if (parent.namespaceURI === SVG_NAMESPACE) {
-          return tagName === "math" && HTML_INTEGRATION_POINTS[parentTagName];
-        }
-        return Boolean(ALL_MATHML_TAGS[tagName]);
-      }
-      if (element.namespaceURI === HTML_NAMESPACE) {
-        if (parent.namespaceURI === SVG_NAMESPACE && !HTML_INTEGRATION_POINTS[parentTagName]) {
-          return false;
-        }
-        if (parent.namespaceURI === MATHML_NAMESPACE && !MATHML_TEXT_INTEGRATION_POINTS[parentTagName]) {
-          return false;
-        }
-        return !ALL_MATHML_TAGS[tagName] && (COMMON_SVG_AND_HTML_ELEMENTS[tagName] || !ALL_SVG_TAGS[tagName]);
-      }
-      if (PARSER_MEDIA_TYPE === "application/xhtml+xml" && ALLOWED_NAMESPACES[element.namespaceURI]) {
-        return true;
-      }
+  const BLOCKED_TAGS = new Set([
+    "SCRIPT",
+    "STYLE",
+    "IFRAME",
+    "OBJECT",
+    "EMBED",
+    "FORM",
+    "INPUT",
+    "BUTTON",
+    "TEXTAREA",
+    "SELECT",
+    "META",
+    "LINK"
+  ]);
+  const UNSAFE_STYLE_PATTERNS = [
+    /expression\s*\(/i,
+    /@import/i,
+    /-moz-binding/i,
+    /behavior\s*:/i,
+    /url\s*\(\s*(['"]?)\s*(javascript:|vbscript:|data:(?!image\/))/i
+  ];
+  const BLOCKED_STYLE_PROPERTIES = new Set([
+    "position",
+    "z-index",
+    "top",
+    "left",
+    "right",
+    "bottom",
+    "inset"
+  ]);
+  const isSafeStyleDeclaration = (property, value) => {
+    const normalizedProperty = property.trim().toLowerCase();
+    if (!normalizedProperty) return false;
+    const isCssVariable = normalizedProperty.startsWith("--");
+    if (!isCssVariable && !/^[a-z-]+$/.test(normalizedProperty)) {
       return false;
-    };
-    const _forceRemove = function _forceRemove2(node) {
-      arrayPush(DOMPurify.removed, {
-        element: node
-      });
-      try {
-        getParentNode(node).removeChild(node);
-      } catch (_) {
-        remove(node);
-      }
-    };
-    const _removeAttribute = function _removeAttribute2(name, element) {
-      try {
-        arrayPush(DOMPurify.removed, {
-          attribute: element.getAttributeNode(name),
-          from: element
-        });
-      } catch (_) {
-        arrayPush(DOMPurify.removed, {
-          attribute: null,
-          from: element
-        });
-      }
-      element.removeAttribute(name);
-      if (name === "is") {
-        if (RETURN_DOM || RETURN_DOM_FRAGMENT) {
-          try {
-            _forceRemove(element);
-          } catch (_) {
-          }
-        } else {
-          try {
-            element.setAttribute(name, "");
-          } catch (_) {
-          }
-        }
-      }
-    };
-    const _initDocument = function _initDocument2(dirty) {
-      let doc = null;
-      let leadingWhitespace = null;
-      if (FORCE_BODY) {
-        dirty = "<remove></remove>" + dirty;
-      } else {
-        const matches = stringMatch(dirty, /^[\r\n\t ]+/);
-        leadingWhitespace = matches && matches[0];
-      }
-      if (PARSER_MEDIA_TYPE === "application/xhtml+xml" && NAMESPACE === HTML_NAMESPACE) {
-        dirty = '<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body>' + dirty + "</body></html>";
-      }
-      const dirtyPayload = trustedTypesPolicy ? trustedTypesPolicy.createHTML(dirty) : dirty;
-      if (NAMESPACE === HTML_NAMESPACE) {
-        try {
-          doc = new DOMParser2().parseFromString(dirtyPayload, PARSER_MEDIA_TYPE);
-        } catch (_) {
-        }
-      }
-      if (!doc || !doc.documentElement) {
-        doc = implementation.createDocument(NAMESPACE, "template", null);
-        try {
-          doc.documentElement.innerHTML = IS_EMPTY_INPUT ? emptyHTML : dirtyPayload;
-        } catch (_) {
-        }
-      }
-      const body = doc.body || doc.documentElement;
-      if (dirty && leadingWhitespace) {
-        body.insertBefore(document2.createTextNode(leadingWhitespace), body.childNodes[0] || null);
-      }
-      if (NAMESPACE === HTML_NAMESPACE) {
-        return getElementsByTagName.call(doc, WHOLE_DOCUMENT ? "html" : "body")[0];
-      }
-      return WHOLE_DOCUMENT ? doc.documentElement : body;
-    };
-    const _createNodeIterator = function _createNodeIterator2(root) {
-      return createNodeIterator.call(
-        root.ownerDocument || root,
-        root,
-NodeFilter2.SHOW_ELEMENT | NodeFilter2.SHOW_COMMENT | NodeFilter2.SHOW_TEXT | NodeFilter2.SHOW_PROCESSING_INSTRUCTION | NodeFilter2.SHOW_CDATA_SECTION,
-        null
-      );
-    };
-    const _isClobbered = function _isClobbered2(element) {
-      return element instanceof HTMLFormElement && (typeof element.nodeName !== "string" || typeof element.textContent !== "string" || typeof element.removeChild !== "function" || !(element.attributes instanceof NamedNodeMap) || typeof element.removeAttribute !== "function" || typeof element.setAttribute !== "function" || typeof element.namespaceURI !== "string" || typeof element.insertBefore !== "function" || typeof element.hasChildNodes !== "function");
-    };
-    const _isNode = function _isNode2(value) {
-      return typeof Node === "function" && value instanceof Node;
-    };
-    function _executeHooks(hooks2, currentNode, data) {
-      arrayForEach(hooks2, (hook) => {
-        hook.call(DOMPurify, currentNode, data, CONFIG2);
-      });
     }
-    const _sanitizeElements = function _sanitizeElements2(currentNode) {
-      let content = null;
-      _executeHooks(hooks.beforeSanitizeElements, currentNode, null);
-      if (_isClobbered(currentNode)) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      const tagName = transformCaseFunc(currentNode.nodeName);
-      _executeHooks(hooks.uponSanitizeElement, currentNode, {
-        tagName,
-        allowedTags: ALLOWED_TAGS
-      });
-      if (SAFE_FOR_XML && currentNode.hasChildNodes() && !_isNode(currentNode.firstElementChild) && regExpTest(/<[/\w!]/g, currentNode.innerHTML) && regExpTest(/<[/\w!]/g, currentNode.textContent)) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      if (currentNode.nodeType === NODE_TYPE.progressingInstruction) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      if (SAFE_FOR_XML && currentNode.nodeType === NODE_TYPE.comment && regExpTest(/<[/\w]/g, currentNode.data)) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      if (!(EXTRA_ELEMENT_HANDLING.tagCheck instanceof Function && EXTRA_ELEMENT_HANDLING.tagCheck(tagName)) && (!ALLOWED_TAGS[tagName] || FORBID_TAGS[tagName])) {
-        if (!FORBID_TAGS[tagName] && _isBasicCustomElement(tagName)) {
-          if (CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof RegExp && regExpTest(CUSTOM_ELEMENT_HANDLING.tagNameCheck, tagName)) {
-            return false;
-          }
-          if (CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof Function && CUSTOM_ELEMENT_HANDLING.tagNameCheck(tagName)) {
-            return false;
-          }
-        }
-        if (KEEP_CONTENT && !FORBID_CONTENTS[tagName]) {
-          const parentNode = getParentNode(currentNode) || currentNode.parentNode;
-          const childNodes = getChildNodes(currentNode) || currentNode.childNodes;
-          if (childNodes && parentNode) {
-            const childCount = childNodes.length;
-            for (let i = childCount - 1; i >= 0; --i) {
-              const childClone = cloneNode(childNodes[i], true);
-              childClone.__removalCount = (currentNode.__removalCount || 0) + 1;
-              parentNode.insertBefore(childClone, getNextSibling(currentNode));
-            }
-          }
-        }
-        _forceRemove(currentNode);
-        return true;
-      }
-      if (currentNode instanceof Element2 && !_checkValidNamespace(currentNode)) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      if ((tagName === "noscript" || tagName === "noembed" || tagName === "noframes") && regExpTest(/<\/no(script|embed|frames)/i, currentNode.innerHTML)) {
-        _forceRemove(currentNode);
-        return true;
-      }
-      if (SAFE_FOR_TEMPLATES && currentNode.nodeType === NODE_TYPE.text) {
-        content = currentNode.textContent;
-        arrayForEach([MUSTACHE_EXPR2, ERB_EXPR2, TMPLIT_EXPR2], (expr) => {
-          content = stringReplace(content, expr, " ");
-        });
-        if (currentNode.textContent !== content) {
-          arrayPush(DOMPurify.removed, {
-            element: currentNode.cloneNode()
-          });
-          currentNode.textContent = content;
-        }
-      }
-      _executeHooks(hooks.afterSanitizeElements, currentNode, null);
+    if (!isCssVariable && BLOCKED_STYLE_PROPERTIES.has(normalizedProperty)) {
       return false;
-    };
-    const _isValidAttribute = function _isValidAttribute2(lcTag, lcName, value) {
-      if (SANITIZE_DOM && (lcName === "id" || lcName === "name") && (value in document2 || value in formElement)) {
-        return false;
-      }
-      if (ALLOW_DATA_ATTR && !FORBID_ATTR[lcName] && regExpTest(DATA_ATTR2, lcName)) ;
-      else if (ALLOW_ARIA_ATTR && regExpTest(ARIA_ATTR2, lcName)) ;
-      else if (EXTRA_ELEMENT_HANDLING.attributeCheck instanceof Function && EXTRA_ELEMENT_HANDLING.attributeCheck(lcName, lcTag)) ;
-      else if (!ALLOWED_ATTR[lcName] || FORBID_ATTR[lcName]) {
-        if (
-
-
-_isBasicCustomElement(lcTag) && (CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof RegExp && regExpTest(CUSTOM_ELEMENT_HANDLING.tagNameCheck, lcTag) || CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof Function && CUSTOM_ELEMENT_HANDLING.tagNameCheck(lcTag)) && (CUSTOM_ELEMENT_HANDLING.attributeNameCheck instanceof RegExp && regExpTest(CUSTOM_ELEMENT_HANDLING.attributeNameCheck, lcName) || CUSTOM_ELEMENT_HANDLING.attributeNameCheck instanceof Function && CUSTOM_ELEMENT_HANDLING.attributeNameCheck(lcName, lcTag)) ||
-
-lcName === "is" && CUSTOM_ELEMENT_HANDLING.allowCustomizedBuiltInElements && (CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof RegExp && regExpTest(CUSTOM_ELEMENT_HANDLING.tagNameCheck, value) || CUSTOM_ELEMENT_HANDLING.tagNameCheck instanceof Function && CUSTOM_ELEMENT_HANDLING.tagNameCheck(value))
-        ) ;
-        else {
-          return false;
-        }
-      } else if (URI_SAFE_ATTRIBUTES[lcName]) ;
-      else if (regExpTest(IS_ALLOWED_URI$1, stringReplace(value, ATTR_WHITESPACE2, ""))) ;
-      else if ((lcName === "src" || lcName === "xlink:href" || lcName === "href") && lcTag !== "script" && stringIndexOf(value, "data:") === 0 && DATA_URI_TAGS[lcTag]) ;
-      else if (ALLOW_UNKNOWN_PROTOCOLS && !regExpTest(IS_SCRIPT_OR_DATA2, stringReplace(value, ATTR_WHITESPACE2, ""))) ;
-      else if (value) {
-        return false;
-      } else ;
+    }
+    const normalizedValue = value.trim();
+    if (!normalizedValue) return false;
+    return !UNSAFE_STYLE_PATTERNS.some((pattern) => pattern.test(normalizedValue));
+  };
+  const sanitizeInlineStyle = (styleValue) => {
+    const declarations = styleValue.split(";");
+    const safeDeclarations = [];
+    for (const declaration of declarations) {
+      const separatorIndex = declaration.indexOf(":");
+      if (separatorIndex <= 0) continue;
+      const property = declaration.slice(0, separatorIndex).trim();
+      const value = declaration.slice(separatorIndex + 1).trim();
+      if (!isSafeStyleDeclaration(property, value)) continue;
+      safeDeclarations.push(`${property}: ${value}`);
+    }
+    return safeDeclarations.join("; ");
+  };
+  const isSafeUrl = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    const lowered = trimmed.toLowerCase();
+    if (lowered.startsWith("#") || lowered.startsWith("/") || lowered.startsWith("./") || lowered.startsWith("../")) {
       return true;
-    };
-    const _isBasicCustomElement = function _isBasicCustomElement2(tagName) {
-      return tagName !== "annotation-xml" && stringMatch(tagName, CUSTOM_ELEMENT2);
-    };
-    const _sanitizeAttributes = function _sanitizeAttributes2(currentNode) {
-      _executeHooks(hooks.beforeSanitizeAttributes, currentNode, null);
-      const {
-        attributes
-      } = currentNode;
-      if (!attributes || _isClobbered(currentNode)) {
-        return;
-      }
-      const hookEvent = {
-        attrName: "",
-        attrValue: "",
-        keepAttr: true,
-        allowedAttributes: ALLOWED_ATTR,
-        forceKeepAttr: void 0
-      };
-      let l = attributes.length;
-      while (l--) {
-        const attr = attributes[l];
-        const {
-          name,
-          namespaceURI,
-          value: attrValue
-        } = attr;
-        const lcName = transformCaseFunc(name);
-        const initValue = attrValue;
-        let value = name === "value" ? initValue : stringTrim(initValue);
-        hookEvent.attrName = lcName;
-        hookEvent.attrValue = value;
-        hookEvent.keepAttr = true;
-        hookEvent.forceKeepAttr = void 0;
-        _executeHooks(hooks.uponSanitizeAttribute, currentNode, hookEvent);
-        value = hookEvent.attrValue;
-        if (SANITIZE_NAMED_PROPS && (lcName === "id" || lcName === "name")) {
-          _removeAttribute(name, currentNode);
-          value = SANITIZE_NAMED_PROPS_PREFIX + value;
-        }
-        if (SAFE_FOR_XML && regExpTest(/((--!?|])>)|<\/(style|title|textarea)/i, value)) {
-          _removeAttribute(name, currentNode);
+    }
+    if (lowered.startsWith("data:image/")) return true;
+    try {
+      const url = new URL(trimmed, window.location.origin);
+      return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" || url.protocol === "tel:";
+    } catch {
+      return false;
+    }
+  };
+  const isSafeSrcset = (value) => {
+    const candidates = value.split(",");
+    for (const candidate of candidates) {
+      const part = candidate.trim();
+      if (!part) return false;
+      const urlPart = part.split(/\s+/)[0];
+      if (!isSafeUrl(urlPart)) return false;
+    }
+    return true;
+  };
+  const sanitizeHtml = (html) => {
+    const domPurify = globalThis.DOMPurify;
+    if (!domPurify || typeof domPurify.sanitize !== "function") {
+      const template = document.createElement("template");
+      template.innerHTML = html;
+      const elements = Array.from(template.content.querySelectorAll("*"));
+      for (const element of elements) {
+        if (BLOCKED_TAGS.has(element.tagName)) {
+          element.remove();
           continue;
         }
-        if (lcName === "attributename" && stringMatch(value, "href")) {
-          _removeAttribute(name, currentNode);
-          continue;
-        }
-        if (hookEvent.forceKeepAttr) {
-          continue;
-        }
-        if (!hookEvent.keepAttr) {
-          _removeAttribute(name, currentNode);
-          continue;
-        }
-        if (!ALLOW_SELF_CLOSE_IN_ATTR && regExpTest(/\/>/i, value)) {
-          _removeAttribute(name, currentNode);
-          continue;
-        }
-        if (SAFE_FOR_TEMPLATES) {
-          arrayForEach([MUSTACHE_EXPR2, ERB_EXPR2, TMPLIT_EXPR2], (expr) => {
-            value = stringReplace(value, expr, " ");
-          });
-        }
-        const lcTag = transformCaseFunc(currentNode.nodeName);
-        if (!_isValidAttribute(lcTag, lcName, value)) {
-          _removeAttribute(name, currentNode);
-          continue;
-        }
-        if (trustedTypesPolicy && typeof trustedTypes === "object" && typeof trustedTypes.getAttributeType === "function") {
-          if (namespaceURI) ;
-          else {
-            switch (trustedTypes.getAttributeType(lcTag, lcName)) {
-              case "TrustedHTML": {
-                value = trustedTypesPolicy.createHTML(value);
-                break;
-              }
-              case "TrustedScriptURL": {
-                value = trustedTypesPolicy.createScriptURL(value);
-                break;
-              }
-            }
+        const attrs = Array.from(element.attributes);
+        for (const attr of attrs) {
+          const name = attr.name.toLowerCase();
+          const value = attr.value;
+          if (name.startsWith("on") || name === "srcdoc") {
+            element.removeAttribute(attr.name);
+            continue;
           }
-        }
-        if (value !== initValue) {
-          try {
-            if (namespaceURI) {
-              currentNode.setAttributeNS(namespaceURI, name, value);
+          if (name === "style") {
+            const safeStyle = sanitizeInlineStyle(value);
+            if (safeStyle) {
+              element.setAttribute("style", safeStyle);
             } else {
-              currentNode.setAttribute(name, value);
+              element.removeAttribute(attr.name);
             }
-            if (_isClobbered(currentNode)) {
-              _forceRemove(currentNode);
-            } else {
-              arrayPop(DOMPurify.removed);
-            }
-          } catch (_) {
-            _removeAttribute(name, currentNode);
+            continue;
+          }
+          if ((name === "href" || name === "src" || name === "xlink:href") && !isSafeUrl(value)) {
+            element.removeAttribute(attr.name);
+            continue;
+          }
+          if (name === "srcset" && !isSafeSrcset(value)) {
+            element.removeAttribute(attr.name);
           }
         }
       }
-      _executeHooks(hooks.afterSanitizeAttributes, currentNode, null);
-    };
-    const _sanitizeShadowDOM = function _sanitizeShadowDOM2(fragment) {
-      let shadowNode = null;
-      const shadowIterator = _createNodeIterator(fragment);
-      _executeHooks(hooks.beforeSanitizeShadowDOM, fragment, null);
-      while (shadowNode = shadowIterator.nextNode()) {
-        _executeHooks(hooks.uponSanitizeShadowNode, shadowNode, null);
-        _sanitizeElements(shadowNode);
-        _sanitizeAttributes(shadowNode);
-        if (shadowNode.content instanceof DocumentFragment) {
-          _sanitizeShadowDOM2(shadowNode.content);
-        }
-      }
-      _executeHooks(hooks.afterSanitizeShadowDOM, fragment, null);
-    };
-    DOMPurify.sanitize = function(dirty) {
-      let cfg = arguments.length > 1 && arguments[1] !== void 0 ? arguments[1] : {};
-      let body = null;
-      let importedNode = null;
-      let currentNode = null;
-      let returnNode = null;
-      IS_EMPTY_INPUT = !dirty;
-      if (IS_EMPTY_INPUT) {
-        dirty = "<!-->";
-      }
-      if (typeof dirty !== "string" && !_isNode(dirty)) {
-        if (typeof dirty.toString === "function") {
-          dirty = dirty.toString();
-          if (typeof dirty !== "string") {
-            throw typeErrorCreate("dirty is not a string, aborting");
-          }
-        } else {
-          throw typeErrorCreate("toString is not a function");
-        }
-      }
-      if (!DOMPurify.isSupported) {
-        return dirty;
-      }
-      if (!SET_CONFIG) {
-        _parseConfig(cfg);
-      }
-      DOMPurify.removed = [];
-      if (typeof dirty === "string") {
-        IN_PLACE = false;
-      }
-      if (IN_PLACE) {
-        if (dirty.nodeName) {
-          const tagName = transformCaseFunc(dirty.nodeName);
-          if (!ALLOWED_TAGS[tagName] || FORBID_TAGS[tagName]) {
-            throw typeErrorCreate("root node is forbidden and cannot be sanitized in-place");
-          }
-        }
-      } else if (dirty instanceof Node) {
-        body = _initDocument("<!---->");
-        importedNode = body.ownerDocument.importNode(dirty, true);
-        if (importedNode.nodeType === NODE_TYPE.element && importedNode.nodeName === "BODY") {
-          body = importedNode;
-        } else if (importedNode.nodeName === "HTML") {
-          body = importedNode;
-        } else {
-          body.appendChild(importedNode);
-        }
-      } else {
-        if (!RETURN_DOM && !SAFE_FOR_TEMPLATES && !WHOLE_DOCUMENT &&
-dirty.indexOf("<") === -1) {
-          return trustedTypesPolicy && RETURN_TRUSTED_TYPE ? trustedTypesPolicy.createHTML(dirty) : dirty;
-        }
-        body = _initDocument(dirty);
-        if (!body) {
-          return RETURN_DOM ? null : RETURN_TRUSTED_TYPE ? emptyHTML : "";
-        }
-      }
-      if (body && FORCE_BODY) {
-        _forceRemove(body.firstChild);
-      }
-      const nodeIterator = _createNodeIterator(IN_PLACE ? dirty : body);
-      while (currentNode = nodeIterator.nextNode()) {
-        _sanitizeElements(currentNode);
-        _sanitizeAttributes(currentNode);
-        if (currentNode.content instanceof DocumentFragment) {
-          _sanitizeShadowDOM(currentNode.content);
-        }
-      }
-      if (IN_PLACE) {
-        return dirty;
-      }
-      if (RETURN_DOM) {
-        if (RETURN_DOM_FRAGMENT) {
-          returnNode = createDocumentFragment.call(body.ownerDocument);
-          while (body.firstChild) {
-            returnNode.appendChild(body.firstChild);
-          }
-        } else {
-          returnNode = body;
-        }
-        if (ALLOWED_ATTR.shadowroot || ALLOWED_ATTR.shadowrootmode) {
-          returnNode = importNode.call(originalDocument, returnNode, true);
-        }
-        return returnNode;
-      }
-      let serializedHTML = WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
-      if (WHOLE_DOCUMENT && ALLOWED_TAGS["!doctype"] && body.ownerDocument && body.ownerDocument.doctype && body.ownerDocument.doctype.name && regExpTest(DOCTYPE_NAME, body.ownerDocument.doctype.name)) {
-        serializedHTML = "<!DOCTYPE " + body.ownerDocument.doctype.name + ">\n" + serializedHTML;
-      }
-      if (SAFE_FOR_TEMPLATES) {
-        arrayForEach([MUSTACHE_EXPR2, ERB_EXPR2, TMPLIT_EXPR2], (expr) => {
-          serializedHTML = stringReplace(serializedHTML, expr, " ");
-        });
-      }
-      return trustedTypesPolicy && RETURN_TRUSTED_TYPE ? trustedTypesPolicy.createHTML(serializedHTML) : serializedHTML;
-    };
-    DOMPurify.setConfig = function() {
-      let cfg = arguments.length > 0 && arguments[0] !== void 0 ? arguments[0] : {};
-      _parseConfig(cfg);
-      SET_CONFIG = true;
-    };
-    DOMPurify.clearConfig = function() {
-      CONFIG2 = null;
-      SET_CONFIG = false;
-    };
-    DOMPurify.isValidAttribute = function(tag, attr, value) {
-      if (!CONFIG2) {
-        _parseConfig({});
-      }
-      const lcTag = transformCaseFunc(tag);
-      const lcName = transformCaseFunc(attr);
-      return _isValidAttribute(lcTag, lcName, value);
-    };
-    DOMPurify.addHook = function(entryPoint, hookFunction) {
-      if (typeof hookFunction !== "function") {
-        return;
-      }
-      arrayPush(hooks[entryPoint], hookFunction);
-    };
-    DOMPurify.removeHook = function(entryPoint, hookFunction) {
-      if (hookFunction !== void 0) {
-        const index = arrayLastIndexOf(hooks[entryPoint], hookFunction);
-        return index === -1 ? void 0 : arraySplice(hooks[entryPoint], index, 1)[0];
-      }
-      return arrayPop(hooks[entryPoint]);
-    };
-    DOMPurify.removeHooks = function(entryPoint) {
-      hooks[entryPoint] = [];
-    };
-    DOMPurify.removeAllHooks = function() {
-      hooks = _createHooksMap();
-    };
-    return DOMPurify;
-  }
-  var purify = createDOMPurify();
-  const sanitizeHtml = (html2) => {
-    return purify.sanitize(html2, {
+      return template.innerHTML;
+    }
+    return domPurify.sanitize(html, {
       USE_PROFILES: { html: true }
     });
   };
@@ -1636,18 +752,19 @@ dirty.indexOf("<") === -1) {
       }
       return { type: "arena-max" };
     }
-    const isForumDomain = isHost("lesswrong.com") || isHost("forum.effectivealtruism.org") || isHost("greaterwrong.com");
+    const isForumDomain = isHost("lesswrong.com") || isHost("forum.effectivealtruism.org");
     if (!isForumDomain) {
       return { type: "skip" };
     }
-    if (!pathname.startsWith("/reader")) {
-      return { type: "forum-injection" };
-    }
-    if (params.get("view") === "archive") {
+    if (pathname === "/archive" || pathname === "/archive/") {
       const username = params.get("username");
       if (username) {
         return { type: "archive", username };
       }
+      return { type: "reader", path: "main" };
+    }
+    if (!pathname.startsWith("/reader")) {
+      return { type: "forum-injection" };
     }
     if (pathname === "/reader/reset") {
       return { type: "reader", path: "reset" };
@@ -3130,7 +2247,7 @@ dirty.indexOf("<") === -1) {
     protectionObserver.observe(document.documentElement, { childList: true, subtree: true });
   };
   const rebuildDocument = () => {
-    const html2 = `
+    const html = `
     <head>
       <meta charset="UTF-8">
       <title>Less Wrong: Power Reader v${"1.2.693"}</title>
@@ -3145,10 +2262,10 @@ dirty.indexOf("<") === -1) {
     </body>
   `;
     if (document.documentElement) {
-      document.documentElement.innerHTML = html2;
+      document.documentElement.innerHTML = html;
     } else {
       Logger.warn("document.documentElement is missing, attempting fallback write");
-      document.write(html2);
+      document.write(html);
       document.close();
     }
   };
@@ -5016,7 +4133,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   function isAllowedForumHostname(hostname) {
     const host = hostname.toLowerCase();
-    return host === "lesswrong.com" || host.endsWith(".lesswrong.com") || host === "forum.effectivealtruism.org" || host.endsWith(".forum.effectivealtruism.org") || host === "greaterwrong.com" || host.endsWith(".greaterwrong.com");
+    return host === "lesswrong.com" || host.endsWith(".lesswrong.com") || host === "forum.effectivealtruism.org" || host.endsWith(".forum.effectivealtruism.org");
   }
   function parseForumUrl(raw) {
     const u = parseUrl(raw);
@@ -5087,9 +4204,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       const url = new URL(`/tag/${slug}`, forumOrigin).toString();
       try {
         const response = await fetch(url);
-        const html2 = await response.text();
+        const html = await response.text();
         const parser = new DOMParser();
-        const doc = parser.parseFromString(html2, "text/html");
+        const doc = parser.parseFromString(html, "text/html");
         const contentEl = doc.querySelector(".TagPage-description, .ContentStyles-base, .tagDescription");
         const titleEl = doc.querySelector("h1, .TagPage-title");
         const title = titleEl?.textContent || slug;
@@ -5130,7 +4247,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   function renderUserPreview(user) {
     const archiveTarget = user.slug || user.username || "";
-    const archiveLink = `/reader?view=archive&username=${encodeURIComponent(archiveTarget)}`;
+    const archiveLink = `/archive?username=${encodeURIComponent(archiveTarget)}`;
     const safeBio = sanitizeHtml(user.htmlBio || "<i>(No bio provided)</i>");
     return `
     <div class="pr-preview-header">
@@ -5314,8 +4431,8 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     let match;
     REACTION_REGEX.lastIndex = 0;
     while ((match = REACTION_REGEX.exec(content)) !== null) {
-      const [_full, name, label, searchTermsRaw, svg2, _quoteChar, descContent, _bs, fnDescContent, filterRaw, deprecatedRaw] = match;
-      const reaction = { name, label, svg: svg2 };
+      const [_full, name, label, searchTermsRaw, svg, _quoteChar, descContent, _bs, fnDescContent, filterRaw, deprecatedRaw] = match;
+      const reaction = { name, label, svg };
       if (searchTermsRaw) {
         reaction.searchTerms = searchTermsRaw.replace(/"/g, "").split(",").map((s) => s.trim());
       }
@@ -5469,7 +4586,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   `;
   }
   const renderReactions = (itemId, extendedScore, currentUserExtendedVote) => {
-    let html2 = '<span class="pr-reactions-inner">';
+    let html = '<span class="pr-reactions-inner">';
     const reacts = extendedScore?.reacts || {};
     const userReacts = currentUserExtendedVote?.reacts || [];
     const isEAHost = typeof window !== "undefined" && isEAForumHost();
@@ -5516,7 +4633,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       `;
         const title = `${reaction.label}${reaction.description ? "\\n" + reaction.description : ""}`;
         const countText = count > 0 || isAlwaysVisible ? String(count) : "";
-        html2 += `
+        html += `
         <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
               data-action="reaction-vote" 
               data-id="${itemId}" 
@@ -5530,13 +4647,13 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       `;
       }
     });
-    html2 += `
+    html += `
     <span class="pr-add-reaction-btn" data-action="open-picker" data-id="${itemId}" title="Add reaction">
       <svg height="16" viewBox="0 0 16 16" width="16"><g fill="currentColor"><path d="m13 7c0-3.31371-2.6863-6-6-6-3.31371 0-6 2.68629-6 6 0 3.3137 2.68629 6 6 6 .08516 0 .1699-.0018.25419-.0053-.11154-.3168-.18862-.6499-.22673-.9948l-.02746.0001c-2.76142 0-5-2.23858-5-5s2.23858-5 5-5 5 2.23858 5 5l-.0001.02746c.3449.03811.678.11519.9948.22673.0035-.08429.0053-.16903.0053-.25419z"></path><path d="m7.11191 10.4982c.08367-.368.21246-.71893.38025-1.04657-.15911.03174-.32368.04837-.49216.04837-.74037 0-1.40506-.3212-1.86354-.83346-.18417-.20576-.50026-.22327-.70603-.03911-.20576.18417-.22327.50026-.03911.70603.64016.71524 1.57205 1.16654 2.60868 1.16654.03744 0 .07475-.0006.11191-.0018z"></path><path d="m6 6c0 .41421-.33579.75-.75.75s-.75-.33579-.75-.75.33579-.75.75-.75.75.33579.75.75z"></path><path d="m8.75 6.75c.41421 0 .75-.33579.75-.75s-.33579-.75-.75-.75-.75.33579-.75.75.33579.75.75.75z"></path><path d="m15 11.5c0 1.933-1.567 3.5-3.5 3.5s-3.5-1.567-3.5-3.5 1.567-3.5 3.5-3.5 3.5 1.567 3.5 3.5zm-3-2c0-.27614-.2239-.5-.5-.5s-.5.22386-.5.5v1.5h-1.5c-.27614 0-.5.2239-.5.5s.22386.5.5.5h1.5v1.5c0 .2761.2239.5.5.5s.5-.2239.5-.5v-1.5h1.5c.2761 0 .5-.2239.5-.5s-.2239-.5-.5-.5h-1.5z"></path></g></svg>
     </span>
   `;
-    html2 += "</span>";
-    return html2;
+    html += "</span>";
+    return html;
   };
   const slugByAuthorId = new Map();
   const normalizeUsernameToSlugCandidate = (username) => username.trim().toLowerCase().replace(/[_\s]+/g, "-").replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
@@ -5812,8 +4929,8 @@ reactionsHtml
     </div>
   `;
   };
-  const highlightQuotes = (html2, extendedScore) => {
-    const safeHtml = sanitizeHtml(html2);
+  const highlightQuotes = (html, extendedScore) => {
+    const safeHtml = sanitizeHtml(html);
     if (!extendedScore || !extendedScore.reacts) return safeHtml;
     const quotesToHighlight = [];
     Object.values(extendedScore.reacts).forEach((users) => {
@@ -5832,9 +4949,9 @@ reactionsHtml
     const parser = new DOMParser();
     const doc = parser.parseFromString(safeHtml, "text/html");
     const replaceTextNode = (node, quote) => {
-      const text2 = node.nodeValue || "";
-      if (!text2.includes(quote)) return;
-      const parts = text2.split(quote);
+      const text = node.nodeValue || "";
+      if (!text.includes(quote)) return;
+      const parts = text.split(quote);
       if (parts.length <= 1) return;
       const fragment = doc.createDocumentFragment();
       parts.forEach((part, index) => {
@@ -5866,12 +4983,12 @@ reactionsHtml
     });
     return doc.body.innerHTML;
   };
-  const renderBody = (html2, extendedScore) => {
-    const content = html2 || "<i>(No content)</i>";
+  const renderBody = (html, extendedScore) => {
+    const content = html || "<i>(No content)</i>";
     return highlightQuotes(content, extendedScore);
   };
-  const renderPostBody$1 = (html2, extendedScore, isTruncated) => {
-    const bodyHtml = renderBody(html2, extendedScore);
+  const renderPostBody$1 = (html, extendedScore, isTruncated) => {
+    const bodyHtml = renderBody(html, extendedScore);
     return `
     <div class="pr-post-body pr-post-body-container ${isTruncated ? "truncated" : ""}" 
          style="${isTruncated ? `max-height: ${CONFIG.maxPostHeight};` : ""}">
@@ -6728,8 +5845,8 @@ refresh() {
         if (existingBtn) existingBtn.remove();
         return;
       }
-      const text2 = selection.toString().slice(0, 500);
-      state2.currentSelection = { text: text2, range };
+      const text = selection.toString().slice(0, 500);
+      state2.currentSelection = { text, range };
       if (!existingBtn) {
         const btn = document.createElement("div");
         btn.id = "pr-inline-react-btn";
@@ -7265,7 +6382,7 @@ refresh() {
     const endDate = state2.initialBatchNewestDate ? formatStatusDate(state2.initialBatchNewestDate) : "now";
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
     const { forumLabel, forumHomeUrl } = getForumMeta();
-    let html2 = `
+    let html = `
     <div class="pr-header">
       <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.693"}</small></h1>
       <div class="pr-status">
@@ -7279,14 +6396,14 @@ refresh() {
     ${renderHelpSection(showHelp)}
   `;
     if (state2.moreCommentsAvailable) {
-      html2 += `
+      html += `
       <div class="pr-warning">
         There are more comments available. Please reload after reading current comments to continue.
       </div>
     `;
     }
     if (postGroups.size === 0) {
-      html2 += `
+      html += `
       <div class="pr-info">
         No content found. 
         <div style="margin-top: 10px;">
@@ -7300,14 +6417,14 @@ refresh() {
     `;
     }
     postGroups.forEach((group) => {
-      html2 += renderPostGroup(group, state2);
+      html += renderPostGroup(group, state2);
     });
-    html2 += `
+    html += `
     <div class="pr-footer-space" style="height: 100px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 20px;">
       <div id="pr-bottom-message" class="pr-bottom-message" style="display: none;"></div>
     </div>
   `;
-    root.innerHTML = html2;
+    root.innerHTML = html;
     if (!document.querySelector(".pr-sticky-ai-status")) {
       const stickyStatus = document.createElement("div");
       stickyStatus.className = "pr-sticky-ai-status";
@@ -9768,22 +8885,22 @@ currentCommentId = null;
     const type = item.title ? "post" : "comment";
     const author = item.user?.username || item.author || "unknown";
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
-    let xml2 = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}>
+    let xml = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}>
 `;
-    xml2 += `<body_markdown>
+    xml += `<body_markdown>
 ${escapeXmlText(md)}
 </body_markdown>
 `;
     if (isFocal && descendants.length > 0) {
-      xml2 += "<descendants>\n";
-      xml2 += descendantsToXml(descendants, focalId).split("\n").map((line) => "  " + line).join("\n") + "\n";
-      xml2 += "</descendants>\n";
+      xml += "<descendants>\n";
+      xml += descendantsToXml(descendants, focalId).split("\n").map((line) => "  " + line).join("\n") + "\n";
+      xml += "</descendants>\n";
     }
     if (remaining.length > 0) {
-      xml2 += toXml(remaining, focalId, descendants).split("\n").map((line) => "  " + line).join("\n") + "\n";
+      xml += toXml(remaining, focalId, descendants).split("\n").map((line) => "  " + line).join("\n") + "\n";
     }
-    xml2 += `</${type}>`;
-    return xml2;
+    xml += `</${type}>`;
+    return xml;
   };
   const buildDescendantChildrenIndex = (descendants) => {
     const byParent = new Map();
@@ -9801,18 +8918,18 @@ ${escapeXmlText(md)}
     return children.map((child) => {
       const author = child.user?.username || child.author || "unknown";
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
-      let xml2 = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
+      let xml = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
-      xml2 += `  <body_markdown>
+      xml += `  <body_markdown>
 ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
   </body_markdown>
 `;
       const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id);
       if (grandChildrenXml) {
-        xml2 += grandChildrenXml.split("\n").map((line) => "  " + line).join("\n") + "\n";
+        xml += grandChildrenXml.split("\n").map((line) => "  " + line).join("\n") + "\n";
       }
-      xml2 += "</comment>";
-      return xml2;
+      xml += "</comment>";
+      return xml;
     }).join("\n");
   };
   const descendantsToXml = (descendants, parentId) => {
@@ -9987,7 +9104,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
         setStatusMessage(`[${config.name}] Failed to prepare payload. Check console.`, "#dc3545");
       }
     };
-    const displayPopup = (text2, state2, includeDescendants = false) => {
+    const displayPopup = (text, state2, includeDescendants = false) => {
       if (state2.activeAIPopup) {
         state2.activeAIPopup.remove();
         state2.activeAIPopup = null;
@@ -10005,7 +9122,7 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     <div class="pr-ai-popup-content"></div>
   `;
       const popupContent = popup.querySelector(".pr-ai-popup-content");
-      if (popupContent) popupContent.innerHTML = sanitizeHtml(text2);
+      if (popupContent) popupContent.innerHTML = sanitizeHtml(text);
       document.body.appendChild(popup);
       state2.activeAIPopup = popup;
       popup.querySelector(".pr-ai-popup-close")?.addEventListener("click", () => closePopup(state2));
@@ -10023,15 +9140,15 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
       }
       GM_addValueChangeListener(config.responsePayloadKey, (_key, _oldVal, newVal, remote) => {
         if (!newVal || !remote) return;
-        const { text: text2, requestId, includeDescendants } = newVal;
+        const { text, requestId, includeDescendants } = newVal;
         const includeDescendantsMode = !!includeDescendants;
         if (requestId === state2.currentAIRequestId) {
           Logger.info(`${config.name}: Received matching response!`);
           const target = document.querySelector(".being-summarized");
           if (target?.dataset.id) {
-            state2.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text2;
+            state2.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text;
           }
-          displayPopup(text2, state2, includeDescendantsMode);
+          displayPopup(text, state2, includeDescendantsMode);
           setStatusMessage(`${config.name} response received.`);
           const stickyEl = document.getElementById("pr-sticky-ai-status");
           if (stickyEl) {
@@ -10584,7 +9701,7 @@ getPromptPrefix: getAIStudioPrefix,
   const createArchiveLink = (username) => {
     const link = document.createElement("a");
     link.id = "pr-archive-link";
-    link.href = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+    link.href = `/archive?username=${encodeURIComponent(username)}`;
     link.className = "MuiButtonBase-root MuiButton-root MuiButton-text UsersMenu-userButtonRoot";
     link.style.color = "inherit";
     link.style.display = "inline-flex";
@@ -10623,7 +9740,7 @@ getPromptPrefix: getAIStudioPrefix,
         linksContainer.appendChild(createArchiveLink(username));
         Logger.debug(`Header Injection: Added Archive link for ${username}`);
       } else {
-        const expectedHref = `/reader?view=archive&username=${encodeURIComponent(username)}`;
+        const expectedHref = `/archive?username=${encodeURIComponent(username)}`;
         if (existingArchiveLink.getAttribute("href") !== expectedHref) {
           existingArchiveLink.setAttribute("href", expectedHref);
         }
@@ -10961,11 +10078,11 @@ getPromptPrefix: getAIStudioPrefix,
     const tx = db.transaction(STORE_CONTEXTUAL, "readonly");
     const store = tx.objectStore(STORE_CONTEXTUAL);
     const index = store.index("username");
-    const entries2 = await requestToPromise(index.getAll(IDBKeyRange.only(username)));
+    const entries = await requestToPromise(index.getAll(IDBKeyRange.only(username)));
     const now = Date.now();
     const comments = [];
     const posts = [];
-    for (const entry of entries2) {
+    for (const entry of entries) {
       if (now - entry.updatedAt > CONTEXT_MAX_AGE_MS) {
         continue;
       }
@@ -10984,14 +10101,14 @@ getPromptPrefix: getAIStudioPrefix,
     const db = await openDB();
     const readTx = db.transaction(STORE_CONTEXTUAL, "readonly");
     const readStore = readTx.objectStore(STORE_CONTEXTUAL);
-    const entries2 = await requestToPromise(
+    const entries = await requestToPromise(
       readStore.index("username").getAll(IDBKeyRange.only(username))
     );
     await transactionToPromise(readTx);
     const now = Date.now();
     let removed = 0;
     const keysToDelete = [];
-    const freshEntries = entries2.filter((entry) => {
+    const freshEntries = entries.filter((entry) => {
       const isExpired = now - entry.updatedAt > CONTEXT_MAX_AGE_MS;
       if (isExpired) {
         keysToDelete.push(entry.cacheKey);
@@ -11405,117 +10522,14 @@ getPromptPrefix: getAIStudioPrefix,
   const isContentClause = (clause) => clause.kind === "term" || clause.kind === "phrase" || clause.kind === "regex" || clause.kind === "wildcard";
   const isPositiveContentClause = (clause) => isContentClause(clause) && !clause.negated;
   const isPositiveContentWithoutWildcard = (clause) => isPositiveContentClause(clause) && clause.kind !== "wildcard";
-  const HTML_TAG_PATTERN = /<[^>]+>/g;
   const WHITESPACE_PATTERN = /\s+/g;
-  const MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\(([^)]+)\)/g;
-  const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)]+)\)/g;
-  const MARKDOWN_FORMATTING_PATTERN = /(^|\s)[>#*_~`-]+(?=\s|$)/gm;
-  const MARKDOWN_CODE_FENCE_PATTERN = /```/g;
-  const MARKDOWN_INLINE_CODE_PATTERN = /`/g;
-  const MARKDOWN_LATEX_PATTERN = /\$\$?/g;
   const PUNCT_FOLD_PATTERN = /[^\p{L}\p{N}\s]/gu;
   const APOSTROPHE_PATTERN = /['’]/g;
-  const TOKEN_SPLIT_PATTERN = /\s+/g;
-  const COMMON_ENTITIES = {
-    "&amp;": "&",
-    "&lt;": "<",
-    "&gt;": ">",
-    "&quot;": '"',
-    "&#39;": "'",
-    "&apos;": "'",
-    "&nbsp;": " ",
-    "&#x27;": "'",
-    "&#x2F;": "/"
-  };
-  const ENTITY_PATTERN = /&(?:#(?:x[0-9a-fA-F]+|\d+)|[a-z][a-z0-9]*);/gi;
-  const decodeHtmlEntities = (html2) => {
-    if (typeof document !== "undefined") {
-      const textarea = document.createElement("textarea");
-      textarea.innerHTML = html2;
-      return textarea.value;
-    }
-    return html2.replace(ENTITY_PATTERN, (entity) => {
-      const known = COMMON_ENTITIES[entity.toLowerCase()];
-      if (known) return known;
-      if (entity.startsWith("&#x")) {
-        const code = parseInt(entity.slice(3, -1), 16);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
-      }
-      if (entity.startsWith("&#")) {
-        const code = parseInt(entity.slice(2, -1), 10);
-        return Number.isFinite(code) ? String.fromCodePoint(code) : entity;
-      }
-      return entity;
-    });
-  };
   const collapseWhitespace = (value) => value.replace(WHITESPACE_PATTERN, " ").trim();
-  const stripHtmlToText = (html2) => {
-    const decoded = decodeHtmlEntities(html2);
-    return collapseWhitespace(decoded.replace(HTML_TAG_PATTERN, " "));
-  };
-  const stripMarkdownFormatting = (markdown) => {
-    let text2 = markdown;
-    text2 = text2.replace(MARKDOWN_IMAGE_PATTERN, "$1");
-    text2 = text2.replace(MARKDOWN_LINK_PATTERN, "$1");
-    text2 = text2.replace(MARKDOWN_CODE_FENCE_PATTERN, " ");
-    text2 = text2.replace(MARKDOWN_INLINE_CODE_PATTERN, "");
-    text2 = text2.replace(MARKDOWN_LATEX_PATTERN, "");
-    text2 = text2.replace(MARKDOWN_FORMATTING_PATTERN, "$1");
-    return collapseWhitespace(text2);
-  };
   const normalizeForSearch = (value) => {
     if (!value) return "";
     const nfkc = value.normalize("NFKC").toLowerCase();
     return collapseWhitespace(nfkc.replace(APOSTROPHE_PATTERN, "").replace(PUNCT_FOLD_PATTERN, " "));
-  };
-  const normalizeBody = (item) => {
-    const markdown = item.contents?.markdown;
-    if (typeof markdown === "string" && markdown.trim().length > 0) {
-      return normalizeForSearch(stripMarkdownFormatting(markdown));
-    }
-    const htmlBody = typeof item.htmlBody === "string" ? item.htmlBody : "";
-    return normalizeForSearch(stripHtmlToText(htmlBody));
-  };
-  const normalizeTitle = (item) => "title" in item && typeof item.title === "string" ? normalizeForSearch(item.title) : "";
-  const getItemType = (item) => "title" in item ? "post" : "comment";
-  const getAuthorDisplayName = (item) => {
-    if (item.user?.displayName) return item.user.displayName;
-    if (item.user?.username) return item.user.username;
-    return "";
-  };
-  const getReplyToDisplayName = (item) => {
-    if ("title" in item) return "";
-    if (item.parentComment?.user?.displayName) return item.parentComment.user.displayName;
-    if (item.post?.user?.displayName) return item.post.user.displayName;
-    return "";
-  };
-  const buildArchiveSearchDoc = (item, source) => {
-    const titleNorm = normalizeTitle(item);
-    const bodyNorm = normalizeBody(item);
-    return {
-      id: item._id,
-      itemType: getItemType(item),
-      source,
-      postedAtMs: Number.isFinite(new Date(item.postedAt).getTime()) ? new Date(item.postedAt).getTime() : 0,
-      baseScore: typeof item.baseScore === "number" ? item.baseScore : 0,
-      authorNameNorm: normalizeForSearch(getAuthorDisplayName(item)),
-      replyToNorm: normalizeForSearch(getReplyToDisplayName(item)),
-      titleNorm,
-      bodyNorm
-    };
-  };
-  const tokenizeForIndex = (normText) => {
-    if (!normText) return [];
-    const tokens = normText.split(TOKEN_SPLIT_PATTERN);
-    const output = [];
-    const seen = new Set();
-    for (const token of tokens) {
-      if (!token || token.length < 2) continue;
-      if (seen.has(token)) continue;
-      seen.add(token);
-      output.push(token);
-    }
-    return output;
   };
   const MAX_REGEX_PATTERN_LENGTH = 512;
   const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -11956,8 +10970,8 @@ getPromptPrefix: getAIStudioPrefix,
       const parent = textNode.parentElement;
       if (!parent) continue;
       if (parent.closest("mark, code, pre, script, style, a")) continue;
-      const text2 = textNode.textContent || "";
-      const parts = text2.split(pattern);
+      const text = textNode.textContent || "";
+      const parts = text.split(pattern);
       if (parts.length <= 1) continue;
       const fragment = document.createDocumentFragment();
       for (let i = 0; i < parts.length; i++) {
@@ -12388,14 +11402,14 @@ getPromptPrefix: getAIStudioPrefix,
     return `<div class="pr-archive-item">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
   };
   const stripHtmlTags = (value) => value.replace(/<[^>]+>/g, "");
-  const extractSnippet = (text2, maxLen, snippetTerms, snippetPattern) => {
-    if (!text2) return "";
+  const extractSnippet = (text, maxLen, snippetTerms, snippetPattern) => {
+    if (!text) return "";
     let bestMatchIndex = Number.POSITIVE_INFINITY;
     let bestMatchLength = 0;
     const matchPattern = snippetPattern === void 0 ? buildHighlightRegex(snippetTerms) : snippetPattern;
     if (matchPattern) {
       matchPattern.lastIndex = 0;
-      const firstMatch = matchPattern.exec(text2);
+      const firstMatch = matchPattern.exec(text);
       if (firstMatch && typeof firstMatch.index === "number") {
         bestMatchIndex = firstMatch.index;
         bestMatchLength = firstMatch[0]?.length ?? 0;
@@ -12404,22 +11418,22 @@ getPromptPrefix: getAIStudioPrefix,
     if (bestMatchIndex !== Number.POSITIVE_INFINITY) {
       const contextRadius = Math.max(0, Math.floor((maxLen - bestMatchLength) / 2));
       let start = Math.max(0, bestMatchIndex - contextRadius);
-      let end = Math.min(text2.length, bestMatchIndex + bestMatchLength + contextRadius);
-      const targetLen = Math.min(maxLen, text2.length);
+      let end = Math.min(text.length, bestMatchIndex + bestMatchLength + contextRadius);
+      const targetLen = Math.min(maxLen, text.length);
       const currentLen = end - start;
       if (currentLen < targetLen) {
         const deficit = targetLen - currentLen;
         if (start === 0) {
-          end = Math.min(text2.length, end + deficit);
-        } else if (end === text2.length) {
+          end = Math.min(text.length, end + deficit);
+        } else if (end === text.length) {
           start = Math.max(0, start - deficit);
         }
       }
       const prefix = start > 0 ? "..." : "";
-      const suffix = end < text2.length ? "..." : "";
-      return `${prefix}${text2.slice(start, end)}${suffix}`;
+      const suffix = end < text.length ? "..." : "";
+      return `${prefix}${text.slice(start, end)}${suffix}`;
     }
-    return text2.slice(0, maxLen) + (text2.length > maxLen ? "..." : "");
+    return text.slice(0, maxLen) + (text.length > maxLen ? "..." : "");
   };
   const renderIndexItem = (item, options = {}) => {
     const snippetTerms = options.snippetTerms ?? [];
@@ -12738,870 +11752,6 @@ sortCanonicalItems() {
       this.bumpSearchStateRevision();
     }
   }
-  const buildExecutionPlan = (clauses) => {
-    const stageA = [];
-    const stageB = [];
-    const negations = [];
-    for (const clause of clauses) {
-      if (clause.negated) {
-        negations.push(clause);
-        continue;
-      }
-      switch (clause.kind) {
-        case "type":
-        case "author":
-        case "replyto":
-        case "score":
-        case "date":
-          stageA.push(clause);
-          break;
-        case "term":
-          if (clause.valueNorm.length >= 2) {
-            stageA.push(clause);
-          } else {
-            stageB.push(clause);
-          }
-          break;
-        case "phrase":
-        case "regex":
-        case "wildcard":
-          stageB.push(clause);
-          break;
-        default:
-          stageB.push(clause);
-          break;
-      }
-    }
-    return { stageA, stageB, negations };
-  };
-  const compareSourcePriority = (a, b) => {
-    if (a.source === b.source) return 0;
-    return a.source === "authored" ? -1 : 1;
-  };
-  const compareStableTail = (a, b) => {
-    const sourceCmp = compareSourcePriority(a, b);
-    if (sourceCmp !== 0) return sourceCmp;
-    const dateCmp = b.postedAtMs - a.postedAtMs;
-    if (dateCmp !== 0) return dateCmp;
-    return a.id.localeCompare(b.id);
-  };
-  const compareReplyTo = (a, b) => {
-    const aEmpty = a.replyToNorm.length === 0;
-    const bEmpty = b.replyToNorm.length === 0;
-    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
-    const nameCmp = a.replyToNorm.localeCompare(b.replyToNorm);
-    if (nameCmp !== 0) return nameCmp;
-    return compareStableTail(a, b);
-  };
-  const computeRelevanceScore = (signals) => {
-    let score = 0;
-    score += signals.tokenHits * 10;
-    score += signals.phraseHits * 15;
-    if (signals.authorHit) score += 8;
-    if (signals.replyToHit) score += 6;
-    return score;
-  };
-  const EMPTY_SIGNALS = {
-    tokenHits: 0,
-    phraseHits: 0,
-    authorHit: false,
-    replyToHit: false
-  };
-  const sortSearchDocs = (docs, sortMode, relevanceSignalsById) => {
-    const sorted = [...docs];
-    switch (sortMode) {
-      case "date-asc":
-        sorted.sort((a, b) => {
-          const cmp = a.postedAtMs - b.postedAtMs;
-          if (cmp !== 0) return cmp;
-          return compareStableTail(a, b);
-        });
-        return sorted;
-      case "score":
-        sorted.sort((a, b) => {
-          const cmp = b.baseScore - a.baseScore;
-          if (cmp !== 0) return cmp;
-          return compareStableTail(a, b);
-        });
-        return sorted;
-      case "score-asc":
-        sorted.sort((a, b) => {
-          const cmp = a.baseScore - b.baseScore;
-          if (cmp !== 0) return cmp;
-          return compareStableTail(a, b);
-        });
-        return sorted;
-      case "replyTo":
-        sorted.sort(compareReplyTo);
-        return sorted;
-      case "relevance":
-        const precomputedScores = new Map();
-        sorted.forEach((doc) => {
-          const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;
-          precomputedScores.set(doc.id, computeRelevanceScore(signals));
-        });
-        sorted.sort((a, b) => {
-          const scoreCmp = (precomputedScores.get(b.id) || 0) - (precomputedScores.get(a.id) || 0);
-          if (scoreCmp !== 0) return scoreCmp;
-          const dateCmp = b.postedAtMs - a.postedAtMs;
-          if (dateCmp !== 0) return dateCmp;
-          return a.id.localeCompare(b.id);
-        });
-        return sorted;
-      case "date":
-      default:
-        sorted.sort((a, b) => {
-          const cmp = b.postedAtMs - a.postedAtMs;
-          if (cmp !== 0) return cmp;
-          return compareStableTail(a, b);
-        });
-        return sorted;
-    }
-  };
-  const addPosting = (index, token, ordinal) => {
-    const postings = index.get(token);
-    if (postings) {
-      postings.push(ordinal);
-      return;
-    }
-    index.set(token, [ordinal]);
-  };
-  const compactPostings = (mutable) => {
-    const compact = new Map();
-    mutable.forEach((postings, token) => {
-      postings.sort((a, b) => a - b);
-      compact.set(token, Uint32Array.from(postings));
-    });
-    return compact;
-  };
-  const appendPostingBatch = (index, token, ordinals) => {
-    if (ordinals.length === 0) return;
-    const postings = index.get(token);
-    if (!postings) {
-      index.set(token, Uint32Array.from(ordinals));
-      return;
-    }
-    const next = new Uint32Array(postings.length + ordinals.length);
-    next.set(postings);
-    next.set(ordinals, postings.length);
-    index.set(token, next);
-  };
-  const buildIndexes = (docs) => {
-    const tokenMutable = new Map();
-    const authorMutable = new Map();
-    const replyToMutable = new Map();
-    for (let ordinal = 0; ordinal < docs.length; ordinal++) {
-      const doc = docs[ordinal];
-      const seenContentTokens = new Set();
-      for (const token of tokenizeForIndex(doc.titleNorm)) {
-        if (seenContentTokens.has(token)) continue;
-        seenContentTokens.add(token);
-        addPosting(tokenMutable, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.bodyNorm)) {
-        if (seenContentTokens.has(token)) continue;
-        seenContentTokens.add(token);
-        addPosting(tokenMutable, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.authorNameNorm)) {
-        addPosting(authorMutable, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.replyToNorm)) {
-        addPosting(replyToMutable, token, ordinal);
-      }
-    }
-    return {
-      tokenIndex: compactPostings(tokenMutable),
-      authorIndex: compactPostings(authorMutable),
-      replyToIndex: compactPostings(replyToMutable)
-    };
-  };
-  const buildCorpusIndex = (source, items) => {
-    const docs = items.map((item) => buildArchiveSearchDoc(item, source));
-    const docOrdinalsById = new Map();
-    const itemsById = new Map();
-    docs.forEach((doc, ordinal) => {
-      docOrdinalsById.set(doc.id, ordinal);
-      itemsById.set(doc.id, items[ordinal]);
-    });
-    const indexes = buildIndexes(docs);
-    return {
-      source,
-      docs,
-      itemsById,
-      docOrdinalsById,
-      ...indexes
-    };
-  };
-  const appendItemsToCorpusIndex = (index, source, upserts) => {
-    if (upserts.length === 0) return;
-    const tokenBatch = new Map();
-    const authorBatch = new Map();
-    const replyToBatch = new Map();
-    for (const item of upserts) {
-      if (index.docOrdinalsById.has(item._id)) continue;
-      const doc = buildArchiveSearchDoc(item, source);
-      const ordinal = index.docs.length;
-      index.docs.push(doc);
-      index.docOrdinalsById.set(doc.id, ordinal);
-      index.itemsById.set(doc.id, item);
-      const seenContentTokens = new Set();
-      for (const token of tokenizeForIndex(doc.titleNorm)) {
-        if (seenContentTokens.has(token)) continue;
-        seenContentTokens.add(token);
-        addPosting(tokenBatch, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.bodyNorm)) {
-        if (seenContentTokens.has(token)) continue;
-        seenContentTokens.add(token);
-        addPosting(tokenBatch, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.authorNameNorm)) {
-        addPosting(authorBatch, token, ordinal);
-      }
-      for (const token of tokenizeForIndex(doc.replyToNorm)) {
-        addPosting(replyToBatch, token, ordinal);
-      }
-    }
-    tokenBatch.forEach((ordinals, token) => appendPostingBatch(index.tokenIndex, token, ordinals));
-    authorBatch.forEach((ordinals, token) => appendPostingBatch(index.authorIndex, token, ordinals));
-    replyToBatch.forEach((ordinals, token) => appendPostingBatch(index.replyToIndex, token, ordinals));
-  };
-  const DEFAULT_BUDGET_MS = 150;
-  const BUDGET_CHECK_INTERVAL = 1024;
-  const EMPTY_POSTINGS = new Uint32Array(0);
-  const createEmptySignals = () => ({
-    tokenHits: 0,
-    phraseHits: 0,
-    authorHit: false,
-    replyToHit: false
-  });
-  const upsertSignal = (signalMap, ordinal) => {
-    const existing = signalMap.get(ordinal);
-    if (existing) return existing;
-    const created = createEmptySignals();
-    signalMap.set(ordinal, created);
-    return created;
-  };
-  const intersectSortedArrays = (a, b) => {
-    let i = 0;
-    let j = 0;
-    const result = new Uint32Array(Math.min(a.length, b.length));
-    let count = 0;
-    while (i < a.length && j < b.length) {
-      if (a[i] === b[j]) {
-        result[count++] = a[i];
-        i++;
-        j++;
-      } else if (a[i] < b[j]) {
-        i++;
-      } else {
-        j++;
-      }
-    }
-    return count === result.length ? result : result.slice(0, count);
-  };
-  const getTokenPostingIntersection = (index, tokens) => {
-    if (tokens.length === 0) return null;
-    let result = null;
-    for (const token of tokens) {
-      const postings = index.get(token);
-      if (!postings) return EMPTY_POSTINGS;
-      if (result === null) {
-        result = postings;
-      } else {
-        result = intersectSortedArrays(result, postings);
-        if (result.length === 0) return result;
-      }
-    }
-    return result;
-  };
-  const tryApplyAppendOnlyPatch = (index, source, items) => {
-    if (items.length < index.docs.length) return false;
-    const nextById = new Map();
-    for (const item of items) {
-      nextById.set(item._id, item);
-    }
-    for (const id of index.docOrdinalsById.keys()) {
-      const nextItem = nextById.get(id);
-      if (!nextItem) return false;
-      if (index.itemsById.get(id) !== nextItem) return false;
-    }
-    const upserts = [];
-    for (const item of items) {
-      if (!index.docOrdinalsById.has(item._id)) {
-        upserts.push(item);
-      }
-    }
-    if (upserts.length === 0) return true;
-    appendItemsToCorpusIndex(index, source, upserts);
-    return true;
-  };
-  const matchesScoreClause = (doc, clause) => {
-    const value = doc.baseScore;
-    if (clause.op === "gt") {
-      return clause.includeMin ? value >= (clause.min ?? Number.NEGATIVE_INFINITY) : value > (clause.min ?? Number.NEGATIVE_INFINITY);
-    }
-    if (clause.op === "lt") {
-      return clause.includeMax ? value <= (clause.max ?? Number.POSITIVE_INFINITY) : value < (clause.max ?? Number.POSITIVE_INFINITY);
-    }
-    const minOk = clause.min === void 0 ? true : clause.includeMin ? value >= clause.min : value > clause.min;
-    const maxOk = clause.max === void 0 ? true : clause.includeMax ? value <= clause.max : value < clause.max;
-    return minOk && maxOk;
-  };
-  const matchesDateClause = (doc, clause) => {
-    const value = doc.postedAtMs;
-    if (clause.op === "gt") {
-      return clause.includeMin ? value >= (clause.minMs ?? Number.NEGATIVE_INFINITY) : value > (clause.minMs ?? Number.NEGATIVE_INFINITY);
-    }
-    if (clause.op === "lt") {
-      return clause.includeMax ? value <= (clause.maxMs ?? Number.POSITIVE_INFINITY) : value < (clause.maxMs ?? Number.POSITIVE_INFINITY);
-    }
-    const minOk = clause.minMs === void 0 ? true : clause.includeMin ? value >= clause.minMs : value > clause.minMs;
-    const maxOk = clause.maxMs === void 0 ? true : clause.includeMax ? value <= clause.maxMs : value < clause.maxMs;
-    return minOk && maxOk;
-  };
-  const matchesNormalizedText = (doc, valueNorm) => doc.titleNorm.includes(valueNorm) || doc.bodyNorm.includes(valueNorm);
-  const matchesClause = (doc, clause) => {
-    switch (clause.kind) {
-      case "term":
-        return matchesNormalizedText(doc, clause.valueNorm);
-      case "phrase":
-        return doc.titleNorm.includes(clause.valueNorm) || doc.bodyNorm.includes(clause.valueNorm);
-      case "regex":
-        clause.regex.lastIndex = 0;
-        if (clause.regex.test(doc.titleNorm)) return true;
-        clause.regex.lastIndex = 0;
-        return clause.regex.test(doc.bodyNorm);
-      case "wildcard":
-        return true;
-      case "type":
-        return doc.itemType === clause.itemType;
-      case "author":
-        return doc.authorNameNorm.includes(clause.valueNorm);
-      case "replyto":
-        return doc.replyToNorm.includes(clause.valueNorm);
-      case "score":
-        return matchesScoreClause(doc, clause);
-      case "date":
-        return matchesDateClause(doc, clause);
-      default:
-        return false;
-    }
-  };
-  const executeAgainstCorpus = (corpus, clauses, startMs, budgetMs) => {
-    const plan = buildExecutionPlan(clauses);
-    const docCount = corpus.docs.length;
-    const relevanceSignalsByOrdinal = new Map();
-    let partialResults = false;
-    let stageBScanned = 0;
-    const deferredStageAClauses = [];
-    const budgetExceeded = () => budgetMs > 0 && Date.now() - startMs > budgetMs;
-    const shouldCheckBudget = (iteration) => (iteration & BUDGET_CHECK_INTERVAL - 1) === 0 && budgetExceeded();
-    let candidateOrdinals = null;
-    for (const clause of plan.stageA) {
-      if (budgetExceeded()) {
-        partialResults = true;
-        deferredStageAClauses.push(clause);
-        continue;
-      }
-      let matched = null;
-      switch (clause.kind) {
-        case "term": {
-          const termTokens = tokenizeForIndex(clause.valueNorm);
-          if (termTokens.length === 0) {
-            const results2 = [];
-            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-              if (shouldCheckBudget(ordinal)) {
-                partialResults = true;
-                break;
-              }
-              const doc = corpus.docs[ordinal];
-              if (matchesNormalizedText(doc, clause.valueNorm)) {
-                results2.push(ordinal);
-              }
-            }
-            matched = new Uint32Array(results2);
-          } else if (termTokens.length === 1 && termTokens[0] === clause.valueNorm) {
-            matched = corpus.tokenIndex.get(clause.valueNorm) || EMPTY_POSTINGS;
-          } else {
-            const accelerated = getTokenPostingIntersection(corpus.tokenIndex, termTokens);
-            if (accelerated) {
-              const results2 = [];
-              accelerated.forEach((ordinal) => {
-                const doc = corpus.docs[ordinal];
-                if (!matchesNormalizedText(doc, clause.valueNorm)) return;
-                results2.push(ordinal);
-              });
-              matched = new Uint32Array(results2);
-            } else {
-              matched = null;
-            }
-          }
-          if (matched) {
-            matched.forEach((ordinal) => {
-              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-              signal.tokenHits += 1;
-            });
-          }
-          break;
-        }
-        case "author": {
-          const nameTokens = tokenizeForIndex(clause.valueNorm);
-          const accelerated = getTokenPostingIntersection(corpus.authorIndex, nameTokens);
-          if (accelerated && accelerated.length > 0) {
-            const results2 = [];
-            accelerated.forEach((ordinal) => {
-              const doc = corpus.docs[ordinal];
-              if (!doc.authorNameNorm.includes(clause.valueNorm)) return;
-              results2.push(ordinal);
-              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-              signal.authorHit = true;
-            });
-            matched = new Uint32Array(results2);
-          } else {
-            const results2 = [];
-            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-              if (shouldCheckBudget(ordinal)) {
-                partialResults = true;
-                break;
-              }
-              const doc = corpus.docs[ordinal];
-              if (!doc.authorNameNorm.includes(clause.valueNorm)) continue;
-              results2.push(ordinal);
-              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-              signal.authorHit = true;
-            }
-            matched = new Uint32Array(results2);
-          }
-          break;
-        }
-        case "replyto": {
-          const nameTokens = tokenizeForIndex(clause.valueNorm);
-          const accelerated = getTokenPostingIntersection(corpus.replyToIndex, nameTokens);
-          if (accelerated && accelerated.length > 0) {
-            const results2 = [];
-            accelerated.forEach((ordinal) => {
-              const doc = corpus.docs[ordinal];
-              if (!doc.replyToNorm.includes(clause.valueNorm)) return;
-              results2.push(ordinal);
-              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-              signal.replyToHit = true;
-            });
-            matched = new Uint32Array(results2);
-          } else {
-            const results2 = [];
-            for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-              if (shouldCheckBudget(ordinal)) {
-                partialResults = true;
-                break;
-              }
-              const doc = corpus.docs[ordinal];
-              if (!doc.replyToNorm.includes(clause.valueNorm)) continue;
-              results2.push(ordinal);
-              const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-              signal.replyToHit = true;
-            }
-            matched = new Uint32Array(results2);
-          }
-          break;
-        }
-        case "type":
-        case "score":
-        case "date": {
-          const results2 = [];
-          const constrainedOrdinals = candidateOrdinals;
-          const scanLimit = constrainedOrdinals ? constrainedOrdinals.length : corpus.docs.length;
-          for (let i = 0; i < scanLimit; i++) {
-            if (shouldCheckBudget(i)) {
-              partialResults = true;
-              break;
-            }
-            const ordinal = constrainedOrdinals ? constrainedOrdinals[i] : i;
-            const doc = corpus.docs[ordinal];
-            if (matchesClause(doc, clause)) {
-              results2.push(ordinal);
-            }
-          }
-          matched = new Uint32Array(results2);
-          break;
-        }
-      }
-      if (matched !== null) {
-        if (candidateOrdinals === null) {
-          candidateOrdinals = matched;
-        } else {
-          candidateOrdinals = intersectSortedArrays(candidateOrdinals, matched);
-        }
-        if (candidateOrdinals.length === 0) {
-          break;
-        }
-      }
-    }
-    const hasPositiveContent = clauses.some(isPositiveContentClause);
-    const stageASeeded = candidateOrdinals !== null;
-    let stageBApplied = false;
-    if (candidateOrdinals) {
-      for (const clause of deferredStageAClauses) {
-        if (budgetExceeded()) {
-          partialResults = true;
-          break;
-        }
-        const filtered = [];
-        let clauseComplete = true;
-        for (let i = 0; i < candidateOrdinals.length; i++) {
-          if (shouldCheckBudget(i)) {
-            partialResults = true;
-            clauseComplete = false;
-            break;
-          }
-          const ordinal = candidateOrdinals[i];
-          const doc = corpus.docs[ordinal];
-          if (matchesClause(doc, clause)) {
-            filtered.push(ordinal);
-          }
-        }
-        if (!clauseComplete) {
-          candidateOrdinals = new Uint32Array(filtered);
-          break;
-        }
-        candidateOrdinals = new Uint32Array(filtered);
-        if (candidateOrdinals.length === 0) break;
-      }
-    }
-    const results = [];
-    if (hasPositiveContent && candidateOrdinals) {
-      stageBApplied = true;
-      for (let i = 0; i < candidateOrdinals.length; i++) {
-        if (shouldCheckBudget(i)) {
-          partialResults = true;
-          break;
-        }
-        const ordinal = candidateOrdinals[i];
-        const doc = corpus.docs[ordinal];
-        stageBScanned++;
-        let stageBTokenHits = 0;
-        let stageBPhraseHits = 0;
-        let matched = true;
-        for (const clause of plan.stageB) {
-          if (!matchesClause(doc, clause)) {
-            matched = false;
-            break;
-          }
-          if (clause.kind === "phrase") {
-            stageBPhraseHits += 1;
-          }
-          if (clause.kind === "term") {
-            stageBTokenHits += 1;
-          }
-        }
-        if (matched) {
-          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.phraseHits += stageBPhraseHits;
-            signal.tokenHits += stageBTokenHits;
-          }
-          results.push(ordinal);
-        }
-      }
-    } else if (!stageASeeded && plan.stageB.length > 0) {
-      stageBApplied = true;
-      for (let ordinal = 0; ordinal < corpus.docs.length; ordinal++) {
-        if (shouldCheckBudget(ordinal)) {
-          partialResults = true;
-          break;
-        }
-        const doc = corpus.docs[ordinal];
-        stageBScanned++;
-        let stageBTokenHits = 0;
-        let stageBPhraseHits = 0;
-        let matched = true;
-        for (const clause of plan.stageB) {
-          if (!matchesClause(doc, clause)) {
-            matched = false;
-            break;
-          }
-          if (clause.kind === "phrase") stageBPhraseHits += 1;
-          if (clause.kind === "term") stageBTokenHits += 1;
-        }
-        if (matched) {
-          if (stageBPhraseHits > 0 || stageBTokenHits > 0) {
-            const signal = upsertSignal(relevanceSignalsByOrdinal, ordinal);
-            signal.phraseHits += stageBPhraseHits;
-            signal.tokenHits += stageBTokenHits;
-          }
-          results.push(ordinal);
-        }
-      }
-    }
-    let finalOrdinals;
-    if (stageBApplied) {
-      finalOrdinals = new Uint32Array(results);
-    } else if (results.length > 0) {
-      finalOrdinals = new Uint32Array(results);
-    } else if (candidateOrdinals) {
-      finalOrdinals = candidateOrdinals;
-    } else {
-      finalOrdinals = new Uint32Array(docCount);
-      for (let i = 0; i < docCount; i++) finalOrdinals[i] = i;
-    }
-    if (plan.negations.length > 0) {
-      const filtered = [];
-      for (let i = 0; i < finalOrdinals.length; i++) {
-        if (shouldCheckBudget(i)) {
-          partialResults = true;
-          break;
-        }
-        const ordinal = finalOrdinals[i];
-        const doc = corpus.docs[ordinal];
-        const excluded = plan.negations.some((clause) => matchesClause(doc, clause));
-        if (!excluded) filtered.push(ordinal);
-      }
-      finalOrdinals = new Uint32Array(filtered);
-    }
-    let docs;
-    if (finalOrdinals.length === docCount) {
-      docs = corpus.docs.slice();
-    } else {
-      docs = new Array(finalOrdinals.length);
-      for (let i = 0; i < finalOrdinals.length; i++) {
-        docs[i] = corpus.docs[finalOrdinals[i]];
-      }
-    }
-    const relevanceSignalsById = new Map();
-    if (relevanceSignalsByOrdinal.size > 0) {
-      for (let i = 0; i < finalOrdinals.length; i++) {
-        const ordinal = finalOrdinals[i];
-        const signals = relevanceSignalsByOrdinal.get(ordinal);
-        if (signals) {
-          const doc = corpus.docs[ordinal];
-          relevanceSignalsById.set(doc.id, signals);
-        }
-      }
-    }
-    return {
-      docs,
-      relevanceSignalsById,
-      stageACandidateCount: finalOrdinals.length,
-      stageBScanned,
-      partialResults
-    };
-  };
-  class ArchiveSearchRuntime {
-    authoredIndex = buildCorpusIndex("authored", []);
-    contextIndex = buildCorpusIndex("context", []);
-    authoredItemsRef = null;
-    authoredRevisionToken = 0;
-    contextItemsRef = null;
-    setAuthoredItems(items, revisionToken = 0) {
-      if (this.authoredItemsRef === items && this.authoredRevisionToken === revisionToken) return;
-      if (this.authoredItemsRef && this.authoredItemsRef !== items && tryApplyAppendOnlyPatch(this.authoredIndex, "authored", items)) {
-        this.authoredItemsRef = items;
-        this.authoredRevisionToken = revisionToken;
-        return;
-      }
-      this.authoredItemsRef = items;
-      this.authoredRevisionToken = revisionToken;
-      this.authoredIndex = buildCorpusIndex("authored", items);
-    }
-    setContextItems(items) {
-      if (this.contextItemsRef === items) return;
-      if (this.contextItemsRef && tryApplyAppendOnlyPatch(this.contextIndex, "context", items)) {
-        this.contextItemsRef = items;
-        return;
-      }
-      this.contextItemsRef = items;
-      this.contextIndex = buildCorpusIndex("context", items);
-    }
-    runSearch(request) {
-      const startMs = Date.now();
-      const budgetMs = request.budgetMs ?? DEFAULT_BUDGET_MS;
-      const parsed = parseStructuredQuery(request.query);
-      const warnings = [...parsed.warnings];
-      let resolvedScope = request.scopeParam || "authored";
-      if (!request.scopeParam && parsed.scopeDirectives.length > 0) {
-        resolvedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];
-      } else if (request.scopeParam && parsed.scopeDirectives.length > 0) {
-        const parsedScope = parsed.scopeDirectives[parsed.scopeDirectives.length - 1];
-        if (parsedScope !== request.scopeParam) {
-          warnings.push({
-            type: "invalid-scope",
-            token: `scope:${parsedScope}`,
-            message: "URL scope parameter takes precedence over in-query scope"
-          });
-        }
-      }
-      let isNegationOnly = warnings.some((w) => w.type === "negation-only");
-      if (!isNegationOnly) {
-        const hasNegation = parsed.clauses.some((clause) => clause.negated);
-        const hasPositiveClause = parsed.clauses.some((clause) => !clause.negated);
-        if (hasNegation && !hasPositiveClause) {
-          isNegationOnly = true;
-          warnings.push({
-            type: "negation-only",
-            token: parsed.rawQuery,
-            message: 'Add a positive clause or use "*" before negations'
-          });
-        }
-      }
-      if (isNegationOnly) {
-        const diagnostics2 = {
-          warnings,
-          parseState: "invalid",
-          degradedMode: false,
-          partialResults: false,
-          tookMs: Date.now() - startMs,
-          stageACandidateCount: 0,
-          stageBScanned: 0,
-          totalCandidatesBeforeLimit: 0,
-          explain: ["Query rejected: negations require at least one positive clause"]
-        };
-        return {
-          ids: [],
-          total: 0,
-          items: [],
-          canonicalQuery: parsed.executableQuery,
-          resolvedScope,
-          diagnostics: diagnostics2,
-          ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
-        };
-      }
-      const corpora = resolvedScope === "all" ? [this.authoredIndex, this.contextIndex] : [this.authoredIndex];
-      let stageACandidateCount = 0;
-      let stageBScanned = 0;
-      let partialResults = false;
-      const mergedWarnings = [...warnings];
-      const mergedDocs = new Map();
-      const mergedSignals = new Map();
-      for (const corpus of corpora) {
-        const result = executeAgainstCorpus(corpus, parsed.clauses, startMs, budgetMs);
-        stageACandidateCount += result.stageACandidateCount;
-        stageBScanned += result.stageBScanned;
-        partialResults = partialResults || result.partialResults;
-        result.docs.forEach((doc) => {
-          const existing = mergedDocs.get(doc.id);
-          if (!existing) {
-            mergedDocs.set(doc.id, doc);
-            const signal = result.relevanceSignalsById.get(doc.id);
-            if (signal) mergedSignals.set(doc.id, signal);
-            return;
-          }
-          if (existing.source === "authored") return;
-          if (doc.source === "authored") {
-            mergedDocs.set(doc.id, doc);
-            const signal = result.relevanceSignalsById.get(doc.id);
-            if (signal) mergedSignals.set(doc.id, signal);
-          }
-        });
-      }
-      const sortedDocs = sortSearchDocs(Array.from(mergedDocs.values()), request.sortMode, mergedSignals);
-      const total = sortedDocs.length;
-      const limitedDocs = sortedDocs.slice(0, request.limit);
-      const getItemForDoc = (doc) => {
-        if (doc.source === "authored") {
-          return this.authoredIndex.itemsById.get(doc.id) || this.contextIndex.itemsById.get(doc.id) || null;
-        }
-        return this.contextIndex.itemsById.get(doc.id) || this.authoredIndex.itemsById.get(doc.id) || null;
-      };
-      const resolved = limitedDocs.map((doc) => ({ doc, item: getItemForDoc(doc) })).filter((entry) => Boolean(entry.item));
-      const ids = resolved.map((entry) => entry.doc.id);
-      const items = resolved.map((entry) => entry.item);
-      let debugExplain;
-      if (request.debugExplain) {
-        const relevanceSignalsById = {};
-        for (const id of ids) {
-          const signals = mergedSignals.get(id);
-          if (!signals) continue;
-          relevanceSignalsById[id] = { ...signals };
-        }
-        debugExplain = { relevanceSignalsById };
-      }
-      const parseState = mergedWarnings.some((w) => w.type === "negation-only" || w.type === "invalid-query") ? "invalid" : mergedWarnings.length > 0 ? "warning" : "valid";
-      const diagnostics = {
-        warnings: mergedWarnings,
-        parseState,
-        degradedMode: partialResults || mergedWarnings.some((w) => w.type === "regex-unsafe" || w.type === "regex-too-long"),
-        partialResults,
-        tookMs: Date.now() - startMs,
-        stageACandidateCount,
-        stageBScanned,
-        totalCandidatesBeforeLimit: total,
-        explain: [
-          `scope=${resolvedScope}`,
-          `stageA_candidates=${stageACandidateCount}`,
-          `stageB_scanned=${stageBScanned}`,
-          `total=${total}`
-        ]
-      };
-      return {
-        ids,
-        total,
-        items,
-        canonicalQuery: parsed.executableQuery,
-        resolvedScope,
-        diagnostics,
-        ...debugExplain ? { debugExplain } : {}
-      };
-    }
-  }
-  const FALLBACK_TOTAL_BUDGET_MS = 150;
-  const REGEX_LITERAL_GLOBAL = /-?\/(?:\\\/|[^/])+\/[a-z]*/gi;
-  const REGEX_META_GLOBAL = /[.*+?^${}()|[\]\\]/g;
-  const downgradeRegexTokenToLiteral = (token) => {
-    const negated = token.startsWith("-");
-    const literal = negated ? token.slice(1) : token;
-    const endSlash = literal.lastIndexOf("/");
-    if (!literal.startsWith("/") || endSlash <= 0) return token;
-    const pattern = literal.slice(1, endSlash);
-    const flags = literal.slice(endSlash + 1).replace(/[gy]/g, "");
-    try {
-      new RegExp(pattern, flags);
-    } catch {
-      return token;
-    }
-    const simplified = pattern.replace(REGEX_META_GLOBAL, " ").replace(/\s+/g, " ").trim();
-    if (!simplified) return negated ? "-*" : "*";
-    return negated ? `-${simplified}` : simplified;
-  };
-  const downgradeRegexInQuery = (query) => {
-    let downgraded = false;
-    const next = query.replace(REGEX_LITERAL_GLOBAL, (token) => {
-      const replacement = downgradeRegexTokenToLiteral(token);
-      if (replacement !== token) {
-        downgraded = true;
-      }
-      return replacement;
-    });
-    return { query: next, downgraded };
-  };
-  const prependFallbackWarning = (result, warning) => ({
-    ...result,
-    diagnostics: {
-      ...result.diagnostics,
-      warnings: [warning, ...result.diagnostics.warnings],
-      parseState: result.diagnostics.parseState === "valid" ? "warning" : result.diagnostics.parseState,
-      degradedMode: true
-    }
-  });
-  const executeFallbackQuery = (runtime, request) => {
-    const normalizedBudget = request.budgetMs ?? FALLBACK_TOTAL_BUDGET_MS;
-    const downgraded = downgradeRegexInQuery(request.query);
-    const result = runtime.runSearch({
-      ...request,
-      query: downgraded.query,
-      budgetMs: normalizedBudget
-    });
-    if (!downgraded.downgraded) return result;
-    return prependFallbackWarning(result, {
-      type: "regex-unsafe",
-      token: request.query,
-      message: "Fallback mode downgraded regex literals to plain-text contains checks"
-    });
-  };
-  const executeFallbackQueryAsync = async (runtime, request) => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return executeFallbackQuery(runtime, request);
-  };
   const SEARCH_SCHEMA_VERSION = 1;
   const DEFAULT_INDEX_CHUNK_SIZE = 500;
   const randomId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -13798,9 +11948,7 @@ sortCanonicalItems() {
     return true;
   };
   class ArchiveSearchManager {
-    runtime = new ArchiveSearchRuntime();
     workerClient;
-    workerEnabled = false;
     authoredItems = [];
     contextItems = [];
     itemsById = new Map();
@@ -13808,41 +11956,29 @@ sortCanonicalItems() {
     docCount = 0;
     lastError = null;
     activeRequestId = null;
-    fallbackMode = false;
     authoredIndexSync = null;
     contextIndexSync = null;
     authoredSyncToken = 0;
     contextSyncToken = 0;
     authoredRevisionToken = 0;
     requestSequence = 0;
-    constructor(options = {}) {
-      const useWorker = options.useWorker === true;
-      if (options.workerClient) {
-        this.workerClient = options.workerClient;
-        this.workerEnabled = true;
-        return;
-      }
-      if (useWorker) {
-        this.lastError = "Worker mode requested but no workerClient provided; pass a SearchWorkerClient via options.workerClient. Using runtime mode";
-      }
-      this.workerClient = null;
+    constructor(options) {
+      this.workerClient = options.workerClient;
     }
     setAuthoredItems(items, revisionToken = 0) {
       if (hasSameItemRefs(this.authoredItems, items) && this.authoredRevisionToken === revisionToken) return;
       this.authoredItems = items;
       this.authoredRevisionToken = revisionToken;
-      this.runtime.setAuthoredItems(items, revisionToken);
       this.rebuildItemsById();
       this.docCount = this.authoredItems.length + this.contextItems.length;
-      if (!this.workerEnabled || !this.workerClient) return;
       const token = ++this.authoredSyncToken;
       const syncPromise = this.workerClient.indexFull("authored", this.authoredItems).then((ready) => {
         if (token !== this.authoredSyncToken) return;
         this.indexVersion = Math.max(this.indexVersion, ready.indexVersion);
+        this.lastError = null;
       }).catch((error) => {
         if (token !== this.authoredSyncToken) return;
         this.lastError = error.message;
-        this.workerEnabled = false;
       }).finally(() => {
         if (token === this.authoredSyncToken) {
           this.authoredIndexSync = null;
@@ -13853,18 +11989,16 @@ sortCanonicalItems() {
     setContextItems(items) {
       if (hasSameItemRefs(this.contextItems, items)) return;
       this.contextItems = items;
-      this.runtime.setContextItems(items);
       this.rebuildItemsById();
       this.docCount = this.authoredItems.length + this.contextItems.length;
-      if (!this.workerEnabled || !this.workerClient) return;
       const token = ++this.contextSyncToken;
       const syncPromise = this.workerClient.indexFull("context", this.contextItems).then((ready) => {
         if (token !== this.contextSyncToken) return;
         this.indexVersion = Math.max(this.indexVersion, ready.indexVersion);
+        this.lastError = null;
       }).catch((error) => {
         if (token !== this.contextSyncToken) return;
         this.lastError = error.message;
-        this.workerEnabled = false;
       }).finally(() => {
         if (token === this.contextSyncToken) {
           this.contextIndexSync = null;
@@ -13875,22 +12009,16 @@ sortCanonicalItems() {
     async runSearch(request) {
       const requestSequence = ++this.requestSequence;
       this.docCount = this.authoredItems.length + this.contextItems.length;
-      if (!this.workerEnabled || !this.workerClient) {
-        if (!this.fallbackMode) {
-          return this.runtime.runSearch(request);
-        }
-        return executeFallbackQueryAsync(this.runtime, request);
-      }
       const syncTasks = [];
       if (this.authoredIndexSync) syncTasks.push(this.authoredIndexSync);
       if (this.contextIndexSync) syncTasks.push(this.contextIndexSync);
       if (syncTasks.length > 0) {
         await Promise.all(syncTasks);
+        if (this.lastError) {
+          return this.createWorkerErrorResult(request, this.lastError);
+        }
         if (requestSequence !== this.requestSequence) {
           return this.createCancelledResult(request);
-        }
-        if (!this.workerEnabled || !this.workerClient) {
-          return this.runtime.runSearch(request);
         }
       }
       const requestId = randomRequestId();
@@ -13910,10 +12038,7 @@ sortCanonicalItems() {
           debugExplain: request.debugExplain,
           expectedIndexVersion: this.indexVersion
         });
-        if (response.indexVersion < this.indexVersion) {
-          return this.runtime.runSearch(request);
-        }
-        this.indexVersion = response.indexVersion;
+        this.indexVersion = Math.max(this.indexVersion, response.indexVersion);
         const items = [];
         const ids = [];
         for (const id of response.ids) {
@@ -13934,6 +12059,7 @@ sortCanonicalItems() {
           }
           debugExplain = { relevanceSignalsById };
         }
+        this.lastError = null;
         return {
           ids,
           total,
@@ -13948,9 +12074,7 @@ sortCanonicalItems() {
           return this.createCancelledResult(request);
         }
         this.lastError = error.message;
-        this.workerEnabled = false;
-        this.fallbackMode = true;
-        return executeFallbackQueryAsync(this.runtime, request);
+        return this.createWorkerErrorResult(request, this.lastError);
       } finally {
         if (this.activeRequestId === requestId) {
           this.activeRequestId = null;
@@ -13959,17 +12083,15 @@ sortCanonicalItems() {
     }
     getStatus() {
       return {
-        mode: this.workerEnabled ? "worker" : this.fallbackMode ? "fallback" : "runtime",
-        ready: true,
+        mode: "worker",
+        ready: !this.authoredIndexSync && !this.contextIndexSync && !this.lastError,
         indexVersion: this.indexVersion,
         docCount: this.docCount,
         lastError: this.lastError
       };
     }
     destroy() {
-      if (this.workerClient) {
-        this.workerClient.terminate();
-      }
+      this.workerClient.terminate();
     }
     rebuildItemsById() {
       const map = new Map();
@@ -13997,6 +12119,31 @@ sortCanonicalItems() {
           stageBScanned: 0,
           totalCandidatesBeforeLimit: 0,
           explain: ["cancelled-superseded"]
+        },
+        ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
+      };
+    }
+    createWorkerErrorResult(request, message) {
+      return {
+        ids: [],
+        total: 0,
+        items: [],
+        canonicalQuery: request.query,
+        resolvedScope: request.scopeParam ?? "authored",
+        diagnostics: {
+          warnings: [{
+            type: "invalid-query",
+            token: "worker",
+            message: `Search worker error: ${message}`
+          }],
+          parseState: "invalid",
+          degradedMode: true,
+          partialResults: false,
+          tookMs: 0,
+          stageACandidateCount: 0,
+          stageBScanned: 0,
+          totalCandidatesBeforeLimit: 0,
+          explain: ["worker-error"]
         },
         ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
       };
@@ -14271,6 +12418,7 @@ sortCanonicalItems() {
   const SEARCH_DEBOUNCE_MS = 180;
   const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
   const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
+  const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
   let activeArchiveInitRunId = 0;
   let activeArchiveInitAbortController = null;
   const initArchive = async (username, recoveryAttempt = 0) => {
@@ -15021,28 +13169,24 @@ sortCanonicalItems() {
       };
       renderTopStatusLine();
       let activeItems = state2.items;
-      const workerPreference = window.__PR_ARCHIVE_SEARCH_USE_WORKER;
-      const shouldUseSearchWorker = workerPreference !== false;
-      let workerClient = null;
-      if (shouldUseSearchWorker) {
-        try {
-          workerClient = createSearchWorkerClient();
-        } catch (error) {
-          Logger.warn("Archive search worker unavailable; falling back to runtime search.", error);
-        }
+      let workerClient;
+      try {
+        workerClient = createSearchWorkerClient();
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new Error(`Archive search worker unavailable: ${reason}`);
       }
       const searchManager = new ArchiveSearchManager({
-        useWorker: shouldUseSearchWorker,
         workerClient
       });
       let activeRenderController = null;
       let postObserver = null;
       const initPostObserver = () => {
         if (postObserver) postObserver.disconnect();
-        postObserver = new IntersectionObserver((entries2) => {
+        postObserver = new IntersectionObserver((entries) => {
           const start = performance.now();
           let refreshCount = 0;
-          entries2.forEach((entry) => {
+          entries.forEach((entry) => {
             if (entry.isIntersecting) {
               const el = entry.target;
               refreshPostActionButtons(el);
@@ -15285,7 +13429,7 @@ sortCanonicalItems() {
         const terms = getHighlightTermsFromQuery(searchInput.value);
         const termsKey = Array.from(new Set(terms)).sort((a, b) => a.localeCompare(b)).join("");
         const highlightTargets = feedEl.querySelectorAll(".pr-comment-body, .pr-post-body, .pr-index-title");
-        if (highlightTargets.length > 1200) return;
+        if (highlightTargets.length > MAX_SEARCH_HIGHLIGHT_TARGETS) return;
         highlightTargets.forEach((el) => {
           const node = el;
           if (node.getAttribute("data-pr-highlighted-terms") === termsKey) return;
@@ -15394,10 +13538,10 @@ sortCanonicalItems() {
         if (!searchStatusEl) return;
         searchStatusEl.textContent = "";
         searchStatusEl.classList.remove("warning", "error");
-        const addChip = (text2, type = "info") => {
+        const addChip = (text, type = "info") => {
           const chip = document.createElement("span");
           chip.className = `pr-status-chip pr-status-${type}`;
-          chip.textContent = text2;
+          chip.textContent = text;
           searchStatusEl.appendChild(chip);
         };
         let hasMessages = false;
@@ -15536,7 +13680,9 @@ sortCanonicalItems() {
                 }
               });
               setArchiveRenderProgress(100);
-              runPostRenderHooks();
+              if (!hooksPrimed2) {
+                runPostRenderHooks();
+              }
             });
             return;
           }
@@ -15572,7 +13718,9 @@ sortCanonicalItems() {
           perfMetrics.renderPercent = 100;
           setArchiveRenderProgress(100);
           renderTopStatusLine();
-          runPostRenderHooks();
+          if (!hooksPrimed) {
+            runPostRenderHooks();
+          }
         } finally {
           if (requestId === activeQueryRequestId) {
             setSearchLoading(false);
@@ -15649,7 +13797,7 @@ sortCanonicalItems() {
         scheduleSearchRefresh();
       });
       clearBtn?.addEventListener("click", async () => {
-        if (searchInput.value.length === 0) return;
+        if (!searchInput.value) return;
         searchInput.value = "";
         updateClearButton();
         if (searchDispatchTimer) {
@@ -16344,9 +14492,9 @@ sortCanonicalItems() {
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
-    const setStatus = (text2) => {
+    const setStatus = (text) => {
       const el = document.querySelector(".pr-status");
-      if (el) el.textContent = text2;
+      if (el) el.textContent = text;
     };
     try {
       Logger.info("Loading data...");

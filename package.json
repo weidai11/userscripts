@@ -39,8 +39,5 @@
   },
   "overrides": {
     "minimatch": "^10.2.1"
-  },
-  "dependencies": {
-    "dompurify": "^3.3.1"
   }
 }

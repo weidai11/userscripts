@@ -739,9 +739,7 @@ function isAllowedForumHostname(hostname: string): boolean {
     host === 'lesswrong.com' ||
     host.endsWith('.lesswrong.com') ||
     host === 'forum.effectivealtruism.org' ||
-    host.endsWith('.forum.effectivealtruism.org') ||
-    host === 'greaterwrong.com' ||
-    host.endsWith('.greaterwrong.com')
+    host.endsWith('.forum.effectivealtruism.org')
   );
 }
 
@@ -922,7 +920,7 @@ export function createAuthorBySlugPreviewFetcher(slug: string): () => Promise<st
  */
 function renderUserPreview(user: UserPreviewData): string {
   const archiveTarget = user.slug || user.username || '';
-  const archiveLink = `/reader?view=archive&username=${encodeURIComponent(archiveTarget)}`;
+  const archiveLink = `/archive?username=${encodeURIComponent(archiveTarget)}`;
   const safeBio = sanitizeHtml(user.htmlBio || '<i>(No bio provided)</i>');
   return `
     <div class="pr-preview-header">

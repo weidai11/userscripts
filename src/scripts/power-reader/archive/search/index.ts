@@ -1,5 +1,3 @@
-import { ArchiveSearchRuntime } from './engine';
-import { executeFallbackQueryAsync } from './fallback';
 import { SearchQueryCancelledError } from './protocol';
 import type { SearchWorkerClient } from './protocol';
 import type {
@@ -10,7 +8,7 @@ import type {
 } from './types';
 
 export type ArchiveSearchManagerStatus = {
-  mode: 'worker' | 'runtime' | 'fallback';
+  mode: 'worker';
   ready: boolean;
   indexVersion: number;
   docCount: number;
@@ -18,8 +16,7 @@ export type ArchiveSearchManagerStatus = {
 };
 
 export type ArchiveSearchManagerOptions = {
-  useWorker?: boolean;
-  workerClient?: SearchWorkerClient | null;
+  workerClient: SearchWorkerClient;
 };
 
 const randomRequestId = (): string =>
@@ -35,9 +32,7 @@ const hasSameItemRefs = (a: readonly ArchiveItem[], b: readonly ArchiveItem[]): 
 };
 
 export class ArchiveSearchManager {
-  private readonly runtime = new ArchiveSearchRuntime();
-  private readonly workerClient: SearchWorkerClient | null;
-  private workerEnabled = false;
+  private readonly workerClient: SearchWorkerClient;
   private authoredItems: readonly ArchiveItem[] = [];
   private contextItems: readonly ArchiveItem[] = [];
   private itemsById = new Map<string, ArchiveItem>();
@@ -45,7 +40,6 @@ export class ArchiveSearchManager {
   private docCount = 0;
   private lastError: string | null = null;
   private activeRequestId: string | null = null;
-  private fallbackMode = false;
   private authoredIndexSync: Promise<void> | null = null;
   private contextIndexSync: Promise<void> | null = null;
   private authoredSyncToken = 0;
@@ -53,29 +47,16 @@ export class ArchiveSearchManager {
   private authoredRevisionToken = 0;
   private requestSequence = 0;
 
-  constructor(options: ArchiveSearchManagerOptions = {}) {
-    const useWorker = options.useWorker === true;
-    if (options.workerClient) {
-      this.workerClient = options.workerClient;
-      this.workerEnabled = true;
-      return;
-    }
-
-    if (useWorker) {
-      this.lastError = 'Worker mode requested but no workerClient provided; pass a SearchWorkerClient via options.workerClient. Using runtime mode';
-    }
-
-    this.workerClient = null;
+  constructor(options: ArchiveSearchManagerOptions) {
+    this.workerClient = options.workerClient;
   }
 
   setAuthoredItems(items: readonly ArchiveItem[], revisionToken = 0): void {
     if (hasSameItemRefs(this.authoredItems, items) && this.authoredRevisionToken === revisionToken) return;
     this.authoredItems = items;
     this.authoredRevisionToken = revisionToken;
-    this.runtime.setAuthoredItems(items, revisionToken);
     this.rebuildItemsById();
     this.docCount = this.authoredItems.length + this.contextItems.length;
-    if (!this.workerEnabled || !this.workerClient) return;
 
     const token = ++this.authoredSyncToken;
     const syncPromise = this.workerClient
@@ -83,11 +64,11 @@ export class ArchiveSearchManager {
       .then(ready => {
         if (token !== this.authoredSyncToken) return;
         this.indexVersion = Math.max(this.indexVersion, ready.indexVersion);
+        this.lastError = null;
       })
       .catch(error => {
         if (token !== this.authoredSyncToken) return;
         this.lastError = (error as Error).message;
-        this.workerEnabled = false;
       })
       .finally(() => {
         if (token === this.authoredSyncToken) {
@@ -100,10 +81,8 @@ export class ArchiveSearchManager {
   setContextItems(items: readonly ArchiveItem[]): void {
     if (hasSameItemRefs(this.contextItems, items)) return;
     this.contextItems = items;
-    this.runtime.setContextItems(items);
     this.rebuildItemsById();
     this.docCount = this.authoredItems.length + this.contextItems.length;
-    if (!this.workerEnabled || !this.workerClient) return;
 
     const token = ++this.contextSyncToken;
     const syncPromise = this.workerClient
@@ -111,11 +90,11 @@ export class ArchiveSearchManager {
       .then(ready => {
         if (token !== this.contextSyncToken) return;
         this.indexVersion = Math.max(this.indexVersion, ready.indexVersion);
+        this.lastError = null;
       })
       .catch(error => {
         if (token !== this.contextSyncToken) return;
         this.lastError = (error as Error).message;
-        this.workerEnabled = false;
       })
       .finally(() => {
         if (token === this.contextSyncToken) {
@@ -129,23 +108,16 @@ export class ArchiveSearchManager {
     const requestSequence = ++this.requestSequence;
     this.docCount = this.authoredItems.length + this.contextItems.length;
 
-    if (!this.workerEnabled || !this.workerClient) {
-      if (!this.fallbackMode) {
-        return this.runtime.runSearch(request);
-      }
-      return executeFallbackQueryAsync(this.runtime, request);
-    }
-
     const syncTasks: Promise<void>[] = [];
     if (this.authoredIndexSync) syncTasks.push(this.authoredIndexSync);
     if (this.contextIndexSync) syncTasks.push(this.contextIndexSync);
     if (syncTasks.length > 0) {
       await Promise.all(syncTasks);
+      if (this.lastError) {
+        return this.createWorkerErrorResult(request, this.lastError);
+      }
       if (requestSequence !== this.requestSequence) {
         return this.createCancelledResult(request);
-      }
-      if (!this.workerEnabled || !this.workerClient) {
-        return this.runtime.runSearch(request);
       }
     }
 
@@ -167,12 +139,7 @@ export class ArchiveSearchManager {
         debugExplain: request.debugExplain,
         expectedIndexVersion: this.indexVersion
       });
-
-      if (response.indexVersion < this.indexVersion) {
-        return this.runtime.runSearch(request);
-      }
-
-      this.indexVersion = response.indexVersion;
+      this.indexVersion = Math.max(this.indexVersion, response.indexVersion);
       const items: ArchiveItem[] = [];
       const ids: string[] = [];
       for (const id of response.ids) {
@@ -194,6 +161,7 @@ export class ArchiveSearchManager {
         debugExplain = { relevanceSignalsById };
       }
 
+      this.lastError = null;
       return {
         ids,
         total,
@@ -208,9 +176,7 @@ export class ArchiveSearchManager {
         return this.createCancelledResult(request);
       }
       this.lastError = (error as Error).message;
-      this.workerEnabled = false;
-      this.fallbackMode = true;
-      return executeFallbackQueryAsync(this.runtime, request);
+      return this.createWorkerErrorResult(request, this.lastError);
     } finally {
       if (this.activeRequestId === requestId) {
         this.activeRequestId = null;
@@ -220,8 +186,8 @@ export class ArchiveSearchManager {
 
   getStatus(): ArchiveSearchManagerStatus {
     return {
-      mode: this.workerEnabled ? 'worker' : (this.fallbackMode ? 'fallback' : 'runtime'),
-      ready: true,
+      mode: 'worker',
+      ready: !this.authoredIndexSync && !this.contextIndexSync && !this.lastError,
       indexVersion: this.indexVersion,
       docCount: this.docCount,
       lastError: this.lastError
@@ -229,9 +195,7 @@ export class ArchiveSearchManager {
   }
 
   destroy(): void {
-    if (this.workerClient) {
-      this.workerClient.terminate();
-    }
+    this.workerClient.terminate();
   }
 
   private rebuildItemsById(): void {
@@ -265,9 +229,35 @@ export class ArchiveSearchManager {
       ...(request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {})
     };
   }
+
+  private createWorkerErrorResult(request: SearchRunRequest, message: string): SearchRunResult {
+    return {
+      ids: [],
+      total: 0,
+      items: [],
+      canonicalQuery: request.query,
+      resolvedScope: request.scopeParam ?? 'authored',
+      diagnostics: {
+        warnings: [{
+          type: 'invalid-query',
+          token: 'worker',
+          message: `Search worker error: ${message}`
+        }],
+        parseState: 'invalid',
+        degradedMode: true,
+        partialResults: false,
+        tookMs: 0,
+        stageACandidateCount: 0,
+        stageBScanned: 0,
+        totalCandidatesBeforeLimit: 0,
+        explain: ['worker-error']
+      },
+      ...(request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {})
+    };
+  }
 }
 
-export const createArchiveSearchManager = (options?: ArchiveSearchManagerOptions): ArchiveSearchManager =>
+export const createArchiveSearchManager = (options: ArchiveSearchManagerOptions): ArchiveSearchManager =>
   new ArchiveSearchManager(options);
 
 export type {

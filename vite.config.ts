@@ -20,7 +20,6 @@ const scripts: Record<string, { name: string; match: string[]; entry: string }> 
         match: [
             'https://www.lesswrong.com/*',
             'https://forum.effectivealtruism.org/*',
-            'https://www.greaterwrong.com/*',
             'https://aistudio.google.com/*',
             'https://arena.ai/*',
             'https://www.arena.ai/*'
@@ -50,8 +49,9 @@ export default defineConfig({
                 namespace: 'npm/vite-plugin-monkey',
                 match: config.match,
                 author: 'Wei Dai',
+                require: ['https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js'],
                 grant: ['GM_addStyle', 'GM_xmlhttpRequest', 'GM_setValue', 'GM_getValue', 'GM_log'],
-                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'greaterwrong.com', 'arena.ai'],
+                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'arena.ai'],
                 'run-at': 'document-start',
             },
             build: {
