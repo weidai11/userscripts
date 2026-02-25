@@ -241,13 +241,8 @@ If a hover test fails like "Element not found":
 
 ---
 
-### Content-Visibility & Hit-Testing (`elementFromPoint`)
-- **Symptom**: `isElementFullyVisible` or "Trace to Root" logic fails, incorrectly reporting elements as hidden or obscured, especially in Playwright/headless Chrome.
-- **Cause**: We use `content-visibility: auto` for performance. Browsers (especially Chromium) may skip painting these elements until they are about to enter the viewport. `document.elementFromPoint()` and other hit-testing APIs often fail to "hit" an element that hasn't been painted yet, even if it's technically in the viewport.
-- **Fix**: Use the `withForcedLayout(element, callback)` utility. 
-    1. It adds a `.pr-force-layout` class (overriding `content-visibility` to `visible !important`).
-    2. Forces a reflow via `offsetHeight`.
-    3. Awaits a **double `requestAnimationFrame`** (essential for the browser to complete a paint cycle).
-    4. Performs the measurement/hit-test in the callback.
-    5. Restores original layout after a brief delay.
+### Hit-Testing (`elementFromPoint`)
+- **Current behavior**: Post and comment containers are always laid out (no `content-visibility` gating).
+- **Impact**: Hit-testing and visibility checks should not require special "wake up layout" helpers.
+- **If a test fails**: Prefer validating sticky-header offsets, scroll position, and hover intentionality timing rather than adding forced reflow/paint workarounds.
 

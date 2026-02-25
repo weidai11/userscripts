@@ -6,7 +6,6 @@
 /* eslint-disable no-useless-assignment */
 import { Logger } from './logger';
 import { sanitizeHtml } from './sanitize';
-import { withForcedLayout } from './dom';
 import { getCommentVisibilityTarget, getStickyViewportTop } from './commentVisibility';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
@@ -271,11 +270,6 @@ export function setupHoverPreview(
       // Skip preview ONLY if fully visible
       // SPECIAL CASE: If the target is a sticky header, we still show the preview
       // because the sticky header doesn't show the full post body.
-
-      // [PR-FIX] Force layout for ALL target containers to ensure elementFromPoint works correctly
-      const containers = new Set(targets.map(t => t.closest('.pr-post-group') || t) as HTMLElement[]);
-      const forcePromises = Array.from(containers).map(c => withForcedLayout(c, () => { /* Wake up */ }));
-      await Promise.all(forcePromises);
 
       const allFullyVisible = targets.every(t => {
         const isSticky = !!t.closest('.pr-sticky-header');

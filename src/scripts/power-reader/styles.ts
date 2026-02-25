@@ -36,14 +36,6 @@ export const STYLES = `
     box-sizing: border-box;
   }
 
-  /* Temporarily bypass content-visibility for precise DOM measurements and smooth scrolling */
-  .pr-force-layout,
-  .pr-force-layout .pr-comment,
-  .pr-force-layout .pr-post {
-      content-visibility: visible !important;
-      contain-intrinsic-size: auto !important;
-  }
-
   /* Make View Transitions instantaneous when Power Reader opts in. */
   html.pr-vt-instant::view-transition-group(root),
   html.pr-vt-instant::view-transition-old(root),
@@ -293,8 +285,6 @@ export const STYLES = `
     border: 1px solid #ddd;
     border-radius: 4px;
     background: #fafafa;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 150px;
   }
 
   .pr-post-header {
@@ -452,8 +442,6 @@ export const STYLES = `
     border-radius: 4px;
     background: #fff;
     position: relative; /* Context for absolute positioning */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 150px;
   }
 
   .pr-comment.pr-missing-parent {

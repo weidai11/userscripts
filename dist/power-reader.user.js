@@ -813,14 +813,6 @@ reset: () => {
     box-sizing: border-box;
   }
 
-  /* Temporarily bypass content-visibility for precise DOM measurements and smooth scrolling */
-  .pr-force-layout,
-  .pr-force-layout .pr-comment,
-  .pr-force-layout .pr-post {
-      content-visibility: visible !important;
-      contain-intrinsic-size: auto !important;
-  }
-
   /* Make View Transitions instantaneous when Power Reader opts in. */
   html.pr-vt-instant::view-transition-group(root),
   html.pr-vt-instant::view-transition-old(root),
@@ -1070,8 +1062,6 @@ reset: () => {
     border: 1px solid #ddd;
     border-radius: 4px;
     background: #fafafa;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 150px;
   }
 
   .pr-post-header {
@@ -1229,8 +1219,6 @@ reset: () => {
     border-radius: 4px;
     background: #fff;
     position: relative; /* Context for absolute positioning */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 150px;
   }
 
   .pr-comment.pr-missing-parent {
@@ -3585,132 +3573,6 @@ hoverDelay: 300,
       rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
     }
   }
-  const DEFAULT_HEADER_HEIGHT = 60;
-  const smartScrollTo = (el, isPost2) => {
-    const postContainer = el.closest(".pr-post");
-    if (!postContainer) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    const postHeader = postContainer.querySelector(".pr-post-header");
-    const stickyHeader2 = document.getElementById("pr-sticky-header");
-    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
-    const postHeaderHeight = postHeader?.offsetHeight || 0;
-    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : stickyHeight || DEFAULT_HEADER_HEIGHT;
-    if (isPost2) {
-      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.scrollY : postContainer.getBoundingClientRect().top + window.scrollY;
-      window.scrollTo({
-        top: headerTop,
-        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    } else {
-      const elementTop = el.getBoundingClientRect().top + window.scrollY;
-      window.scrollTo({
-        top: elementTop - headerHeight - 10,
-behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    }
-  };
-  const refreshPostActionButtons = (target) => {
-    let posts;
-    if (target instanceof HTMLElement) {
-      posts = [target];
-    } else {
-      const selector = target ? `.pr-post[data-id="${target}"]` : ".pr-post";
-      posts = document.querySelectorAll(selector);
-    }
-    const updateNextPostButton = (header, postEl) => {
-      if (!header) return;
-      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
-      if (!nBtn) return;
-      let nextPost = postEl ? postEl.nextElementSibling : null;
-      while (nextPost && !nextPost.classList.contains("pr-post")) {
-        nextPost = nextPost.nextElementSibling;
-      }
-      if (!nextPost) {
-        nBtn.classList.add("disabled");
-        nBtn.title = "No more posts in current feed";
-      } else {
-        nBtn.classList.remove("disabled");
-        nBtn.title = "Scroll to next post";
-      }
-    };
-    posts.forEach((postNode) => {
-      const post = postNode;
-      const container = post.querySelector(".pr-post-body-container");
-      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
-      if (container && eBtn) {
-        const isFullPost = container.classList.contains("pr-post-body");
-        if (container.classList.contains("truncated")) {
-          if (container.classList.contains("collapsed") || container.style.display === "none") {
-            eBtn.classList.remove("disabled");
-            eBtn.title = "Expand post body";
-          } else {
-            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
-            if (!isActuallyTruncated) {
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post fits within viewport without truncation";
-            } else {
-              eBtn.classList.remove("disabled");
-              eBtn.title = "Expand post body";
-            }
-          }
-        } else if (isFullPost) {
-          if (container.classList.contains("collapsed")) {
-            eBtn.title = "Expand post body";
-          } else {
-            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
-            if (isSmallContent) {
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post body is small and doesn't need toggle";
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-            } else {
-              eBtn.title = "Collapse post body";
-            }
-          }
-          if (!eBtn.title.includes("small")) {
-            eBtn.classList.remove("disabled");
-          }
-        }
-      }
-      const header = post.querySelector(".pr-post-header");
-      updateNextPostButton(header, post);
-    });
-    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
-    if (stickyHeader2) {
-      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
-      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
-      updateNextPostButton(stickyHeader2, stickyPostEl);
-    }
-  };
-  const forceLayoutCounts = new WeakMap();
-  async function withForcedLayout(element, callback) {
-    const container = element.closest(".pr-post-group") || element;
-    const count = (forceLayoutCounts.get(container) || 0) + 1;
-    forceLayoutCounts.set(container, count);
-    if (count === 1) container.classList.add("pr-force-layout");
-    void container.offsetHeight;
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    try {
-      if (!container.isConnected) {
-        return await callback();
-      }
-      return await callback();
-    } finally {
-      setTimeout(() => {
-        const prevCount = forceLayoutCounts.get(container) || 0;
-        if (prevCount <= 1) {
-          forceLayoutCounts.delete(container);
-          container.classList.remove("pr-force-layout");
-        } else {
-          forceLayoutCounts.set(container, prevCount - 1);
-        }
-      }, 500);
-    }
-  }
   const getStickyViewportTop = () => {
     const stickyHeader2 = document.getElementById("pr-sticky-header");
     if (!stickyHeader2) return 0;
@@ -3866,10 +3728,6 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         return;
       }
       if (targets && targets.length > 0) {
-        const containers = new Set(targets.map((t) => t.closest(".pr-post-group") || t));
-        const forcePromises = Array.from(containers).map((c) => withForcedLayout(c, () => {
-        }));
-        await Promise.all(forcePromises);
         const allFullyVisible = targets.every((t) => {
           const isSticky = !!t.closest(".pr-sticky-header");
           if (isSticky) return false;
@@ -6141,6 +5999,107 @@ refresh() {
     }
     readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);
     readTracker.init();
+  };
+  const DEFAULT_HEADER_HEIGHT = 60;
+  const smartScrollTo = (el, isPost2) => {
+    const postContainer = el.closest(".pr-post");
+    if (!postContainer) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const postHeader = postContainer.querySelector(".pr-post-header");
+    const stickyHeader2 = document.getElementById("pr-sticky-header");
+    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
+    const postHeaderHeight = postHeader?.offsetHeight || 0;
+    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : stickyHeight || DEFAULT_HEADER_HEIGHT;
+    if (isPost2) {
+      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.scrollY : postContainer.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({
+        top: headerTop,
+        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    } else {
+      const elementTop = el.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({
+        top: elementTop - headerHeight - 10,
+behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    }
+  };
+  const refreshPostActionButtons = (target) => {
+    let posts;
+    if (target instanceof HTMLElement) {
+      posts = [target];
+    } else {
+      const selector = target ? `.pr-post[data-id="${target}"]` : ".pr-post";
+      posts = document.querySelectorAll(selector);
+    }
+    const updateNextPostButton = (header, postEl) => {
+      if (!header) return;
+      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
+      if (!nBtn) return;
+      let nextPost = postEl ? postEl.nextElementSibling : null;
+      while (nextPost && !nextPost.classList.contains("pr-post")) {
+        nextPost = nextPost.nextElementSibling;
+      }
+      if (!nextPost) {
+        nBtn.classList.add("disabled");
+        nBtn.title = "No more posts in current feed";
+      } else {
+        nBtn.classList.remove("disabled");
+        nBtn.title = "Scroll to next post";
+      }
+    };
+    posts.forEach((postNode) => {
+      const post = postNode;
+      const container = post.querySelector(".pr-post-body-container");
+      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
+      if (container && eBtn) {
+        const isFullPost = container.classList.contains("pr-post-body");
+        if (container.classList.contains("truncated")) {
+          if (container.classList.contains("collapsed") || container.style.display === "none") {
+            eBtn.classList.remove("disabled");
+            eBtn.title = "Expand post body";
+          } else {
+            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
+            if (!isActuallyTruncated) {
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post fits within viewport without truncation";
+            } else {
+              eBtn.classList.remove("disabled");
+              eBtn.title = "Expand post body";
+            }
+          }
+        } else if (isFullPost) {
+          if (container.classList.contains("collapsed")) {
+            eBtn.title = "Expand post body";
+          } else {
+            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
+            if (isSmallContent) {
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post body is small and doesn't need toggle";
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+            } else {
+              eBtn.title = "Collapse post body";
+            }
+          }
+          if (!eBtn.title.includes("small")) {
+            eBtn.classList.remove("disabled");
+          }
+        }
+      }
+      const header = post.querySelector(".pr-post-header");
+      updateNextPostButton(header, post);
+    });
+    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
+    if (stickyHeader2) {
+      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
+      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
+      updateNextPostButton(stickyHeader2, stickyPostEl);
+    }
   };
   const formatStatusDate = (iso) => {
     const d = new Date(iso);
@@ -8851,11 +8810,9 @@ currentCommentId = null;
         }
         if (!rootEl) return;
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        await withForcedLayout(rootEl, async () => {
-          if (!rootEl.isConnected) return;
-          scrollToCommentIfNeeded(rootEl, "Trace to Root");
-          highlightParentTemporarily(rootEl);
-        });
+        if (!rootEl.isConnected) return;
+        scrollToCommentIfNeeded(rootEl, "Trace to Root");
+        highlightParentTemporarily(rootEl);
         return;
       }
     }
@@ -12906,12 +12863,6 @@ sortCanonicalItems() {
         }
         .pr-archive-cancel-btn:hover {
             background: var(--pr-bg-secondary);
-        }
-        
-        /* Performance optimization for large lists */
-        .pr-archive-item {
-            content-visibility: auto;
-            contain-intrinsic-size: 0 300px;
         }
         
         .pr-context-placeholder {

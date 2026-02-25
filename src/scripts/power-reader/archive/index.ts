@@ -555,12 +555,6 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             background: var(--pr-bg-secondary);
         }
         
-        /* Performance optimization for large lists */
-        .pr-archive-item {
-            content-visibility: auto;
-            contain-intrinsic-size: 0 300px;
-        }
-        
         .pr-context-placeholder {
             opacity: 0.7;
             border-left: 2px solid #555;

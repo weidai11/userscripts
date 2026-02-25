@@ -26,7 +26,7 @@ import type {
     GetCommentsByIdsQueryVariables,
 } from '../../../generated/graphql';
 import type { ReaderState } from '../state';
-import { smartScrollTo, withForcedLayout } from '../utils/dom';
+import { smartScrollTo } from '../utils/dom';
 import { CONFIG } from '../config';
 import { Logger } from '../utils/logger';
 import { toggleAuthorPreference } from '../utils/storage';
@@ -1224,12 +1224,9 @@ export const handleLoadParentsAndScroll = async (target: HTMLElement, state: Rea
 
             await new Promise(resolve => requestAnimationFrame(resolve));
 
-            await withForcedLayout(rootEl, async () => {
-                if (!rootEl.isConnected) return;
-
-                scrollToCommentIfNeeded(rootEl, 'Trace to Root');
-                highlightParentTemporarily(rootEl);
-            });
+            if (!rootEl.isConnected) return;
+            scrollToCommentIfNeeded(rootEl, 'Trace to Root');
+            highlightParentTemporarily(rootEl);
             return;
         }
     }

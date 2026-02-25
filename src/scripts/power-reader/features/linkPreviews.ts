@@ -20,9 +20,7 @@ import {
   isAuthorUrl,
   isWikiUrl,
   cancelHoverTimeout,
-  isElementFullyVisible,
 } from '../utils/preview';
-import { withForcedLayout } from '../utils/dom';
 
 /**
  * Setup link previews using event delegation on a container.
