@@ -469,7 +469,7 @@ export const STYLES = `
   }
 
   .pr-comment.read, .pr-comment.context {
-    border: none;
+    border-color: transparent;
     background: transparent;
   }
 

@@ -331,7 +331,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 *   Triggers the Google AI Studio integration for this post.
 *   Identical to the `g` shortkey action.
 *   **Shift Modifier**: Holding **Shift** while clicking or pressing **`G`** (Shift+g) includes all unread **descendants** of the target in the XML payload.
-*   **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)".
+*   **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)".
 
 **Button Rendering:**
 *   Buttons appear in this order (left to right): `[g]` `[m]` `[e]` `[a]` `[c]` `[n]` ... `[−]`/`[+]`
@@ -364,7 +364,7 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 - Triggers the Google AI Studio integration for this comment.
 - Identical to the `g` shortkey action.
 - **Shift Modifier**: Holding **Shift** while clicking or pressing **`G`** (Shift+g) includes all unread **descendants** of the target in the XML payload.
-- **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G to include descendants)".
+- **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)".
 
 **Button Rendering:**
 - Buttons appear in this order: `[g]` `[m]` `[r]` `[t]` ... `[^]` `[−]` `[+]`

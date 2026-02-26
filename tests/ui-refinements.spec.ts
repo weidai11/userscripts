@@ -48,7 +48,7 @@ test.describe('Power Reader UI Refinements', () => {
         await expect(help).not.toHaveAttribute('open');
     });
 
-    test('read comment border is removed', async ({ page }) => {
+    test('read comment keeps border width to avoid layout shift', async ({ page }) => {
         await initPowerReader(page, {
             comments: [{
                 _id: 'c1', postId: 'p1',
@@ -64,12 +64,16 @@ test.describe('Power Reader UI Refinements', () => {
         const comment = page.locator('.pr-comment').first();
         await expect(comment).toBeVisible();
 
+        const unreadBorderWidth = await comment.evaluate(el => window.getComputedStyle(el).borderWidth);
+        expect(unreadBorderWidth).toBe('1px');
+
         await comment.evaluate(el => el.classList.add('read'));
 
         const readComment = page.locator('.pr-comment.read');
         const borderWidth = await readComment.evaluate(el => window.getComputedStyle(el).borderWidth);
+        const borderColor = await readComment.evaluate(el => window.getComputedStyle(el).borderColor);
 
-        // border: none results in 0px border width
-        expect(borderWidth).toBe('0px');
+        expect(borderWidth).toBe('1px');
+        expect(borderColor).toBe('rgba(0, 0, 0, 0)');
     });
 });
