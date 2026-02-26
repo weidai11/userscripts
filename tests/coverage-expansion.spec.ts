@@ -40,8 +40,11 @@ test.describe('Power Reader Expanded Coverage', () => {
         // [PR-SETUP-03] Click Start without date sets __LOAD_RECENT__
         await page.click('#startReading');
 
-        // Wait for storage call
-        await page.waitForFunction(() => (window as any).__GM_CALLS?.['power-reader-read-from'] !== undefined);
+        // Wait for [PR-LOAD-01.1] snapshot write (ISO datetime), not the initial __LOAD_RECENT__ seed.
+        await page.waitForFunction(() => {
+            const value = (window as any).__GM_CALLS?.['power-reader-read-from'];
+            return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value);
+        });
         const lastValue = await page.evaluate(() => (window as any).__GM_CALLS?.['power-reader-read-from']);
         // It was set to __LOAD_RECENT__ initially, but then snapshotted to a date by [PR-LOAD-01.1]
         expect(lastValue).toMatch(/^\d{4}-\d{2}-\d{2}T/);

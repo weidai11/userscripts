@@ -50,8 +50,17 @@ export default defineConfig({
                 match: config.match,
                 author: 'Wei Dai',
                 require: ['https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js'],
-                grant: ['GM_addStyle', 'GM_xmlhttpRequest', 'GM_setValue', 'GM_getValue', 'GM_log'],
-                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'arena.ai'],
+                grant: [
+                    'GM_addStyle',
+                    'GM_xmlhttpRequest',
+                    'GM_setValue',
+                    'GM_getValue',
+                    'GM_log',
+                    'GM_deleteValue',
+                    'GM_addValueChangeListener',
+                    'GM_openInTab',
+                ],
+                connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'arena.ai', 'firestore.googleapis.com'],
                 'run-at': 'document-start',
             },
             build: {
@@ -66,5 +75,8 @@ export default defineConfig({
     },
     define: {
         '__APP_VERSION__': JSON.stringify(packageJson.version),
+        '__PR_FIRESTORE_PROJECT_ID__': JSON.stringify(process.env.PR_FIRESTORE_PROJECT_ID || ''),
+        '__PR_FIRESTORE_API_KEY__': JSON.stringify(process.env.PR_FIRESTORE_API_KEY || ''),
+        '__PR_FIRESTORE_HOST__': JSON.stringify(process.env.PR_FIRESTORE_HOST || ''),
     },
 });

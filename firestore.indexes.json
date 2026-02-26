@@ -1,0 +1,15 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "nodes",
+      "fieldPath": "fields.read.value",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "nodes",
+      "fieldPath": "fields.authorPrefs.value",
+      "indexes": []
+    }
+  ]
+}

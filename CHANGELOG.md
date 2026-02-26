@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.696] - 2026-03-01
+
+### Added
+- **Persistence sync backend + emulator coverage**: Added Firestore sync backend/rules/index artifacts and emulator integration checks for CAS, schema guards, and concurrent read-union behavior.
+- **Persistence contract coverage**: Expanded `tests/persistence-sync.spec.ts` to cover bootstrap, CAS retries, reset durability, counter bounds, and operationName forwarding.
+
+### Changed
+- **Author prefs merge safety ([PR-PERSIST-23])**: Local `authorPrefs` overlay now applies only when `dirty.authorPrefs` is set, preventing stale non-dirty local writes from overriding newer remote state.
+- **Read overflow status signal ([PR-PERSIST-19])**: Status line now surfaces a temporary explicit notice when read-cap overflow triggers clear+epoch propagation.
+- **Spec/audit alignment**: Normalized `SPEC.md` requirement tagging and added `[PR-PERSIST-84]..[PR-PERSIST-93]` entries so coverage audit IDs match implemented/tested contracts.
+
+### Fixed
+- **GraphQL operation names**: Aligned operation names with query documents to prevent `Unknown operation named ...` failures.
+- **Preview hover robustness**: Reduced false suppression around rerender/position shifts while preserving intent checks.
+- **Deterministic compaction sorting**: Author-preference compaction now handles malformed timestamps deterministically (stable fallback + key tie-break) to avoid noisy CAS churn.
+
+## [1.2.695] - 2026-03-01
+
+### Fixed
+- **GraphQL operationName alignment**: Fixed sync and archive GraphQL requests that were sending an `operationName` that didn’t match the query/mutation document, which caused `Unknown operation named ...` errors.
+
 ## [1.2.694] - 2026-02-21
 
 ### Added

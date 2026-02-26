@@ -5,7 +5,15 @@
 import type { Comment, Post } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
-import { getReadState, clearAllStorage, exportState, getAIStudioPrefix, setAIStudioPrefix, getLoadFrom, isRead, setLoadFrom } from '../utils/storage';
+import {
+  getReadState,
+  exportState,
+  getAIStudioPrefix,
+  setAIStudioPrefix,
+  getLoadFrom,
+  isRead,
+  setLoadFromAndClearRead,
+} from '../utils/storage';
 import { AI_STUDIO_PROMPT_PREFIX } from '../utils/ai-studio-prompt';
 import { initResizeHandles } from '../utils/resize';
 import { initPreviewSystem, manualPreview } from '../utils/preview';
@@ -23,6 +31,12 @@ import { setupScrollTracking } from '../features/scrollTracking';
 import { refreshPostActionButtons } from '../utils/dom';
 import { getCommentContextType } from '../types/uiCommentFlags';
 import { getForumMeta } from '../utils/forum';
+import {
+  getPersistedSyncToggle,
+  getSyncDebugSnapshot,
+  getSyncStatusLineText,
+  setPersistedSyncToggle,
+} from '../persistence/persistenceSync';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
@@ -233,7 +247,7 @@ export const buildPostGroups = (
 /**
  * Render the help section HTML
  */
-const renderHelpSection = (showHelp: boolean): string => {
+const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
   return `
     <details class="pr-help" ${showHelp ? 'open' : ''} id="pr-help-section">
       <summary class="pr-help-header">
@@ -325,6 +339,13 @@ const renderHelpSection = (showHelp: boolean): string => {
         <p>
           <button id="pr-export-state-btn" class="pr-debug-btn">Export State (Clipboard)</button>
           <button id="pr-reset-state-btn" class="pr-debug-btn">Reset State</button>
+          <button id="pr-copy-sync-debug-btn" class="pr-debug-btn">Copy Sync Debug Summary</button>
+        </p>
+        <p>
+          <label style="display: inline-flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="pr-sync-enabled-toggle" ${syncEnabled ? 'checked' : ''} />
+            Sync enabled
+          </label>
         </p>
       </div>
     </details>
@@ -353,6 +374,8 @@ export const renderUI = (state: ReaderState): void => {
   const startDate = loadFrom && loadFrom !== '__LOAD_RECENT__' ? formatStatusDate(loadFrom) : '?';
   const endDate = state.initialBatchNewestDate ? formatStatusDate(state.initialBatchNewestDate) : 'now';
   const userLabel = state.currentUsername ? `👤 ${state.currentUsername}` : '👤 not logged in';
+  const syncLabel = getSyncStatusLineText();
+  const syncEnabled = getPersistedSyncToggle();
 
   // Build HTML
   const { forumLabel, forumHomeUrl } = getForumMeta();
@@ -365,9 +388,10 @@ export const renderUI = (state: ReaderState): void => {
         · 💬 ${stats.totalComments} comments (${stats.unreadComments} new · ${stats.contextComments} context · ${stats.hiddenComments} hidden)
         · 📄 ${stats.visiblePosts} posts${stats.hiddenPosts > 0 ? ` (${stats.hiddenPosts} filtered)` : ''}
         · ${userLabel}
+        · ${syncLabel}
       </div>
     </div>
-    ${renderHelpSection(showHelp)}
+    ${renderHelpSection(showHelp, syncEnabled)}
   `;
 
   // Warning if more comments available
@@ -490,10 +514,44 @@ const setupDebugButtons = (): void => {
     resetBtn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (confirm('Are you sure you want to reset all state (read status, author preferences)? This will reload the page.')) {
-        clearAllStorage();
-        window.location.href = '/reader';
+      if (confirm('Are you sure you want to reset all storage (reader state, sync metadata, and local settings)? This will reload the page.')) {
+        window.location.href = '/reader/reset';
       }
+    });
+  }
+
+  const copySyncBtn = document.getElementById('pr-copy-sync-debug-btn');
+  if (copySyncBtn) {
+    copySyncBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const payload = {
+        generatedAt: new Date().toISOString(),
+        location: window.location.href,
+        statusLine: getSyncStatusLineText(),
+        syncEnabled: getPersistedSyncToggle(),
+        debug: getSyncDebugSnapshot(),
+      };
+      const text = JSON.stringify(payload, null, 2);
+      if (navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(text);
+          alert('Sync debug summary copied to clipboard.');
+          return;
+        } catch (error) {
+          Logger.warn('Failed to copy sync debug summary via clipboard API', error);
+        }
+      }
+      Logger.info('Sync debug summary:', text);
+      alert('Clipboard unavailable. Sync debug summary logged to console.');
+    });
+  }
+
+  const syncToggle = document.getElementById('pr-sync-enabled-toggle') as HTMLInputElement | null;
+  if (syncToggle) {
+    syncToggle.addEventListener('change', () => {
+      setPersistedSyncToggle(syncToggle.checked);
+      window.location.reload();
     });
   }
 
@@ -509,7 +567,7 @@ const setupDebugButtons = (): void => {
   if (changeBtn) {
     changeBtn.addEventListener('click', (e) => {
       e.preventDefault();
-      setLoadFrom('');
+      setLoadFromAndClearRead('');
       window.location.reload();
     });
   }

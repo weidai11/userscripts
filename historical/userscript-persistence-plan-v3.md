@@ -81,6 +81,11 @@ Rules:
 - Secret type guard: require `typeof secret === 'string'` and minimum expected length; otherwise treat as invalid and skip sync for current session.
 - If bootstrap fails after retries, skip sync for current session and show non-blocking status.
 - Accepted risk note: bootstrap uses read-merge-write on `abTestOverrides` and can still overwrite unrelated concurrent writes from other clients; accepted as low-impact because bootstrap is rare.
+- Accepted security tradeoff note:
+  - `abTestOverrides` is a convenience capability-token store, not a hardened secret manager.
+  - if forum session or page execution context is compromised (for example XSS, malicious extension, privileged forum tooling), `pr_sync_secret_v1` can be read and sync-node access can be derived.
+  - v3 accepts this for low-sensitivity sync data (`read`, `loadFrom`, `authorPrefs`) in exchange for zero-friction cross-device bootstrap.
+  - server-side authorization on `updateUser(selector: { _id }, ...)` remains a trusted dependency; userscript code cannot harden a backend authz regression.
 
 ### 2.2 Deterministic Node
 Canonical input:
@@ -481,7 +486,9 @@ No-op policy:
 - `authorPrefs`:
   - compute `effectiveAuthorPrefsClearEpoch = max(local.authorPrefs.clearEpoch, remote.authorPrefs.clearEpoch)`.
   - discard a side's entire `authorPrefs.value` when its `authorPrefs.clearEpoch` is below the effective clear epoch.
-  - merge remaining keys by per-key `version` (higher wins); if equal, tie-break by `updatedBy` lexicographically (higher wins), then `updatedAt` (later wins); if all tie-break fields are equal or missing, prefer remote.
+  - start from non-stale remote entries, then apply local preferences as authoritative for changed keys.
+  - when local value differs from retained remote entry, increment that key's envelope `version` and stamp `updatedAt`/`updatedBy` with local writer diagnostics.
+  - local sync meta does not persist per-key `authorPrefs` versions; per-key envelope metadata is authoritative for downstream merges.
   - normal clear action must write explicit `v: 0` (not key deletion).
 - `authorPrefs` compaction note: when local compaction removes old `v:0` tombstones under cap pressure, very stale non-zero prefs can theoretically be reintroduced by another device. This is an accepted cap-pressure tradeoff in v3.
 - `loadFrom`:
@@ -490,14 +497,13 @@ No-op policy:
   - during merge, normalize `loadFrom.value`:
     - treat explicit `null` as missing/absent
     - validate non-null non-sentinel strings as ISO datetime; invalid strings are treated as missing.
-  - resolve by `loadFrom.version` first (higher wins), then `updatedBy` lexicographically (higher wins), then `updatedAt` (later wins); if all tie-break fields are equal or missing, prefer remote.
-  - if both sides have no usable version ordering, resolve by simplified fallback:
+  - value resolution uses simplified fallback only:
     - prefer `__LOAD_RECENT__` if either side is sentinel
     - else if both are valid ISO values, choose max ISO
     - else choose the non-empty value when only one exists
     - else prefer remote (final deterministic catch-all)
+  - `loadFrom.version` remains a monotonic change counter (lifecycle semantics), not the primary value-resolution authority in v3.
 - `loadFrom=''` is not synchronized. In envelope form, this is represented by `fields.loadFrom.value` being absent.
-- in normal operation, version-first resolution dominates and this fallback branch is rare.
 
 ### 5.2 Merge Logging for Surprising Overrides
 Log when sentinel/ISO overrides happen in either direction:
@@ -527,8 +533,8 @@ On validation failure:
 
 ### 5.5 Authoritative Ordering Invariants
 - `read` authority: `clearEpoch` dominates; timestamps are non-authoritative.
-- `loadFrom` authority: `version` then `clearEpoch` barriers; timestamps are tie-break diagnostics only.
-- `authorPrefs` authority: per-key `version` plus field-level `clearEpoch`; timestamps are tie-break diagnostics only.
+- `loadFrom` authority: `clearEpoch` barriers plus simplified sentinel/ISO fallback; timestamps are diagnostics only.
+- `authorPrefs` authority: field-level `clearEpoch` plus local-changed-key overrides written with per-key envelope metadata.
 - `lastPushedAt` / `lastPushedAtMs` are diagnostics only and never drive merge correctness.
 
 ## 6. Sync Engine Behavior
@@ -805,6 +811,7 @@ Accepted risk note:
 - External KV access is capability-URL based (derived from user id + random sync secret), not strong authenticated ACL per user.
 - Public users who only know `_id` cannot derive sync node without the secret.
 - Moderators/admins with privileged access to user `abTestOverrides` can derive user sync nodes.
+- If forum/page execution is compromised, attacker code running as the user can query `abTestOverrides`, derive node access, and read/write sync state.
 - For v3 this remains accepted as low-sensitivity data risk (read marks and preferences).
 - For v3 this also implies operation-cost exposure (Firestore bills per operation), so quota/billing alerts and abuse monitoring are required.
 - Optional envelope encryption using sync secret is deferred (not in v3) because it adds key/version migration complexity and does not mitigate privileged-forum-role secret access.
@@ -853,12 +860,12 @@ service cloud.firestore {
         && d.schemaVersion == 1
         && d.site == site
         && (d.lastPushedBy is string) && d.lastPushedBy.size() <= 128
-        && (d.lastPushedAt is string) && d.lastPushedAt.size() <= 40
-        && (!('lastPushedAtMs' in d) || (d.lastPushedAtMs is int && d.lastPushedAtMs >= 0))
+        && (d.lastPushedAt is timestamp)
+        && (!('lastPushedAtMs' in d) || (d.lastPushedAtMs is int && d.lastPushedAtMs >= 0 && d.lastPushedAtMs <= 253402300799999))
         && (d.expiresAt is timestamp)
         && d.expiresAt > request.time
         // 180d target + 1d skew headroom for first-write client-time fallback.
-        && d.expiresAt < request.time + duration.value(15638400, 0)
+        && d.expiresAt < request.time + duration.value(15638400, 's')
         && validFields(d.fields);
     }
 
@@ -872,10 +879,11 @@ service cloud.firestore {
 
     function validRead(r) {
       return (r is map)
+        && r.keys().hasAll(['updatedAt','updatedBy','clearEpoch','value'])
         && r.keys().hasOnly(['updatedAt','updatedBy','clearEpoch','value'])
-        && (r.updatedAt is string) && r.updatedAt.size() <= 40
+        && (r.updatedAt is timestamp)
         && (r.updatedBy is string) && r.updatedBy.size() <= 128
-        && (r.clearEpoch is int) && r.clearEpoch >= 0 && r.clearEpoch <= 1000000
+        && (r.clearEpoch is int) && r.clearEpoch >= 0 && r.clearEpoch <= 1000000000
         && (r.value is map)
         && r.value.size() <= 10000;
       // Dynamic entry-value validation (`== 1`) is enforced client-side in v3.
@@ -883,20 +891,23 @@ service cloud.firestore {
 
     function validLoadFrom(lf) {
       return (lf is map)
+        && lf.keys().hasAll(['updatedAt','updatedBy','version','clearEpoch'])
         && lf.keys().hasOnly(['updatedAt','updatedBy','version','clearEpoch','value'])
-        && (lf.updatedAt is string) && lf.updatedAt.size() <= 40
+        && (lf.updatedAt is timestamp)
         && (lf.updatedBy is string) && lf.updatedBy.size() <= 128
-        && (lf.version is int) && lf.version >= 0 && lf.version <= 1000000
-        && (lf.clearEpoch is int) && lf.clearEpoch >= 0 && lf.clearEpoch <= 1000000
-        && (!('value' in lf) || (lf.value is string && lf.value.size() <= 40));
+        && (lf.version is int) && lf.version >= 0 && lf.version <= 1000000000
+        && (lf.clearEpoch is int) && lf.clearEpoch >= 0 && lf.clearEpoch <= 1000000000
+        && (!('value' in lf) || (lf.value is string && lf.value.size() <= 40
+             && (lf.value == '__LOAD_RECENT__' || lf.value.matches('^\\d{4}-\\d{2}-\\d{2}T.*$'))));
     }
 
     function validAuthorPrefs(ap) {
       return (ap is map)
+        && ap.keys().hasAll(['updatedAt','updatedBy','clearEpoch','value'])
         && ap.keys().hasOnly(['updatedAt','updatedBy','clearEpoch','value'])
-        && (ap.updatedAt is string) && ap.updatedAt.size() <= 40
+        && (ap.updatedAt is timestamp)
         && (ap.updatedBy is string) && ap.updatedBy.size() <= 128
-        && (ap.clearEpoch is int) && ap.clearEpoch >= 0 && ap.clearEpoch <= 1000000
+        && (ap.clearEpoch is int) && ap.clearEpoch >= 0 && ap.clearEpoch <= 1000000000
         && (ap.value is map)
         && ap.value.size() <= 1000;
       // Dynamic-key entry shape is validated client-side in v3.
@@ -1118,7 +1129,7 @@ Initial tags:
 - `PR-PERSIST-20`: authorPrefs overflow compaction (oldest `v:0` first, then oldest overall if required)
 - `PR-PERSIST-21`: pull-on-focus + fallback periodic pull with cross-tab coalescing, with flush deferral while pull is in-flight
 - `PR-PERSIST-22`: clear-epoch barriers for `read`, `loadFrom`, `authorPrefs`
-- `PR-PERSIST-23`: version-first merge for `loadFrom` and per-key `authorPrefs`
+- `PR-PERSIST-23`: simplified `loadFrom` fallback merge plus local-authoritative `authorPrefs` changed-key merge
 - `PR-PERSIST-24`: identity permission fail-closed (no retry storms)
 - `PR-PERSIST-25`: reset uses CAS loop and monotonic clear-epoch advancement under conflict
 - `PR-PERSIST-26`: conflict coalescing/backoff for repeated `updateTime` precondition failures
@@ -1196,9 +1207,9 @@ Layering requirement:
 8. Unit: read merge with `clearEpoch` prevents stale-device reintroduction after reset/overflow clear.
 9. Unit: read merge discards side with lower `clearEpoch` even when that side has newer `read.updatedAt`.
 10. Unit: normal author preference clear path uses explicit `v: 0` (compaction may later remove old tombstones under cap pressure).
-11. Unit: merge logic (`loadFrom`, `authorPrefs`) including version-priority for `loadFrom`, omission handling for `loadFrom=''`, and per-key `authorPrefs` version LWW.
-12. Unit: loadFrom version backfill for legacy local state preserves version-first resolution.
-13. Unit: simplified no-version loadFrom fallback prefers `__LOAD_RECENT__`, else max ISO, else non-empty.
+11. Unit: merge logic (`loadFrom`, `authorPrefs`) including simplified `loadFrom` fallback resolution, omission handling for `loadFrom=''`, and local-changed-key `authorPrefs` overwrite semantics.
+12. Unit: loadFrom version backfill for legacy local state preserves monotonic change-counter semantics.
+13. Unit: simplified loadFrom fallback prefers `__LOAD_RECENT__`, else max ISO, else non-empty.
 14. Unit: loadFrom missing maps to `''`; invalid ISO string is treated as missing.
 15. Unit: `updatedBy` uses writer id (`deviceId:tabId`) for deterministic same-device tie-breaks.
 16. Unit: future-skew guard clamps remote timestamps >24h ahead to `now + 5m` for diagnostics/UI.
@@ -1347,7 +1358,7 @@ Layering requirement:
 - Confirm missing/blocked userscript connect permission path surfaces explicit status (`Sync blocked by userscript permissions/connectivity`).
 - Confirm Firestore rules compile/deploy successfully and `.size()` caps evaluate as intended.
 - Confirm Firestore rules require bounded `expiresAt` (`request.time < expiresAt < request.time + horizon`) on writes.
-- Confirm rules duration bound syntax uses numeric seconds/nanos form (`duration.value(15638400, 0)`), not unit-string form.
+- Confirm rules duration bound syntax uses unit-string form (`duration.value(15638400, 's')`).
 - Confirm Firestore rules and client validation reject out-of-range `clearEpoch`/`version` values above configured max bounds.
 - Confirm Firestore index overrides are deployed for `fields.read.value` and `fields.authorPrefs.value`.
 - Confirm `currentDocument.updateTime` precondition semantics for the writer path.

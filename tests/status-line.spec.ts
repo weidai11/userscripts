@@ -3,7 +3,7 @@ import { initPowerReader } from './helpers/setup';
 
 test.describe('Status Line Display', () => {
 
-    test('[PR-STATUS-01] Status line shows date range, comment breakdown, post count, and user', async ({ page }) => {
+    test('[PR-STATUS-01][PR-STATUS-06] Status line shows date range, comment breakdown, post count, user, and sync mode', async ({ page }) => {
         const now = new Date();
         const comments = [
             {
@@ -52,6 +52,7 @@ test.describe('Status Line Display', () => {
 
         // Check user display
         await expect(status).toContainText('TestUser');
+        await expect(status).toContainText('Sync:');
 
         // Check unread count exists
         const unreadCount = page.locator('#pr-unread-count');

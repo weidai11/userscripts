@@ -47,6 +47,12 @@ export interface InitialLoadResult {
   currentUserPaletteStyle: 'listView' | 'gridView' | null;
 }
 
+interface CurrentUserBootstrapSnapshot {
+  _id?: string | null;
+  username?: string | null;
+  reactPaletteStyle?: 'listView' | 'gridView' | null;
+}
+
 const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> => {
   const cutoffMs = new Date(afterDate).getTime();
   if (!Number.isFinite(cutoffMs)) {
@@ -100,7 +106,9 @@ const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> 
  * Phase 1: Initial fast fetch - User + Comments
  * Returns sparse post data extracted from comments
  */
-export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCommentDate?: string }> => {
+export const loadInitial = async (
+  currentUserOverride?: CurrentUserBootstrapSnapshot | null
+): Promise<InitialLoadResult & { lastInitialCommentDate?: string }> => {
   const injection = (window as any).__PR_TEST_STATE_INJECTION__;
   if (injection) {
     Logger.info('Using injected test state');
@@ -119,7 +127,9 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
   Logger.info(`Initial fetch: after=${afterDate}`);
   const start = performance.now();
 
-  const userPromise = queryGraphQL<GetCurrentUserQuery, GetCurrentUserQueryVariables>(GET_CURRENT_USER);
+  const userPromise = currentUserOverride !== undefined
+    ? Promise.resolve({ currentUser: currentUserOverride } as GetCurrentUserQuery)
+    : queryGraphQL<GetCurrentUserQuery, GetCurrentUserQueryVariables>(GET_CURRENT_USER);
   const commentsPromise = (isEAForumHost() && !!afterDate)
     ? fetchRecentCommentsForEAF(afterDate)
     : queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(GET_ALL_RECENT_COMMENTS_LITE, {
@@ -140,10 +150,11 @@ export const loadInitial = async (): Promise<InitialLoadResult & { lastInitialCo
   let currentUserId: string | null = null;
   let currentUserPaletteStyle: 'listView' | 'gridView' | null = null;
 
-  if (userRes?.currentUser) {
-    currentUsername = userRes.currentUser.username || '';
-    currentUserId = userRes.currentUser._id;
-    currentUserPaletteStyle = userRes.currentUser.reactPaletteStyle || null;
+  const effectiveCurrentUser = currentUserOverride !== undefined ? currentUserOverride : userRes?.currentUser;
+  if (effectiveCurrentUser) {
+    currentUsername = effectiveCurrentUser.username || '';
+    currentUserId = effectiveCurrentUser._id || null;
+    currentUserPaletteStyle = effectiveCurrentUser.reactPaletteStyle || null;
   }
 
   // Extract sparse posts from comments (just headers)

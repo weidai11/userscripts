@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.694
+// @version    1.2.695
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -12,6 +12,7 @@
 // @connect    lesswrong.com
 // @connect    forum.effectivealtruism.org
 // @connect    arena.ai
+// @connect    firestore.googleapis.com
 // @grant      GM_addStyle
 // @grant      GM_addValueChangeListener
 // @grant      GM_deleteValue
@@ -2238,7 +2239,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.694"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.695"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2360,6 +2361,25 @@ reset: () => {
     });
   }
   async function queryGraphQL(query, variables = {}, options = {}) {
+    const response = await queryGraphQLResponse(query, variables, options);
+    if (response.errors.length > 0) {
+      const label = options.operationName ? ` (${options.operationName})` : "";
+      if (options.allowPartialData && response.data) {
+        const patterns = options.toleratedErrorPatterns || [];
+        const untolerated = response.errors.filter((err) => !isToleratedGraphQLError(err, patterns));
+        if (untolerated.length === 0) {
+          console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, response.errors);
+          return response.data;
+        }
+        console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
+        throw new Error(untolerated[0]?.message || "GraphQL error");
+      }
+      console.error(LOG_PREFIX, `GraphQL errors${label}:`, response.errors);
+      throw new Error(response.errors[0]?.message || "GraphQL error");
+    }
+    return response.data;
+  }
+  async function queryGraphQLResponse(query, variables = {}, options = {}) {
     const url = getGraphQLEndpoint();
     let effectiveQuery = query;
     let effectiveVariables = variables;
@@ -2368,7 +2388,14 @@ reset: () => {
       effectiveQuery = adapted.query;
       effectiveVariables = adapted.variables;
     }
-    const data = JSON.stringify({ query: effectiveQuery, variables: effectiveVariables });
+    const body = {
+      query: effectiveQuery,
+      variables: effectiveVariables
+    };
+    if (options.operationName) {
+      body.operationName = options.operationName;
+    }
+    const data = JSON.stringify(body);
     const maxAttempts = 3;
     const delays = [1e3, 2e3];
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -2389,23 +2416,11 @@ reset: () => {
           console.error(LOG_PREFIX, "GraphQL response parse failed:", response.responseText);
           throw error;
         }
-        if (res.errors) {
-          const errors = Array.isArray(res.errors) ? res.errors : [res.errors];
-          const label = options.operationName ? ` (${options.operationName})` : "";
-          if (options.allowPartialData && res.data) {
-            const patterns = options.toleratedErrorPatterns || [];
-            const untolerated = errors.filter((err) => !isToleratedGraphQLError(err, patterns));
-            if (untolerated.length === 0) {
-              console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, errors);
-              return res.data;
-            }
-            console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
-            throw new Error(untolerated[0]?.message || "GraphQL error");
-          }
-          console.error(LOG_PREFIX, `GraphQL errors${label}:`, errors);
-          throw new Error(errors[0]?.message || "GraphQL error");
-        }
-        return res.data;
+        const errors = res?.errors ? Array.isArray(res.errors) ? res.errors : [res.errors] : [];
+        return {
+          data: res?.data ?? null,
+          errors
+        };
       } catch (err) {
         const isRetryable = err instanceof Error && (err.message === "Request timed out" || err.message.startsWith("HTTP "));
         if (isRetryable && attempt < maxAttempts - 1) {
@@ -2433,6 +2448,19 @@ reset: () => {
       slug
       karma
       reactPaletteStyle
+      abTestOverrides
+    }
+  }
+`
+  );
+  const UPDATE_SYNC_SECRET = (
+`
+  mutation UpdateSyncSecret($id: String!, $data: UpdateUserDataInput!) {
+    updateUser(selector: { _id: $id }, data: $data) {
+      data {
+        _id
+        abTestOverrides
+      }
     }
   }
 `
@@ -2878,8 +2906,14 @@ reset: () => {
     READ_FROM: "power-reader-read-from",
     AUTHOR_PREFS: "power-reader-author-prefs",
     VIEW_WIDTH: "power-reader-view-width",
-    AI_STUDIO_PREFIX: "power-reader-ai-studio-prefix"
+    AI_STUDIO_PREFIX: "power-reader-ai-studio-prefix",
+    SYNC_META: "power-reader-sync-meta",
+    SYNC_ENABLED: "power-reader-sync-enabled",
+    DEVICE_ID: "power-reader-device-id",
+    SYNC_QUOTA_META: "power-reader-sync-quota-meta"
   };
+  const DEVICE_ID_MIN_LENGTH = 8;
+  const DEVICE_ID_MAX_LENGTH = 96;
   function getKey(baseKey) {
     const hostname = window.location.hostname;
     if (isEAForumHostname(hostname)) {
@@ -2891,6 +2925,21 @@ reset: () => {
   let lastReadStateFetch = 0;
   let cachedLoadFrom = null;
   let lastLoadFromFetch = 0;
+  const syncFieldListeners = new Set();
+  const notifySyncFieldChanged = (field, options) => {
+    if (options?.silent) return;
+    for (const listener of syncFieldListeners) {
+      try {
+        listener(field);
+      } catch (error) {
+        Logger.warn(`sync field listener failed for ${field}`, error);
+      }
+    }
+  };
+  const onSyncFieldChanged = (listener) => {
+    syncFieldListeners.add(listener);
+    return () => syncFieldListeners.delete(listener);
+  };
   if (typeof window !== "undefined" && window.__PR_TEST_MODE__) {
     cachedLoadFrom = null;
     lastLoadFromFetch = 0;
@@ -2911,10 +2960,11 @@ reset: () => {
       return {};
     }
   }
-  function setReadState(state2) {
+  function setReadState(state2, options = {}) {
     cachedReadState = state2;
     lastReadStateFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state2));
+    notifySyncFieldChanged("read", options);
   }
   function isRead(id, state2, postedAt) {
     const readMap = state2 || getReadState();
@@ -2950,10 +3000,15 @@ reset: () => {
     lastLoadFromFetch = now;
     return raw;
   }
-  function setLoadFrom(isoDatetime) {
+  function setLoadFrom(isoDatetime, options = {}) {
     cachedLoadFrom = isoDatetime;
     lastLoadFromFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
+    notifySyncFieldChanged("loadFrom", options);
+  }
+  function setLoadFromAndClearRead(isoDatetime, options = {}) {
+    setReadState({}, options);
+    setLoadFrom(isoDatetime, options);
   }
   function getAuthorPreferences() {
     try {
@@ -2963,8 +3018,9 @@ reset: () => {
       return {};
     }
   }
-  function setAuthorPreferences(prefs) {
+  function setAuthorPreferences(prefs, options = {}) {
     GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
+    notifySyncFieldChanged("authorPrefs", options);
   }
   function toggleAuthorPreference(author, direction) {
     const prefs = getAuthorPreferences();
@@ -2985,11 +3041,26 @@ reset: () => {
     }
     return { readState: getReadState(), cutoff: getLoadFrom() || void 0 };
   }
-  function clearAllStorage() {
+  function clearReaderStorage(options = {}) {
+    cachedReadState = null;
+    lastReadStateFetch = 0;
+    cachedLoadFrom = null;
+    lastLoadFromFetch = 0;
     GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
     GM_setValue(getKey(STORAGE_KEYS.READ_FROM), "");
     GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
     GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
+    notifySyncFieldChanged("read", options);
+    notifySyncFieldChanged("loadFrom", options);
+    notifySyncFieldChanged("authorPrefs", options);
+  }
+  function clearAllStorage(options = {}) {
+    clearReaderStorage(options);
+    GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_META), "");
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), "");
+    GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), "");
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), "");
   }
   function getViewWidth() {
     const raw = GM_getValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
@@ -3003,6 +3074,51 @@ reset: () => {
   }
   function setAIStudioPrefix(prefix) {
     GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
+  }
+  function getSyncMeta() {
+    const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_META), "");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  function setSyncMeta(value) {
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_META), JSON.stringify(value));
+  }
+  function getSyncEnabled() {
+    const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_ENABLED), "");
+    if (raw === "") return true;
+    return raw === "1";
+  }
+  function setSyncEnabled(enabled) {
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), enabled ? "1" : "0");
+  }
+  function getSyncQuotaMeta() {
+    const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), "");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  function setSyncQuotaMeta(value) {
+    GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), JSON.stringify(value));
+  }
+  function getDeviceId() {
+    const key = getKey(STORAGE_KEYS.DEVICE_ID);
+    const existing = GM_getValue(key, "");
+    if (existing && typeof existing === "string") {
+      const normalized = existing.trim();
+      if (normalized.length >= DEVICE_ID_MIN_LENGTH && normalized.length <= DEVICE_ID_MAX_LENGTH) {
+        return normalized;
+      }
+    }
+    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    GM_setValue(key, generated);
+    return generated;
   }
   async function exportState() {
     const exportData = {};
@@ -3101,7 +3217,7 @@ hoverDelay: 300,
     Logger.info(`EAF recent-comments fallback fetched ${pagesFetched} page(s), retained ${limited.length} comments after ${afterDate}`);
     return limited;
   };
-  const loadInitial = async () => {
+  const loadInitial = async (currentUserOverride) => {
     const injection = window.__PR_TEST_STATE_INJECTION__;
     if (injection) {
       Logger.info("Using injected test state");
@@ -3117,7 +3233,7 @@ hoverDelay: 300,
     const afterDate = loadFrom === "__LOAD_RECENT__" ? void 0 : loadFrom;
     Logger.info(`Initial fetch: after=${afterDate}`);
     const start = performance.now();
-    const userPromise = queryGraphQL(GET_CURRENT_USER);
+    const userPromise = currentUserOverride !== void 0 ? Promise.resolve({ currentUser: currentUserOverride }) : queryGraphQL(GET_CURRENT_USER);
     const commentsPromise = isEAForumHost() && !!afterDate ? fetchRecentCommentsForEAF(afterDate) : queryGraphQL(GET_ALL_RECENT_COMMENTS_LITE, {
       after: afterDate,
       limit: CONFIG.loadMax,
@@ -3132,10 +3248,11 @@ hoverDelay: 300,
     let currentUsername = null;
     let currentUserId = null;
     let currentUserPaletteStyle = null;
-    if (userRes?.currentUser) {
-      currentUsername = userRes.currentUser.username || "";
-      currentUserId = userRes.currentUser._id;
-      currentUserPaletteStyle = userRes.currentUser.reactPaletteStyle || null;
+    const effectiveCurrentUser = currentUserOverride !== void 0 ? currentUserOverride : userRes?.currentUser;
+    if (effectiveCurrentUser) {
+      currentUsername = effectiveCurrentUser.username || "";
+      currentUserId = effectiveCurrentUser._id || null;
+      currentUserPaletteStyle = effectiveCurrentUser.reactPaletteStyle || null;
     }
     const posts = [];
     const seenPostIds = new Set();
@@ -3599,6 +3716,7 @@ hoverDelay: 300,
   let lastScrollTime = 0;
   let lastMouseMoveTime = 0;
   let lastKnownMousePos = { x: -1, y: -1 };
+  let lastIntentionalHoverStartTime = 0;
   let listenersAdded = false;
   function initPreviewSystem() {
     if (listenersAdded) return;
@@ -3611,7 +3729,9 @@ hoverDelay: 300,
     document.addEventListener("mousedown", () => dismissPreview(), true);
     window.addEventListener("scroll", () => {
       lastScrollTime = Date.now();
-      dismissPreview();
+      if (state.activePreview) {
+        dismissPreview();
+      }
     }, { passive: true });
     listenersAdded = true;
   }
@@ -3622,7 +3742,7 @@ hoverDelay: 300,
   }
   function isIntentionalHover() {
     const now = Date.now();
-    if (now - lastScrollTime < 300) {
+    if (now - lastScrollTime < 300 && lastScrollTime >= lastMouseMoveTime) {
       return false;
     }
     if (now - lastMouseMoveTime > 500) {
@@ -3668,6 +3788,49 @@ hoverDelay: 300,
   function isPointInRect(x, y, rect) {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
+  function getTriggerHref(trigger) {
+    return trigger.getAttribute("href") || trigger.dataset.href || "";
+  }
+  function getTriggerContainerKey(trigger) {
+    const scoped = trigger.closest("[data-id], [data-post-id]");
+    if (!scoped) return "";
+    return scoped.getAttribute("data-id") || scoped.getAttribute("data-post-id") || "";
+  }
+  function isEquivalentPreviewTrigger(originalTrigger, candidateTrigger, explicitHref) {
+    const targetHref = explicitHref || getTriggerHref(originalTrigger);
+    const candidateHref = getTriggerHref(candidateTrigger);
+    if (targetHref && candidateHref && targetHref === candidateHref) {
+      return true;
+    }
+    const originalAction = originalTrigger.dataset.action;
+    const candidateAction = candidateTrigger.dataset.action;
+    if (originalAction && candidateAction && originalAction === candidateAction) {
+      return true;
+    }
+    const originalId = originalTrigger.id;
+    const candidateId = candidateTrigger.id;
+    if (originalId && candidateId && originalId === candidateId) {
+      return true;
+    }
+    const originalContainerId = getTriggerContainerKey(originalTrigger);
+    const candidateContainerId = getTriggerContainerKey(candidateTrigger);
+    const originalText = (originalTrigger.textContent || "").trim();
+    const candidateText = (candidateTrigger.textContent || "").trim();
+    return !!(originalContainerId && candidateContainerId && originalContainerId === candidateContainerId && originalText.length > 0 && originalText === candidateText);
+  }
+  function recoverHoveredTrigger(trigger, explicitHref) {
+    if (lastKnownMousePos.x < 0 || lastKnownMousePos.y < 0) return null;
+    const elementAtPointer = document.elementFromPoint(lastKnownMousePos.x, lastKnownMousePos.y);
+    if (!elementAtPointer) return null;
+    let probe = elementAtPointer;
+    while (probe && probe !== document.body) {
+      if (probe.matches(":hover") && isEquivalentPreviewTrigger(trigger, probe, explicitHref)) {
+        return probe;
+      }
+      probe = probe.parentElement;
+    }
+    return null;
+  }
   function cancelHoverTimeout() {
     if (state.hoverTimeout) {
       Logger.debug("cancelHoverTimeout: clearing timeout", state.hoverTimeout);
@@ -3678,6 +3841,7 @@ hoverDelay: 300,
   function dismissPreview() {
     Logger.debug("dismissPreview called");
     cancelHoverTimeout();
+    lastIntentionalHoverStartTime = 0;
     if (state.activePreview) {
       Logger.debug("dismissPreview: removing active preview");
       state.activePreview.remove();
@@ -3727,6 +3891,7 @@ hoverDelay: 300,
       if (!isIntentionalHover()) {
         return;
       }
+      lastIntentionalHoverStartTime = Date.now();
       if (targets && targets.length > 0) {
         const allFullyVisible = targets.every((t) => {
           const isSticky = !!t.closest(".pr-sticky-header");
@@ -3739,15 +3904,26 @@ hoverDelay: 300,
       }
       state.hoverTimeout = window.setTimeout(async () => {
         state.hoverTimeout = null;
+        const withinIntentWindow = Date.now() - lastIntentionalHoverStartTime <= HOVER_DELAY + 300;
+        const stillIntentional = isIntentionalHover() || withinIntentWindow;
+        let effectiveTrigger = trigger;
+        if (!trigger.isConnected || !trigger.matches(":hover") || !stillIntentional) {
+          const recoveredTrigger = recoverHoveredTrigger(trigger, options.href);
+          const canUseStickyFallback = !recoveredTrigger && trigger.isConnected && !!trigger.closest(".pr-sticky-header") && stillIntentional;
+          if (!recoveredTrigger && !canUseStickyFallback || !(isIntentionalHover() || withinIntentWindow)) {
+            return;
+          }
+          effectiveTrigger = recoveredTrigger || trigger;
+        }
         Logger.debug("Preview timer triggered for", options.type);
-        state.triggerRect = trigger.getBoundingClientRect();
-        state.currentTrigger = trigger;
+        state.triggerRect = effectiveTrigger.getBoundingClientRect();
+        state.currentTrigger = effectiveTrigger;
         if (options.href) {
-          trigger.dataset.href = options.href;
+          effectiveTrigger.dataset.href = options.href;
         }
         try {
           const content = await fetchContent();
-          if (state.currentTrigger !== trigger) {
+          if (state.currentTrigger !== effectiveTrigger) {
             Logger.debug("Preview aborted: trigger changed during fetch");
             return;
           }
@@ -3760,6 +3936,7 @@ hoverDelay: 300,
     });
     trigger.addEventListener("mouseleave", () => {
       Logger.debug("Preview mouseleave: trigger=", trigger.tagName, trigger.className);
+      lastIntentionalHoverStartTime = 0;
       if (state.hoverTimeout) {
         clearTimeout(state.hoverTimeout);
         state.hoverTimeout = null;
@@ -3773,6 +3950,9 @@ hoverDelay: 300,
     }
     state.hoverTimeout = window.setTimeout(async () => {
       state.hoverTimeout = null;
+      if (!trigger.isConnected || !trigger.matches(":hover") || !isIntentionalHover()) {
+        return;
+      }
       Logger.debug("Manual Preview triggered");
       state.triggerRect = trigger.getBoundingClientRect();
       state.currentTrigger = trigger;
@@ -6101,6 +6281,1884 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       updateNextPostButton(stickyHeader2, stickyPostEl);
     }
   };
+  class FirestoreBackendError extends Error {
+    status;
+    code;
+    details;
+    transient;
+    constructor(message, status, code, details, transient = false) {
+      super(message);
+      this.name = "FirestoreBackendError";
+      this.status = status;
+      this.code = code;
+      this.details = details;
+      this.transient = transient;
+    }
+  }
+  const DEFAULT_TIMEOUT_MS = 15e3;
+  const DEFAULT_HOST = "firestore.googleapis.com";
+  const MAX_SYNC_COUNTER$1 = 1e9;
+  const MAX_EPOCH_MS = 253402300799999;
+  const MAX_WRITER_LABEL_LENGTH = 128;
+  const isInteger = (value) => Number.isFinite(value) && Math.floor(value) === value;
+  const requireInteger = (value, label) => {
+    if (!isInteger(value)) {
+      throw new Error(`invalid integer for ${label}`);
+    }
+    return value;
+  };
+  const asMap = (value, label) => {
+    if (!value || !("mapValue" in value)) {
+      throw new Error(`missing map value: ${label}`);
+    }
+    return value.mapValue.fields || {};
+  };
+  const asString = (value, label) => {
+    if (!value || !("stringValue" in value)) {
+      throw new Error(`missing string value: ${label}`);
+    }
+    return value.stringValue;
+  };
+  const asTimestamp = (value, label) => {
+    if (!value || !("timestampValue" in value)) {
+      throw new Error(`missing timestamp value: ${label}`);
+    }
+    return value.timestampValue;
+  };
+  const asInteger = (value, label) => {
+    if (!value || !("integerValue" in value)) {
+      throw new Error(`missing integer value: ${label}`);
+    }
+    const parsed = Number.parseInt(value.integerValue, 10);
+    if (!isInteger(parsed)) {
+      throw new Error(`invalid integer value: ${label}`);
+    }
+    return parsed;
+  };
+  const asOptionalInteger = (value, label) => {
+    if (!value) return void 0;
+    return asInteger(value, label);
+  };
+  const assertSaneCounter = (value, label) => {
+    if (!isInteger(value) || value < 0 || value > MAX_SYNC_COUNTER$1) {
+      throw new Error(`out-of-range integer for ${label}`);
+    }
+    return value;
+  };
+  const assertEpochMs = (value, label) => {
+    if (!isInteger(value) || value < 0 || value > MAX_EPOCH_MS) {
+      throw new Error(`out-of-range epoch ms for ${label}`);
+    }
+    return value;
+  };
+  const fvString = (value) => ({ stringValue: value });
+  const fvInteger = (value) => ({ integerValue: String(requireInteger(value, "integerValue")) });
+  const fvTimestamp = (value) => ({ timestampValue: value });
+  const fvMap = (fields) => ({ mapValue: { fields } });
+  const buildFirestorePath = (site, syncNode) => `pr_sync_v1/${site}/nodes/${syncNode}`;
+  const getHostBaseUrl = (config) => {
+    const rawHost = String(config.host || DEFAULT_HOST).trim();
+    if (/^https?:\/\//i.test(rawHost)) {
+      return rawHost.replace(/\/+$/, "");
+    }
+    return `https://${rawHost}`;
+  };
+  const buildDocumentUrl = (config, site, syncNode) => `${getHostBaseUrl(config)}/v1/projects/${encodeURIComponent(config.projectId)}/databases/(default)/documents/${buildFirestorePath(site, syncNode)}?key=${encodeURIComponent(config.apiKey)}`;
+  const buildCommitUrl = (config) => `${getHostBaseUrl(config)}/v1/projects/${encodeURIComponent(config.projectId)}/databases/(default)/documents:commit?key=${encodeURIComponent(config.apiKey)}`;
+  const buildDocumentName = (config, site, syncNode) => `projects/${config.projectId}/databases/(default)/documents/${buildFirestorePath(site, syncNode)}`;
+  const request = async (method, url, body, timeoutMs = DEFAULT_TIMEOUT_MS) => new Promise((resolve, reject) => {
+    const payload = body === void 0 ? void 0 : JSON.stringify(body);
+    GM_xmlhttpRequest({
+      method,
+      url,
+      headers: payload ? { "Content-Type": "application/json" } : void 0,
+      data: payload,
+      timeout: timeoutMs,
+      onload: (response) => resolve(response),
+      onerror: (error) => reject(new FirestoreBackendError("network error", 0, void 0, error, true)),
+      ontimeout: () => reject(new FirestoreBackendError("request timed out", 0, "TIMEOUT", void 0, true))
+    });
+  });
+  const parseJson = (raw) => {
+    if (!raw || !raw.trim()) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  const toBackendError = (status, responseText) => {
+    const parsed = parseJson(responseText);
+    const code = parsed?.error?.status;
+    const message = parsed?.error?.message || `HTTP ${status}`;
+    const transient = status === 429 || status >= 500 || code === "RESOURCE_EXHAUSTED";
+    return new FirestoreBackendError(message, status, code, parsed, transient);
+  };
+  const isCasConflict = (error) => {
+    if (!(error instanceof FirestoreBackendError)) return false;
+    if (error.code === "ABORTED" || error.code === "FAILED_PRECONDITION") return true;
+    if (error.status === 409 || error.status === 412) return true;
+    if (error.status === 400 && typeof error.message === "string" && /precondition/i.test(error.message)) {
+      return true;
+    }
+    return false;
+  };
+  const isCreateRace = (error) => error instanceof FirestoreBackendError && error.status === 409 && error.code === "ALREADY_EXISTS";
+  const isMissingDocumentError = (error) => error instanceof FirestoreBackendError && (error.status === 404 || error.code === "NOT_FOUND");
+  const isPermissionDenied = (error) => error instanceof FirestoreBackendError && (error.status === 403 || error.code === "PERMISSION_DENIED");
+  const isInvalidArgument = (error) => error instanceof FirestoreBackendError && (error.status === 400 || error.code === "INVALID_ARGUMENT");
+  const isQuotaExceeded = (error) => {
+    if (!(error instanceof FirestoreBackendError)) return false;
+    if (error.status === 429) return true;
+    if (error.code === "RESOURCE_EXHAUSTED") return true;
+    return typeof error.message === "string" && /quota|resource exhausted/i.test(error.message);
+  };
+  const isUncertainWriteOutcome = (error) => error instanceof FirestoreBackendError && error.code === "UNCERTAIN_WRITE_OUTCOME";
+  const decodeEnvelope = (doc) => {
+    const fields = doc.fields || {};
+    const schemaVersion = asInteger(fields.schemaVersion, "schemaVersion");
+    if (schemaVersion !== 1) {
+      throw new Error(`unsupported schemaVersion: ${schemaVersion}`);
+    }
+    const site = asString(fields.site, "site");
+    if (site !== "lw" && site !== "eaf") {
+      throw new Error(`invalid site in envelope: ${site}`);
+    }
+    const outerFields = asMap(fields.fields, "fields");
+    const readField = asMap(outerFields.read, "fields.read");
+    const loadFromField = asMap(outerFields.loadFrom, "fields.loadFrom");
+    const authorPrefsField = asMap(outerFields.authorPrefs, "fields.authorPrefs");
+    const readValueRaw = asMap(readField.value, "fields.read.value");
+    const readValue = {};
+    for (const [key, value] of Object.entries(readValueRaw)) {
+      if (!/^[A-Za-z0-9:_-]{1,256}$/.test(key)) continue;
+      if (!("integerValue" in value) || value.integerValue !== "1") continue;
+      readValue[key] = 1;
+    }
+    const authorPrefValueRaw = asMap(authorPrefsField.value, "fields.authorPrefs.value");
+    const authorPrefValue = {};
+    for (const [key, rawValue] of Object.entries(authorPrefValueRaw)) {
+      if (!/^[A-Za-z0-9 ._,'/:;-]{1,128}$/.test(key)) continue;
+      try {
+        const entry = asMap(rawValue, `fields.authorPrefs.value.${key}`);
+        const v = asInteger(entry.v, `fields.authorPrefs.value.${key}.v`);
+        if (v !== -1 && v !== 0 && v !== 1) continue;
+        const updatedBy = asString(entry.updatedBy, `fields.authorPrefs.value.${key}.updatedBy`);
+        if (updatedBy.length === 0 || updatedBy.length > MAX_WRITER_LABEL_LENGTH) continue;
+        authorPrefValue[key] = {
+          v,
+          version: assertSaneCounter(asInteger(entry.version, `fields.authorPrefs.value.${key}.version`), `fields.authorPrefs.value.${key}.version`),
+          updatedAt: asTimestamp(entry.updatedAt, `fields.authorPrefs.value.${key}.updatedAt`),
+          updatedBy
+        };
+      } catch {
+        continue;
+      }
+    }
+    const loadFromValue = loadFromField.value && "stringValue" in loadFromField.value ? loadFromField.value.stringValue : void 0;
+    return {
+      schemaVersion: 1,
+      site,
+      lastPushedBy: asString(fields.lastPushedBy, "lastPushedBy"),
+      lastPushedAt: asTimestamp(fields.lastPushedAt, "lastPushedAt"),
+      lastPushedAtMs: (() => {
+        const ms = asOptionalInteger(fields.lastPushedAtMs, "lastPushedAtMs");
+        if (ms === void 0) return void 0;
+        return assertEpochMs(ms, "lastPushedAtMs");
+      })(),
+      expiresAt: asTimestamp(fields.expiresAt, "expiresAt"),
+      fields: {
+        read: {
+          updatedAt: asTimestamp(readField.updatedAt, "fields.read.updatedAt"),
+          updatedBy: asString(readField.updatedBy, "fields.read.updatedBy"),
+          clearEpoch: assertSaneCounter(asInteger(readField.clearEpoch, "fields.read.clearEpoch"), "fields.read.clearEpoch"),
+          value: readValue
+        },
+        loadFrom: {
+          updatedAt: asTimestamp(loadFromField.updatedAt, "fields.loadFrom.updatedAt"),
+          updatedBy: asString(loadFromField.updatedBy, "fields.loadFrom.updatedBy"),
+          version: assertSaneCounter(asInteger(loadFromField.version, "fields.loadFrom.version"), "fields.loadFrom.version"),
+          clearEpoch: assertSaneCounter(asInteger(loadFromField.clearEpoch, "fields.loadFrom.clearEpoch"), "fields.loadFrom.clearEpoch"),
+          ...loadFromValue ? { value: loadFromValue } : {}
+        },
+        authorPrefs: {
+          updatedAt: asTimestamp(authorPrefsField.updatedAt, "fields.authorPrefs.updatedAt"),
+          updatedBy: asString(authorPrefsField.updatedBy, "fields.authorPrefs.updatedBy"),
+          clearEpoch: assertSaneCounter(asInteger(authorPrefsField.clearEpoch, "fields.authorPrefs.clearEpoch"), "fields.authorPrefs.clearEpoch"),
+          value: authorPrefValue
+        }
+      }
+    };
+  };
+  const encodeEnvelope = (envelope) => {
+    const readMapFields = {};
+    for (const [id, v] of Object.entries(envelope.fields.read.value)) {
+      if (v !== 1) continue;
+      readMapFields[id] = fvInteger(1);
+    }
+    const authorMapFields = {};
+    for (const [author, entry] of Object.entries(envelope.fields.authorPrefs.value)) {
+      if (entry.v !== -1 && entry.v !== 0 && entry.v !== 1) continue;
+      authorMapFields[author] = fvMap({
+        v: fvInteger(entry.v),
+        version: fvInteger(entry.version),
+        updatedAt: fvTimestamp(entry.updatedAt),
+        updatedBy: fvString(entry.updatedBy)
+      });
+    }
+    const loadFromFields = {
+      updatedAt: fvTimestamp(envelope.fields.loadFrom.updatedAt),
+      updatedBy: fvString(envelope.fields.loadFrom.updatedBy),
+      version: fvInteger(envelope.fields.loadFrom.version),
+      clearEpoch: fvInteger(envelope.fields.loadFrom.clearEpoch)
+    };
+    if (envelope.fields.loadFrom.value) {
+      loadFromFields.value = fvString(envelope.fields.loadFrom.value);
+    }
+    const topLevelFields = {
+      schemaVersion: fvInteger(1),
+      site: fvString(envelope.site),
+      lastPushedBy: fvString(envelope.lastPushedBy),
+      lastPushedAt: fvTimestamp(envelope.lastPushedAt),
+      expiresAt: fvTimestamp(envelope.expiresAt),
+      fields: fvMap({
+        read: fvMap({
+          updatedAt: fvTimestamp(envelope.fields.read.updatedAt),
+          updatedBy: fvString(envelope.fields.read.updatedBy),
+          clearEpoch: fvInteger(envelope.fields.read.clearEpoch),
+          value: fvMap(readMapFields)
+        }),
+        loadFrom: fvMap(loadFromFields),
+        authorPrefs: fvMap({
+          updatedAt: fvTimestamp(envelope.fields.authorPrefs.updatedAt),
+          updatedBy: fvString(envelope.fields.authorPrefs.updatedBy),
+          clearEpoch: fvInteger(envelope.fields.authorPrefs.clearEpoch),
+          value: fvMap(authorMapFields)
+        })
+      })
+    };
+    if (envelope.lastPushedAtMs !== void 0) {
+      topLevelFields.lastPushedAtMs = fvInteger(assertEpochMs(envelope.lastPushedAtMs, "lastPushedAtMs"));
+    }
+    return topLevelFields;
+  };
+  const assertSingleWriteCommitPayload = (payload) => {
+    if (!payload || !Array.isArray(payload.writes) || payload.writes.length !== 1) {
+      throw new Error("commit payload must contain exactly one write");
+    }
+    const write = payload.writes[0];
+    if (!write?.update || !write?.currentDocument) {
+      throw new Error("commit payload must contain an update write and currentDocument precondition");
+    }
+    const hasUpdateTime = typeof write.currentDocument.updateTime === "string" && write.currentDocument.updateTime.length > 0;
+    const hasExists = typeof write.currentDocument.exists === "boolean";
+    if (!hasUpdateTime && !hasExists) {
+      throw new Error("commit payload must include currentDocument.updateTime or currentDocument.exists");
+    }
+  };
+  const readEnvelope = async (config, site, syncNode, timeoutMs = DEFAULT_TIMEOUT_MS) => {
+    const url = buildDocumentUrl(config, site, syncNode);
+    const response = await request("GET", url, void 0, timeoutMs);
+    if (response.status === 404) {
+      return { kind: "missing" };
+    }
+    if (response.status < 200 || response.status >= 300) {
+      throw toBackendError(response.status, response.responseText);
+    }
+    const doc = parseJson(response.responseText);
+    if (!doc) {
+      throw new FirestoreBackendError("invalid Firestore read response", response.status, "INVALID_RESPONSE");
+    }
+    try {
+      const envelope = decodeEnvelope(doc);
+      return {
+        kind: "ok",
+        envelope,
+        updateTime: doc.updateTime
+      };
+    } catch (error) {
+      throw new FirestoreBackendError(
+        error instanceof Error ? error.message : "invalid envelope",
+        response.status,
+        "INVALID_ENVELOPE",
+        doc
+      );
+    }
+  };
+  const commitEnvelope = async (config, site, syncNode, envelope, options) => {
+    const docName = buildDocumentName(config, site, syncNode);
+    const isCreateIfMissing = "createIfMissing" in options && options.createIfMissing === true;
+    const updateTimeToken = "expectedUpdateTime" in options && typeof options.expectedUpdateTime === "string" ? options.expectedUpdateTime.trim() : "";
+    if (!isCreateIfMissing && !updateTimeToken) {
+      throw new FirestoreBackendError(
+        "CAS update requires expectedUpdateTime; call readEnvelope first",
+        0,
+        "INVALID_COMMIT_OPTIONS"
+      );
+    }
+    const payload = {
+      writes: [
+        {
+          update: {
+            name: docName,
+            fields: encodeEnvelope(envelope)
+          },
+          updateTransforms: [
+            {
+              fieldPath: "lastPushedAt",
+              setToServerValue: "REQUEST_TIME"
+            }
+          ],
+          currentDocument: isCreateIfMissing ? { exists: false } : { updateTime: updateTimeToken }
+        }
+      ]
+    };
+    assertSingleWriteCommitPayload(payload);
+    const response = await request("POST", buildCommitUrl(config), payload, options.timeoutMs || DEFAULT_TIMEOUT_MS);
+    if (response.status < 200 || response.status >= 300) {
+      throw toBackendError(response.status, response.responseText);
+    }
+    const parsed = parseJson(response.responseText);
+    const updateTime = parsed?.writeResults?.[0]?.updateTime;
+    if (!updateTime) {
+      throw new FirestoreBackendError(
+        "missing commit updateTime",
+        response.status,
+        "UNCERTAIN_WRITE_OUTCOME",
+        parsed,
+        true
+      );
+    }
+    return { updateTime };
+  };
+  const withRetryJitter = async (attempt) => {
+    const base = Math.min(1200, 120 + attempt * 170);
+    const jitter = Math.floor(Math.random() * 90);
+    await new Promise((resolve) => window.setTimeout(resolve, base + jitter));
+  };
+  const defaultEnvelope = (site, writerId, nowIso2, expiresAtIso) => ({
+    schemaVersion: 1,
+    site,
+    lastPushedBy: writerId,
+    lastPushedAt: nowIso2,
+    expiresAt: expiresAtIso,
+    fields: {
+      read: {
+        updatedAt: nowIso2,
+        updatedBy: writerId,
+        clearEpoch: 0,
+        value: {}
+      },
+      loadFrom: {
+        updatedAt: nowIso2,
+        updatedBy: writerId,
+        version: 0,
+        clearEpoch: 0
+      },
+      authorPrefs: {
+        updatedAt: nowIso2,
+        updatedBy: writerId,
+        clearEpoch: 0,
+        value: {}
+      }
+    }
+  });
+  const getFirestoreBackendConfig = () => {
+    const projectId = "".trim();
+    const apiKey = "".trim();
+    const host = "".trim();
+    if (!projectId || !apiKey) {
+      return null;
+    }
+    return {
+      projectId,
+      apiKey,
+      host: host || void 0
+    };
+  };
+  const logBackendError = (context, error) => {
+    if (error instanceof FirestoreBackendError) {
+      Logger.warn(`${context}: ${error.message}`, {
+        status: error.status,
+        code: error.code,
+        transient: error.transient
+      });
+      return;
+    }
+    Logger.warn(`${context}: unknown error`, error);
+  };
+  const SYNC_SECRET_KEY = "pr_sync_secret_v1";
+  const SYNC_META_VERSION = 1;
+  const SYNC_TTL_MS = 181 * 24 * 60 * 60 * 1e3;
+  const SYNC_TTL_FALLBACK_MS = 170 * 24 * 60 * 60 * 1e3;
+  const SYNC_DEBOUNCE_MS = 8e3;
+  const PULL_THROTTLE_MS = 45e3;
+  const PULL_FALLBACK_STALE_MS = 10 * 6e4;
+  const PULL_FALLBACK_BASE_MS = 10 * 6e4;
+  const PULL_FALLBACK_JITTER_MS = 6e4;
+  const PUSH_FLOOR_MS = 5e3;
+  const READ_ONLY_PUSH_FLOOR_MS = 45e3;
+  const SYNC_MAX_WAIT_MS = 3e4;
+  const SYNC_STARTUP_TIMEOUT_MS = 5e3;
+  const READ_CAP = 1e4;
+  const AUTHOR_PREF_CAP = 1e3;
+  const CAS_RETRY_LIMIT = 3;
+  const LATE_SYNC_NOTICE_MS = 15e3;
+  const READ_OVERFLOW_NOTICE_MS = 3e4;
+  const LOCAL_PUSH_SOFT_LIMIT = 300;
+  const LOCAL_PUSH_HARD_LIMIT = 500;
+  const LOCAL_PUSH_COOLDOWN_MS = 60 * 6e4;
+  const QUOTA_COOLDOWN_LADDER_MIN = [5, 15, 60, 360, 360];
+  const QUOTA_COOLDOWN_JITTER_MS = 6e4;
+  const MAX_SYNC_COUNTER = 1e9;
+  const runtime = {
+    active: false,
+    site: isEAForumHost() ? "eaf" : "lw",
+    meta: createDefaultMeta(),
+    config: null,
+    currentUser: null,
+    syncNode: null,
+    secret: null,
+    updateTimeByNode: new Map(),
+    lastPullAtMs: 0,
+    lastPushAtMs: 0,
+    lastServerAnchorIso: null,
+    flushTimer: null,
+    pullInFlight: false,
+    flushInFlight: false,
+    pendingFlush: false,
+    readOnly: false,
+    pushDisabled: false,
+    quotaDisabledUntilMs: 0,
+    startupDone: false,
+    startupTimedOut: false,
+    listenerDisposer: null,
+    periodicPullTimer: null,
+    writerId: "",
+    userId: null,
+    connectivityBlocked: false,
+    secretUnavailable: false,
+    identityPermissionDenied: false,
+    lateSyncAppliedUntilMs: 0,
+    localBudgetMeta: createDefaultQuotaMeta(),
+    resetGeneration: 0,
+    firstDirtyAtMs: null,
+    readOverflowNoticeUntilMs: 0
+  };
+  const nowIso = () => ( new Date()).toISOString();
+  const nowMs = () => Date.now();
+  const utcDay = (epochMs = nowMs()) => new Date(epochMs).toISOString().slice(0, 10);
+  const stableCloneSorted = (value) => {
+    if (Array.isArray(value)) {
+      return value.map((item) => stableCloneSorted(item));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const source = value;
+    const out = {};
+    for (const key of Object.keys(source).sort()) {
+      out[key] = stableCloneSorted(source[key]);
+    }
+    return out;
+  };
+  const stableJson = (value) => JSON.stringify(stableCloneSorted(value));
+  function safeRandomUuid() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  }
+  function makeWriterId() {
+    return `${getDeviceId()}:${safeRandomUuid().replace(/-/g, "").slice(0, 8)}`;
+  }
+  function asOverridesMap(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value;
+  }
+  function createDefaultMeta() {
+    return {
+      version: 1,
+      dirty: { read: false, loadFrom: false, authorPrefs: false },
+      readClearEpoch: 0,
+      loadFrom: { version: 0, clearEpoch: 0 },
+      authorPrefsClearEpoch: 0,
+      quotaMode: "normal",
+      quotaCooldownLevel: 0,
+      quotaNextProbeAtMs: 0
+    };
+  }
+  function createDefaultQuotaMeta() {
+    return {
+      version: 1,
+      utcDay: ( new Date()).toISOString().slice(0, 10),
+      pushCount: 0
+    };
+  }
+  function normalizeQuotaMeta(raw) {
+    if (!raw || typeof raw !== "object") {
+      return createDefaultQuotaMeta();
+    }
+    const base = raw;
+    const next = createDefaultQuotaMeta();
+    if (typeof base.utcDay === "string" && /^\d{4}-\d{2}-\d{2}$/.test(base.utcDay)) {
+      next.utcDay = base.utcDay;
+    }
+    if (typeof base.pushCount === "number" && Number.isFinite(base.pushCount)) {
+      next.pushCount = Math.max(0, Math.floor(base.pushCount));
+    }
+    if (typeof base.budgetDisabledUntilMs === "number" && Number.isFinite(base.budgetDisabledUntilMs)) {
+      next.budgetDisabledUntilMs = Math.max(0, Math.floor(base.budgetDisabledUntilMs));
+    }
+    return next;
+  }
+  function clampSyncCounter(value, fallback = 0) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    const normalized = Math.floor(numeric);
+    if (normalized < 0) return 0;
+    if (normalized > MAX_SYNC_COUNTER) return MAX_SYNC_COUNTER;
+    return normalized;
+  }
+  function incrementSyncCounter(value) {
+    if (!Number.isFinite(value)) return 1;
+    const normalized = Math.floor(value);
+    if (normalized >= MAX_SYNC_COUNTER) return MAX_SYNC_COUNTER;
+    if (normalized < 0) return 1;
+    return normalized + 1;
+  }
+  function normalizeMeta(raw) {
+    if (!raw || typeof raw !== "object") {
+      return createDefaultMeta();
+    }
+    const base = raw;
+    const meta = createDefaultMeta();
+    if (base.version === SYNC_META_VERSION) {
+      meta.version = 1;
+    }
+    if (typeof base.lastUserId === "string") meta.lastUserId = base.lastUserId;
+    if (typeof base.lastSyncNode === "string") meta.lastSyncNode = base.lastSyncNode;
+    if (base.dirty && typeof base.dirty === "object") {
+      meta.dirty.read = !!base.dirty.read;
+      meta.dirty.loadFrom = !!base.dirty.loadFrom;
+      meta.dirty.authorPrefs = !!base.dirty.authorPrefs;
+    }
+    if (typeof base.readClearEpoch === "number" && Number.isFinite(base.readClearEpoch)) {
+      meta.readClearEpoch = clampSyncCounter(base.readClearEpoch, 0);
+    }
+    if (base.loadFrom && typeof base.loadFrom === "object") {
+      meta.loadFrom.version = clampSyncCounter(base.loadFrom.version, meta.loadFrom.version);
+      meta.loadFrom.clearEpoch = clampSyncCounter(base.loadFrom.clearEpoch, meta.loadFrom.clearEpoch);
+    }
+    if (typeof base.authorPrefsClearEpoch === "number" && Number.isFinite(base.authorPrefsClearEpoch)) {
+      meta.authorPrefsClearEpoch = clampSyncCounter(base.authorPrefsClearEpoch, 0);
+    }
+    if (typeof base.pendingRemoteReset === "boolean") meta.pendingRemoteReset = base.pendingRemoteReset;
+    if (typeof base.pendingRemoteResetAt === "string") meta.pendingRemoteResetAt = base.pendingRemoteResetAt;
+    if (base.pendingRemoteResetTargets && typeof base.pendingRemoteResetTargets === "object") {
+      const site = base.pendingRemoteResetTargets.site;
+      if (site === "lw" || site === "eaf") {
+        meta.pendingRemoteResetTargets = {
+          site,
+          syncNode: typeof base.pendingRemoteResetTargets.syncNode === "string" ? base.pendingRemoteResetTargets.syncNode : void 0,
+          userId: typeof base.pendingRemoteResetTargets.userId === "string" ? base.pendingRemoteResetTargets.userId : void 0,
+          readClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.readClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.readClearEpoch, 0) : void 0,
+          loadFromClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.loadFromClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.loadFromClearEpoch, 0) : void 0,
+          loadFromVersion: Number.isFinite(base.pendingRemoteResetTargets.loadFromVersion) ? clampSyncCounter(base.pendingRemoteResetTargets.loadFromVersion, 0) : void 0,
+          authorPrefsClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.authorPrefsClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.authorPrefsClearEpoch, 0) : void 0
+        };
+      }
+    }
+    if (base.quotaMode === "normal" || base.quotaMode === "quota_limited") {
+      meta.quotaMode = base.quotaMode;
+    }
+    if (typeof base.quotaDisabledUntilMs === "number" && Number.isFinite(base.quotaDisabledUntilMs)) {
+      meta.quotaDisabledUntilMs = base.quotaDisabledUntilMs;
+    }
+    if (typeof base.quotaCooldownLevel === "number" && Number.isFinite(base.quotaCooldownLevel)) {
+      meta.quotaCooldownLevel = Math.max(0, Math.floor(base.quotaCooldownLevel));
+    }
+    if (typeof base.quotaNextProbeAtMs === "number" && Number.isFinite(base.quotaNextProbeAtMs)) {
+      meta.quotaNextProbeAtMs = Math.max(0, Math.floor(base.quotaNextProbeAtMs));
+    }
+    return meta;
+  }
+  function persistMeta() {
+    setSyncMeta(runtime.meta);
+  }
+  function persistQuotaMeta() {
+    setSyncQuotaMeta(runtime.localBudgetMeta);
+  }
+  function normalizeDailyBudgetRollover() {
+    const today = utcDay();
+    if (runtime.localBudgetMeta.utcDay === today) return;
+    runtime.localBudgetMeta.utcDay = today;
+    runtime.localBudgetMeta.pushCount = 0;
+    runtime.localBudgetMeta.budgetDisabledUntilMs = 0;
+    persistQuotaMeta();
+  }
+  function computeSite() {
+    return isEAForumHost() ? "eaf" : "lw";
+  }
+  function normalizeLoadFromValue(value) {
+    if (!value) return void 0;
+    if (value === "__LOAD_RECENT__") return "__LOAD_RECENT__";
+    if (!value.includes("T")) return void 0;
+    return value;
+  }
+  function resolveLoadFrom(a, b) {
+    const left = normalizeLoadFromValue(a);
+    const right = normalizeLoadFromValue(b);
+    if (left === "__LOAD_RECENT__" || right === "__LOAD_RECENT__") return "__LOAD_RECENT__";
+    if (left && right) {
+      return left > right ? left : right;
+    }
+    return left || right;
+  }
+  function dynamicReadKeyOk(key) {
+    return /^[A-Za-z0-9:_-]{1,256}$/.test(key);
+  }
+  function dynamicAuthorKeyOk(key) {
+    return /^[A-Za-z0-9 ._,'/:;-]{1,128}$/.test(key);
+  }
+  function computeExpiresAt(anchorIso) {
+    const anchorMs = anchorIso ? Date.parse(anchorIso) : NaN;
+    if (Number.isFinite(anchorMs)) {
+      return new Date(Math.max(anchorMs, nowMs()) + SYNC_TTL_MS).toISOString();
+    }
+    return new Date(nowMs() + SYNC_TTL_FALLBACK_MS).toISOString();
+  }
+  function classifyAndSetQuota(error) {
+    if (!isQuotaExceeded(error)) return;
+    runtime.meta.quotaMode = "quota_limited";
+    runtime.meta.quotaCooldownLevel = Math.min(
+      (runtime.meta.quotaCooldownLevel || 0) + 1,
+      QUOTA_COOLDOWN_LADDER_MIN.length
+    );
+    const cooldownLevel = Math.max(1, runtime.meta.quotaCooldownLevel || 1);
+    const nextMinutes = QUOTA_COOLDOWN_LADDER_MIN[Math.min(cooldownLevel - 1, QUOTA_COOLDOWN_LADDER_MIN.length - 1)];
+    const jitterMs = Math.floor(Math.random() * QUOTA_COOLDOWN_JITTER_MS);
+    runtime.meta.quotaDisabledUntilMs = nowMs() + nextMinutes * 6e4 + jitterMs;
+    runtime.meta.quotaNextProbeAtMs = runtime.meta.quotaDisabledUntilMs;
+    runtime.quotaDisabledUntilMs = runtime.meta.quotaDisabledUntilMs || 0;
+    persistMeta();
+  }
+  function clearQuotaIfRecovered() {
+    if (runtime.meta.quotaMode !== "quota_limited") return;
+    runtime.meta.quotaMode = "normal";
+    runtime.meta.quotaDisabledUntilMs = 0;
+    runtime.meta.quotaCooldownLevel = 0;
+    runtime.meta.quotaNextProbeAtMs = 0;
+    runtime.quotaDisabledUntilMs = 0;
+    persistMeta();
+  }
+  function getCrossTabPushKey(site, userId) {
+    return `pr-sync-last-push-at-${site}-${userId}`;
+  }
+  function getCrossTabPullKey(site, userId) {
+    return `pr-sync-last-pull-at-${site}-${userId}`;
+  }
+  function getCrossTabQuotaKey(site, userId) {
+    return `pr-sync-quota-next-retry-at-${site}-${userId}`;
+  }
+  function readLocalStorageSafe(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+  function writeLocalStorageSafe(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+    }
+  }
+  function removeLocalStorageSafe(key) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+    }
+  }
+  function isLocalStorageUsable() {
+    const probeKey = "__pr-sync-ls-probe";
+    try {
+      localStorage.setItem(probeKey, "1");
+      localStorage.removeItem(probeKey);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function readCrossTabMs(key) {
+    const raw = readLocalStorageSafe(key);
+    if (!raw) return 0;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  function writeCrossTabMs(key, value) {
+    writeLocalStorageSafe(key, String(value));
+  }
+  function setDirty(field) {
+    const hadDirty = hasAnyDirty();
+    runtime.meta.dirty[field] = true;
+    if (!hadDirty) {
+      runtime.firstDirtyAtMs = nowMs();
+    }
+    persistMeta();
+  }
+  function clearDirty() {
+    runtime.meta.dirty.read = false;
+    runtime.meta.dirty.loadFrom = false;
+    runtime.meta.dirty.authorPrefs = false;
+    runtime.firstDirtyAtMs = null;
+    persistMeta();
+  }
+  function hasAnyDirty(meta = runtime.meta) {
+    return !!(meta.dirty.read || meta.dirty.loadFrom || meta.dirty.authorPrefs);
+  }
+  function hasOnlyReadDirty(meta = runtime.meta) {
+    return !!(meta.dirty.read && !meta.dirty.loadFrom && !meta.dirty.authorPrefs);
+  }
+  function currentPushFloorMs(meta = runtime.meta) {
+    return hasOnlyReadDirty(meta) ? READ_ONLY_PUSH_FLOOR_MS : PUSH_FLOOR_MS;
+  }
+  function computePushFloorWaitMs() {
+    if (!runtime.userId) return 0;
+    const crossTabLastPush = readCrossTabMs(getCrossTabPushKey(runtime.site, runtime.userId));
+    const floorGate = Math.max(runtime.lastPushAtMs, crossTabLastPush) + currentPushFloorMs();
+    return Math.max(0, floorGate - nowMs());
+  }
+  function localDataExistsForFirstPush() {
+    const read = Object.keys(getReadState()).length > 0;
+    const loadFrom = !!normalizeLoadFromValue(getLoadFrom());
+    const authorPrefs = Object.keys(getAuthorPreferences()).length > 0;
+    return { read, loadFrom, authorPrefs };
+  }
+  function shouldBlockForQuota() {
+    const localGate = runtime.meta.quotaDisabledUntilMs || 0;
+    const localProbeGate = runtime.meta.quotaNextProbeAtMs || 0;
+    const crossTabGate = runtime.userId ? readCrossTabMs(getCrossTabQuotaKey(runtime.site, runtime.userId)) : 0;
+    const next = Math.max(localGate, localProbeGate, crossTabGate);
+    runtime.quotaDisabledUntilMs = next;
+    return next > nowMs();
+  }
+  function shouldBlockForLocalBudget() {
+    normalizeDailyBudgetRollover();
+    const untilMs = runtime.localBudgetMeta.budgetDisabledUntilMs || 0;
+    return untilMs > nowMs();
+  }
+  function isLocalBudgetLimitedNow() {
+    if (runtime.localBudgetMeta.utcDay !== utcDay()) return false;
+    const untilMs = runtime.localBudgetMeta.budgetDisabledUntilMs || 0;
+    return untilMs > nowMs();
+  }
+  function noteSuccessfulPushForLocalBudget() {
+    normalizeDailyBudgetRollover();
+    runtime.localBudgetMeta.pushCount += 1;
+    if (runtime.localBudgetMeta.pushCount >= LOCAL_PUSH_HARD_LIMIT) {
+      runtime.localBudgetMeta.budgetDisabledUntilMs = nowMs() + LOCAL_PUSH_COOLDOWN_MS;
+    }
+    persistQuotaMeta();
+  }
+  async function digestSha256Hex(input) {
+    const encoder = new TextEncoder();
+    const buffer = encoder.encode(input);
+    const hash = await crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  async function deriveSyncNode(site, userId, secret) {
+    const canonical = `pr-sync-v1|${site}|${userId}|${secret}`;
+    const digest = await digestSha256Hex(canonical);
+    return `pr_sync_${digest}`;
+  }
+  function extractSecret(user) {
+    const overrides = asOverridesMap(user?.abTestOverrides);
+    const candidate = overrides ? overrides[SYNC_SECRET_KEY] : void 0;
+    if (typeof candidate !== "string") return null;
+    if (candidate.length < 16) return null;
+    return candidate;
+  }
+  function isAbTestOverridesPermissionError(error) {
+    if (!error || typeof error !== "object") return false;
+    const err = error;
+    const path = Array.isArray(err.path) ? err.path.join(".") : "";
+    const message = typeof err.message === "string" ? err.message.toLowerCase() : "";
+    const code = typeof err.extensions?.code === "string" ? err.extensions.code.toUpperCase() : "";
+    const pathMentionsOverrides = path === "currentUser.abTestOverrides" || path.includes("abTestOverrides");
+    const permissionLike = code === "FORBIDDEN" || code === "PERMISSION_DENIED" || message.includes("permission") || message.includes("forbidden") || message.includes("not authorized");
+    return pathMentionsOverrides && permissionLike;
+  }
+  async function fetchCurrentUserSnapshotWithDetails() {
+    const task = queryGraphQLResponse(
+      GET_CURRENT_USER,
+      {},
+      {
+        operationName: "GetCurrentUser",
+        timeout: 4e3
+      }
+    ).then((response) => {
+      const errors = response.errors || [];
+      const abTestOverridesPermissionDenied = errors.some((error) => isAbTestOverridesPermissionError(error));
+      if (errors.length > 0 && !abTestOverridesPermissionDenied) {
+        Logger.warn("sync current-user query returned GraphQL errors", errors);
+        return {
+          kind: "failed",
+          currentUser: null,
+          abTestOverridesPermissionDenied: false
+        };
+      }
+      return {
+        kind: "resolved",
+        currentUser: response.data?.currentUser || null,
+        abTestOverridesPermissionDenied
+      };
+    }).catch((error) => {
+      Logger.warn("sync current-user query failed", error);
+      return {
+        kind: "failed",
+        currentUser: null,
+        abTestOverridesPermissionDenied: false
+      };
+    });
+    const timeoutGate = new Promise((resolve) => {
+      window.setTimeout(() => resolve({
+        kind: "timeout",
+        currentUser: null,
+        abTestOverridesPermissionDenied: false
+      }), 1250);
+    });
+    return Promise.race([task, timeoutGate]);
+  }
+  async function fetchCurrentUserSnapshot() {
+    const result = await fetchCurrentUserSnapshotWithDetails();
+    if (result.kind === "timeout") return void 0;
+    if (result.kind === "failed") return null;
+    return result.currentUser;
+  }
+  function parseLockPayload(raw) {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed.token !== "string") return null;
+      if (!Number.isFinite(parsed.expiresAtMs)) return null;
+      return {
+        token: parsed.token,
+        expiresAtMs: parsed.expiresAtMs
+      };
+    } catch {
+      return null;
+    }
+  }
+  function tryAcquireLocalStorageLock(lockKey, token, ttlMs) {
+    if (!isLocalStorageUsable()) return false;
+    const current = parseLockPayload(readLocalStorageSafe(lockKey));
+    const now = nowMs();
+    if (current && current.expiresAtMs > now && current.token !== token) {
+      return false;
+    }
+    const payload = JSON.stringify({ token, expiresAtMs: now + ttlMs });
+    writeLocalStorageSafe(lockKey, payload);
+    const verify = parseLockPayload(readLocalStorageSafe(lockKey));
+    return !!verify && verify.token === token;
+  }
+  function releaseLocalStorageLock(lockKey, token) {
+    const current = parseLockPayload(readLocalStorageSafe(lockKey));
+    if (current && current.token === token) {
+      removeLocalStorageSafe(lockKey);
+    }
+  }
+  async function withBootstrapLock(site, userId, fn) {
+    const lockName = `pr-sync-lock-${site}-${userId}`;
+    if (typeof navigator !== "undefined" && navigator.locks && typeof navigator.locks.request === "function") {
+      try {
+        let entered = false;
+        const value = await navigator.locks.request(
+          lockName,
+          { mode: "exclusive", ifAvailable: true },
+          async (lock) => {
+            if (!lock) return void 0;
+            entered = true;
+            return fn();
+          }
+        );
+        return entered ? { acquired: true, value } : { acquired: false };
+      } catch (error) {
+        Logger.warn("sync bootstrap lock via navigator.locks failed; using localStorage fallback", error);
+      }
+    }
+    const token = safeRandomUuid();
+    const lockTtlMs = 9e3;
+    const acquired = tryAcquireLocalStorageLock(lockName, token, lockTtlMs);
+    if (!acquired && !isLocalStorageUsable()) {
+      const value = await fn();
+      return { acquired: true, value };
+    }
+    if (!acquired) return { acquired: false };
+    try {
+      const value = await fn();
+      return { acquired: true, value };
+    } finally {
+      releaseLocalStorageLock(lockName, token);
+    }
+  }
+  async function bootstrapSyncSecret(site, userId) {
+    const readAndExtract = async () => {
+      const user = await fetchCurrentUserSnapshot();
+      if (!user || user._id !== userId) return null;
+      return extractSecret(user);
+    };
+    const candidate = safeRandomUuid();
+    const bootstrapAttempt = await withBootstrapLock(site, userId, async () => {
+      const latestUser = await fetchCurrentUserSnapshot();
+      if (!latestUser || latestUser._id !== userId) {
+        return null;
+      }
+      const existing = extractSecret(latestUser);
+      if (existing) {
+        return existing;
+      }
+      const overrides = asOverridesMap(latestUser.abTestOverrides) || {};
+      const merged = { ...overrides, [SYNC_SECRET_KEY]: candidate };
+      let responseSecret;
+      try {
+        const mutationRes = await queryGraphQL(
+          UPDATE_SYNC_SECRET,
+          {
+            id: userId,
+            data: { abTestOverrides: merged }
+          },
+          {
+            operationName: "UpdateSyncSecret"
+          }
+        );
+        responseSecret = mutationRes?.updateUser?.data?.abTestOverrides?.[SYNC_SECRET_KEY];
+      } catch (error) {
+        Logger.warn("sync secret bootstrap mutation failed", error);
+        return null;
+      }
+      let adopted = typeof responseSecret === "string" && responseSecret.length >= 16 ? responseSecret : candidate;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const verifySecret = await readAndExtract();
+        if (verifySecret && verifySecret === adopted) {
+          return adopted;
+        }
+        if (verifySecret && verifySecret.length >= 16) {
+          adopted = verifySecret;
+          continue;
+        }
+        if (attempt < 2) {
+          await new Promise((resolve) => window.setTimeout(resolve, 180 + attempt * 160));
+        }
+      }
+      return null;
+    });
+    if (bootstrapAttempt.acquired) {
+      return bootstrapAttempt.value || null;
+    }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await new Promise((resolve) => window.setTimeout(resolve, 180 + attempt * 200));
+      const secret = await readAndExtract();
+      if (secret) return secret;
+    }
+    return null;
+  }
+  function applyLocalStateFromMerged(mergedRead, mergedLoadFrom, mergedAuthorEntries) {
+    let changed = false;
+    const currentRead = getReadState();
+    if (stableJson(currentRead) !== stableJson(mergedRead)) {
+      setReadState(mergedRead, { silent: true });
+      changed = true;
+    }
+    const nextLoadFrom = mergedLoadFrom || "";
+    if (getLoadFrom() !== nextLoadFrom) {
+      setLoadFrom(nextLoadFrom, { silent: true });
+      changed = true;
+    }
+    const nextPrefs = {};
+    for (const [key, value] of Object.entries(mergedAuthorEntries)) {
+      nextPrefs[key] = value.v;
+    }
+    const currentPrefs = getAuthorPreferences();
+    if (stableJson(currentPrefs) !== stableJson(nextPrefs)) {
+      setAuthorPreferences(nextPrefs, { silent: true });
+      changed = true;
+    }
+    return changed;
+  }
+  function compactAuthorPrefsIfNeeded(value) {
+    const entries = Object.entries(value);
+    if (entries.length <= AUTHOR_PREF_CAP) return value;
+    const toSortableUpdatedAtMs = (updatedAt) => {
+      const parsed = Date.parse(updatedAt);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const compareByAgeThenKey = (a, b) => {
+      const aMs = toSortableUpdatedAtMs(a[1].updatedAt);
+      const bMs = toSortableUpdatedAtMs(b[1].updatedAt);
+      if (aMs !== bMs) return aMs - bMs;
+      return a[0].localeCompare(b[0]);
+    };
+    const neutral = entries.filter(([, entry]) => entry.v === 0).sort(compareByAgeThenKey);
+    const nonNeutral = entries.filter(([, entry]) => entry.v !== 0).sort(compareByAgeThenKey);
+    const keep = [];
+    const dropCount = entries.length - AUTHOR_PREF_CAP;
+    const dropNeutral = Math.min(dropCount, neutral.length);
+    keep.push(...neutral.slice(dropNeutral));
+    const remainingDrop = dropCount - dropNeutral;
+    keep.push(...nonNeutral.slice(Math.min(remainingDrop, nonNeutral.length)));
+    const trimmed = {};
+    for (const [key, entry] of keep) {
+      trimmed[key] = entry;
+    }
+    return trimmed;
+  }
+  function mergeReadState(localRead, remoteRead, localEpoch, remoteEpoch) {
+    let clearEpoch = Math.max(localEpoch, remoteEpoch);
+    const merged = {};
+    const localAllowed = localEpoch === clearEpoch;
+    const remoteAllowed = remoteEpoch === clearEpoch;
+    if (remoteAllowed) {
+      for (const [id, v] of Object.entries(remoteRead)) {
+        if (v !== 1 || !dynamicReadKeyOk(id)) continue;
+        merged[id] = 1;
+      }
+    }
+    if (localAllowed) {
+      for (const [id, v] of Object.entries(localRead)) {
+        if (v !== 1 || !dynamicReadKeyOk(id)) continue;
+        merged[id] = 1;
+      }
+    }
+    const keys = Object.keys(merged);
+    if (keys.length > READ_CAP) {
+      clearEpoch += 1;
+      return { value: {}, clearEpoch, overflowCleared: true };
+    }
+    return { value: merged, clearEpoch, overflowCleared: false };
+  }
+  function mergeAuthorPrefs(localPrefs, remotePrefs, localClearEpoch, remoteClearEpoch, allowLocalMerge, writerId, timestampIso) {
+    const clearEpoch = Math.max(localClearEpoch, remoteClearEpoch);
+    const merged = {};
+    if (remoteClearEpoch === clearEpoch) {
+      for (const [key, entry] of Object.entries(remotePrefs)) {
+        if (!dynamicAuthorKeyOk(key)) continue;
+        merged[key] = entry;
+      }
+    }
+    if (allowLocalMerge && localClearEpoch === clearEpoch) {
+      for (const key of Object.keys(localPrefs)) {
+        if (!dynamicAuthorKeyOk(key)) continue;
+        const localRaw = localPrefs[key];
+        const localValue = localRaw === -1 || localRaw === 0 || localRaw === 1 ? localRaw : 0;
+        const existing = merged[key];
+        if (existing && existing.v === localValue) continue;
+        merged[key] = {
+          v: localValue,
+          version: incrementSyncCounter(existing?.version || 0),
+          updatedAt: timestampIso,
+          updatedBy: writerId
+        };
+      }
+    }
+    return {
+      value: compactAuthorPrefsIfNeeded(merged),
+      clearEpoch
+    };
+  }
+  function buildEnvelopeFromMerged(remote, merged, now, writerId, site, serverAnchorIso) {
+    const remoteLoadFrom = normalizeLoadFromValue(remote.fields.loadFrom.value);
+    const mergedLoadFrom = normalizeLoadFromValue(merged.loadFromValue);
+    const loadFromChanged = mergedLoadFrom !== remoteLoadFrom || merged.loadFromVersion !== remote.fields.loadFrom.version || merged.loadFromClearEpoch !== remote.fields.loadFrom.clearEpoch;
+    const readChanged = stableJson(remote.fields.read.value) !== stableJson(merged.read.value) || remote.fields.read.clearEpoch !== merged.read.clearEpoch;
+    const authorChanged = stableJson(remote.fields.authorPrefs.value) !== stableJson(merged.authorPrefs.value) || remote.fields.authorPrefs.clearEpoch !== merged.authorPrefs.clearEpoch;
+    return {
+      schemaVersion: 1,
+      site,
+      lastPushedBy: writerId,
+      lastPushedAt: serverAnchorIso || now,
+      expiresAt: computeExpiresAt(serverAnchorIso || now),
+      fields: {
+        read: {
+          updatedAt: readChanged ? now : remote.fields.read.updatedAt,
+          updatedBy: readChanged ? writerId : remote.fields.read.updatedBy,
+          clearEpoch: merged.read.clearEpoch,
+          value: merged.read.value
+        },
+        loadFrom: {
+          updatedAt: loadFromChanged ? now : remote.fields.loadFrom.updatedAt,
+          updatedBy: loadFromChanged ? writerId : remote.fields.loadFrom.updatedBy,
+          version: merged.loadFromVersion,
+          clearEpoch: merged.loadFromClearEpoch,
+          ...mergedLoadFrom ? { value: mergedLoadFrom } : {}
+        },
+        authorPrefs: {
+          updatedAt: authorChanged ? now : remote.fields.authorPrefs.updatedAt,
+          updatedBy: authorChanged ? writerId : remote.fields.authorPrefs.updatedBy,
+          clearEpoch: merged.authorPrefs.clearEpoch,
+          value: merged.authorPrefs.value
+        }
+      }
+    };
+  }
+  function buildMergedState(remoteEnvelope) {
+    const localRead = getReadState();
+    const localLoadFrom = normalizeLoadFromValue(getLoadFrom());
+    const localAuthorPrefs = getAuthorPreferences();
+    const mergedRead = mergeReadState(
+      localRead,
+      remoteEnvelope.fields.read.value,
+      runtime.meta.readClearEpoch,
+      remoteEnvelope.fields.read.clearEpoch
+    );
+    if (mergedRead.overflowCleared) {
+      runtime.readOverflowNoticeUntilMs = nowMs() + READ_OVERFLOW_NOTICE_MS;
+    }
+    if (mergedRead.clearEpoch > runtime.meta.readClearEpoch && mergedRead.clearEpoch > remoteEnvelope.fields.read.clearEpoch) {
+      setDirty("read");
+    }
+    const mergedLoadClearEpoch = Math.max(runtime.meta.loadFrom.clearEpoch, remoteEnvelope.fields.loadFrom.clearEpoch);
+    const canUseLocalLoad = runtime.meta.loadFrom.clearEpoch === mergedLoadClearEpoch;
+    const canUseRemoteLoad = remoteEnvelope.fields.loadFrom.clearEpoch === mergedLoadClearEpoch;
+    const remoteLoadValue = canUseRemoteLoad ? remoteEnvelope.fields.loadFrom.value : void 0;
+    const loadFromValue = resolveLoadFrom(
+      canUseLocalLoad ? localLoadFrom : void 0,
+      remoteLoadValue
+    );
+    let loadFromVersion = Math.max(runtime.meta.loadFrom.version, remoteEnvelope.fields.loadFrom.version);
+    const normalizedRemoteLoad = normalizeLoadFromValue(remoteEnvelope.fields.loadFrom.value);
+    if (runtime.meta.dirty.loadFrom && loadFromValue !== normalizedRemoteLoad) {
+      loadFromVersion = incrementSyncCounter(loadFromVersion);
+    }
+    const mergedAuthor = mergeAuthorPrefs(
+      localAuthorPrefs,
+      remoteEnvelope.fields.authorPrefs.value,
+      runtime.meta.authorPrefsClearEpoch,
+      remoteEnvelope.fields.authorPrefs.clearEpoch,
+      runtime.meta.dirty.authorPrefs,
+      runtime.writerId,
+      nowIso()
+    );
+    return {
+      mergedRead: mergedRead.value,
+      mergedReadEpoch: mergedRead.clearEpoch,
+      mergedLoadFrom: loadFromValue,
+      mergedLoadVersion: loadFromVersion,
+      mergedLoadClearEpoch,
+      mergedAuthorEntries: mergedAuthor.value,
+      mergedAuthorEpoch: mergedAuthor.clearEpoch
+    };
+  }
+  function loadRemoteOrDefault(remoteResult) {
+    if (remoteResult.kind === "ok" && remoteResult.envelope) {
+      return remoteResult.envelope;
+    }
+    const baseNow = nowIso();
+    return defaultEnvelope(runtime.site, runtime.writerId, baseNow, computeExpiresAt(baseNow));
+  }
+  async function writeWithCas(remoteResult, force, expectedResetGeneration) {
+    if (!runtime.config || !runtime.syncNode) return false;
+    if (runtime.readOnly || runtime.pushDisabled) return false;
+    if (!force && !hasAnyDirty()) return false;
+    if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) return false;
+    let readResult = remoteResult;
+    for (let attempt = 0; attempt <= CAS_RETRY_LIMIT; attempt++) {
+      const remoteEnvelope = loadRemoteOrDefault(readResult);
+      if (remoteEnvelope.schemaVersion !== 1) {
+        runtime.readOnly = true;
+        Logger.warn("sync read-only: unsupported remote schema");
+        return false;
+      }
+      const merged = buildMergedState(remoteEnvelope);
+      const envelopeToWrite = buildEnvelopeFromMerged(
+        remoteEnvelope,
+        {
+          read: { value: merged.mergedRead, clearEpoch: merged.mergedReadEpoch },
+          loadFromValue: merged.mergedLoadFrom,
+          loadFromVersion: merged.mergedLoadVersion,
+          loadFromClearEpoch: merged.mergedLoadClearEpoch,
+          authorPrefs: {
+            value: merged.mergedAuthorEntries,
+            clearEpoch: merged.mergedAuthorEpoch
+          }
+        },
+        nowIso(),
+        runtime.writerId,
+        runtime.site,
+        runtime.lastServerAnchorIso
+      );
+      if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) {
+        return false;
+      }
+      if (readResult.kind === "ok" && !readResult.updateTime) {
+        if (attempt >= CAS_RETRY_LIMIT) {
+          Logger.warn("sync CAS update token missing after read; retries exhausted");
+          return false;
+        }
+        try {
+          readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+          continue;
+        } catch (readError) {
+          logBackendError("sync CAS token re-read failed", readError);
+          return false;
+        }
+      }
+      const commitOptions = readResult.kind === "missing" ? { createIfMissing: true } : { expectedUpdateTime: readResult.updateTime };
+      try {
+        const commitResult = await commitEnvelope(
+          runtime.config,
+          runtime.site,
+          runtime.syncNode,
+          envelopeToWrite,
+          commitOptions
+        );
+        runtime.updateTimeByNode.set(runtime.syncNode, commitResult.updateTime);
+        runtime.lastServerAnchorIso = commitResult.updateTime;
+        runtime.lastPushAtMs = nowMs();
+        runtime.connectivityBlocked = false;
+        if (runtime.userId) {
+          writeCrossTabMs(getCrossTabPushKey(runtime.site, runtime.userId), runtime.lastPushAtMs);
+        }
+        runtime.meta.readClearEpoch = merged.mergedReadEpoch;
+        runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
+        runtime.meta.loadFrom.version = merged.mergedLoadVersion;
+        runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
+        clearDirty();
+        clearQuotaIfRecovered();
+        noteSuccessfulPushForLocalBudget();
+        if (runtime.syncNode) {
+          runtime.meta.lastSyncNode = runtime.syncNode;
+        }
+        persistMeta();
+        return true;
+      } catch (error) {
+        classifyAndSetQuota(error);
+        runtime.connectivityBlocked = isConnectivityBlocked(error);
+        if (isCreateRace(error)) {
+          readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+          continue;
+        }
+        if (isUncertainWriteOutcome(error)) {
+          if (attempt >= CAS_RETRY_LIMIT) {
+            logBackendError("sync uncertain write retries exhausted", error);
+            return false;
+          }
+          await withRetryJitter(attempt);
+          try {
+            readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+            continue;
+          } catch (readError) {
+            logBackendError("sync uncertain write reconcile failed", readError);
+            return false;
+          }
+        }
+        if (isCasConflict(error)) {
+          if (attempt >= CAS_RETRY_LIMIT) {
+            logBackendError("sync CAS retries exhausted", error);
+            return false;
+          }
+          await withRetryJitter(attempt);
+          try {
+            readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+            continue;
+          } catch (readError) {
+            logBackendError("sync CAS re-read failed", readError);
+            return false;
+          }
+        }
+        if (isPermissionDenied(error)) {
+          runtime.pushDisabled = true;
+          logBackendError("sync push permission denied", error);
+          return false;
+        }
+        if (isInvalidArgument(error)) {
+          runtime.readOnly = true;
+          logBackendError("sync invalid envelope shape", error);
+          return false;
+        }
+        if (isQuotaExceeded(error)) {
+          if (runtime.userId) {
+            writeCrossTabMs(
+              getCrossTabQuotaKey(runtime.site, runtime.userId),
+              runtime.meta.quotaDisabledUntilMs || runtime.quotaDisabledUntilMs || 0
+            );
+          }
+          logBackendError("sync quota-limited", error);
+          return false;
+        }
+        logBackendError("sync commit failed", error);
+        return false;
+      }
+    }
+    return false;
+  }
+  async function performPullAndMerge() {
+    if (!runtime.config || !runtime.syncNode) return false;
+    if (typeof document !== "undefined" && document.hidden) return false;
+    if (shouldBlockForQuota()) return false;
+    if (runtime.pullInFlight) return false;
+    const pullGeneration = runtime.resetGeneration;
+    runtime.pullInFlight = true;
+    try {
+      const result = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+      if (runtime.resetGeneration !== pullGeneration) return false;
+      runtime.connectivityBlocked = false;
+      if (runtime.userId) {
+        const stamp = nowMs();
+        runtime.lastPullAtMs = stamp;
+        writeCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId), stamp);
+      }
+      if (result.kind === "missing") {
+        const fallbackProbeAllowed = !!runtime.userId && runtime.meta.lastUserId === runtime.userId;
+        if (!fallbackProbeAllowed && (runtime.meta.lastSyncNode || runtime.meta.pendingRemoteReset || runtime.meta.pendingRemoteResetAt || runtime.meta.pendingRemoteResetTargets)) {
+          clearFallbackAndResetPointers();
+          persistMeta();
+        }
+        if (fallbackProbeAllowed && runtime.meta.lastSyncNode && runtime.meta.lastSyncNode !== runtime.syncNode && !runtime.meta.pendingRemoteReset) {
+          try {
+            const fallback = await readEnvelope(runtime.config, runtime.site, runtime.meta.lastSyncNode);
+            if (runtime.resetGeneration !== pullGeneration) return false;
+            if (fallback.kind === "ok") {
+              Logger.info("sync fallback probe found historical node", { node: runtime.meta.lastSyncNode.slice(-8) });
+            }
+          } catch (error) {
+            logBackendError("sync fallback probe failed", error);
+          }
+        }
+        return true;
+      }
+      const remote = result.envelope;
+      if (remote.schemaVersion !== 1) {
+        runtime.readOnly = true;
+        Logger.warn("sync read-only due to remote schema");
+        return false;
+      }
+      if (runtime.resetGeneration !== pullGeneration) return false;
+      runtime.lastServerAnchorIso = result.updateTime || runtime.lastServerAnchorIso;
+      const merged = buildMergedState(remote);
+      runtime.meta.readClearEpoch = merged.mergedReadEpoch;
+      runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
+      runtime.meta.loadFrom.version = Math.max(runtime.meta.loadFrom.version, merged.mergedLoadVersion);
+      runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
+      const changed = applyLocalStateFromMerged(merged.mergedRead, merged.mergedLoadFrom, merged.mergedAuthorEntries);
+      if (runtime.startupDone && changed) {
+        runtime.lateSyncAppliedUntilMs = nowMs() + LATE_SYNC_NOTICE_MS;
+        Logger.info("Synced state applied");
+      }
+      if (runtime.syncNode) {
+        runtime.meta.lastSyncNode = runtime.syncNode;
+      }
+      persistMeta();
+      return true;
+    } catch (error) {
+      classifyAndSetQuota(error);
+      runtime.connectivityBlocked = isConnectivityBlocked(error);
+      if (error instanceof FirestoreBackendError && error.code === "INVALID_ENVELOPE") {
+        runtime.pushDisabled = true;
+      }
+      if (isPermissionDenied(error)) {
+        runtime.pushDisabled = true;
+        runtime.readOnly = true;
+      }
+      logBackendError("sync pull failed", error);
+      return false;
+    } finally {
+      runtime.pullInFlight = false;
+      if (runtime.pendingFlush && !runtime.flushInFlight) {
+        runtime.pendingFlush = false;
+        void flushIfNeeded(false);
+      }
+    }
+  }
+  async function flushIfNeeded(force) {
+    if (!runtime.active || !runtime.config || !runtime.syncNode || !runtime.userId) return;
+    if (runtime.flushInFlight) return;
+    if (!force && !hasAnyDirty()) return;
+    if (!force && typeof document !== "undefined" && document.hidden) return;
+    const flushGeneration = runtime.resetGeneration;
+    if (runtime.pullInFlight) {
+      runtime.pendingFlush = true;
+      return;
+    }
+    if (runtime.readOnly || runtime.pushDisabled) return;
+    if (shouldBlockForQuota()) return;
+    if (!force && shouldBlockForLocalBudget()) return;
+    const waitMs = computePushFloorWaitMs();
+    if (!force && waitMs > 0) {
+      scheduleFlush(waitMs, false);
+      return;
+    }
+    runtime.flushInFlight = true;
+    try {
+      const readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+      runtime.connectivityBlocked = false;
+      if (runtime.resetGeneration !== flushGeneration) return;
+      await writeWithCas(readResult, force, flushGeneration);
+    } catch (error) {
+      runtime.connectivityBlocked = isConnectivityBlocked(error);
+      if (error instanceof FirestoreBackendError && error.code === "INVALID_ENVELOPE") {
+        runtime.pushDisabled = true;
+      }
+      if (!isMissingDocumentError(error)) {
+        logBackendError("sync flush read failed", error);
+      }
+    } finally {
+      runtime.flushInFlight = false;
+    }
+  }
+  function scheduleFlush(delayMs = SYNC_DEBOUNCE_MS, enforceMaxWait = false) {
+    let targetDelayMs = Math.max(0, Math.floor(delayMs));
+    if (enforceMaxWait && runtime.firstDirtyAtMs !== null) {
+      const remainingMaxWait = runtime.firstDirtyAtMs + SYNC_MAX_WAIT_MS - nowMs();
+      targetDelayMs = Math.min(targetDelayMs, Math.max(0, remainingMaxWait));
+    }
+    if (runtime.flushTimer !== null) {
+      window.clearTimeout(runtime.flushTimer);
+    }
+    runtime.flushTimer = window.setTimeout(() => {
+      runtime.flushTimer = null;
+      void flushIfNeeded(false);
+    }, targetDelayMs);
+  }
+  async function onLocalFieldChanged(field) {
+    if (!runtime.active || runtime.readOnly) return;
+    setDirty(field);
+    if (hasOnlyReadDirty()) {
+      const floorWaitMs = computePushFloorWaitMs();
+      if (floorWaitMs > SYNC_DEBOUNCE_MS) {
+        scheduleFlush(floorWaitMs, false);
+        return;
+      }
+    }
+    scheduleFlush(SYNC_DEBOUNCE_MS, true);
+  }
+  function installListeners() {
+    if (runtime.listenerDisposer) return;
+    const disposeFieldListener = onSyncFieldChanged((field) => {
+      void onLocalFieldChanged(field);
+    });
+    const runPeriodicPull = async () => {
+      if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
+      const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_FALLBACK_STALE_MS;
+      if (gate > nowMs()) return;
+      await performPullAndMerge();
+      await flushIfNeeded(false);
+    };
+    const schedulePeriodicPull = () => {
+      if (runtime.periodicPullTimer !== null) {
+        window.clearTimeout(runtime.periodicPullTimer);
+      }
+      const delayMs = PULL_FALLBACK_BASE_MS + Math.floor(Math.random() * PULL_FALLBACK_JITTER_MS);
+      runtime.periodicPullTimer = window.setTimeout(() => {
+        runtime.periodicPullTimer = null;
+        void runPeriodicPull().finally(() => {
+          if (runtime.active) {
+            schedulePeriodicPull();
+          }
+        });
+      }, delayMs);
+    };
+    const focusListener = () => {
+      if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
+      const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
+      const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_THROTTLE_MS;
+      if (gate > nowMs()) return;
+      void performPullAndMerge().then(() => void flushIfNeeded(false));
+    };
+    const visibilityListener = () => {
+      if (!runtime.active) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        void flushIfNeeded(true);
+        return;
+      }
+      void performPullAndMerge().then(() => void flushIfNeeded(false));
+    };
+    window.addEventListener("focus", focusListener, { passive: true });
+    window.addEventListener("visibilitychange", visibilityListener, { passive: true });
+    schedulePeriodicPull();
+    runtime.listenerDisposer = () => {
+      disposeFieldListener();
+      window.removeEventListener("focus", focusListener);
+      window.removeEventListener("visibilitychange", visibilityListener);
+      if (runtime.periodicPullTimer !== null) {
+        window.clearTimeout(runtime.periodicPullTimer);
+        runtime.periodicPullTimer = null;
+      }
+    };
+  }
+  function normalizeDirtyAfterRecovery() {
+    if (runtime.meta.version !== 1) {
+      runtime.meta = createDefaultMeta();
+    }
+    const initialDirty = localDataExistsForFirstPush();
+    if (!runtime.meta.lastSyncNode && !runtime.meta.pendingRemoteReset && !hasAnyDirty(runtime.meta)) {
+      runtime.meta.dirty = initialDirty;
+    }
+    runtime.firstDirtyAtMs = hasAnyDirty(runtime.meta) ? nowMs() : null;
+  }
+  function clearLocalSyncableFieldsForUserSwitch() {
+    setReadState({}, { silent: true });
+    setLoadFrom("", { silent: true });
+    setAuthorPreferences({}, { silent: true });
+    clearFallbackAndResetPointers();
+    runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false };
+    runtime.firstDirtyAtMs = null;
+    runtime.meta.readClearEpoch = 0;
+    runtime.meta.loadFrom = { version: 0, clearEpoch: 0 };
+    runtime.meta.authorPrefsClearEpoch = 0;
+    runtime.readOverflowNoticeUntilMs = 0;
+    runtime.updateTimeByNode.clear();
+    persistMeta();
+  }
+  function clearFallbackAndResetPointers() {
+    runtime.meta.lastSyncNode = void 0;
+    runtime.meta.pendingRemoteReset = false;
+    runtime.meta.pendingRemoteResetAt = void 0;
+    runtime.meta.pendingRemoteResetTargets = void 0;
+  }
+  function markPendingRemoteReset(syncNode) {
+    runtime.meta.pendingRemoteReset = true;
+    runtime.meta.pendingRemoteResetAt = nowIso();
+    runtime.meta.pendingRemoteResetTargets = {
+      site: runtime.site,
+      syncNode: syncNode || void 0,
+      userId: runtime.userId || void 0,
+      readClearEpoch: runtime.meta.readClearEpoch,
+      loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch,
+      loadFromVersion: runtime.meta.loadFrom.version,
+      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch
+    };
+    runtime.meta.dirty.read = true;
+    runtime.meta.dirty.loadFrom = true;
+    runtime.meta.dirty.authorPrefs = true;
+    if (runtime.firstDirtyAtMs === null) {
+      runtime.firstDirtyAtMs = nowMs();
+    }
+    persistMeta();
+  }
+  function applyResetLocallyToTargets(targets) {
+    setReadState({}, { silent: true });
+    setLoadFrom("", { silent: true });
+    setAuthorPreferences({}, { silent: true });
+    runtime.meta.readClearEpoch = clampSyncCounter(targets.readClearEpoch, runtime.meta.readClearEpoch);
+    runtime.meta.loadFrom.clearEpoch = clampSyncCounter(targets.loadFromClearEpoch, runtime.meta.loadFrom.clearEpoch);
+    runtime.meta.loadFrom.version = clampSyncCounter(targets.loadFromVersion, runtime.meta.loadFrom.version);
+    runtime.meta.authorPrefsClearEpoch = clampSyncCounter(targets.authorPrefsClearEpoch, runtime.meta.authorPrefsClearEpoch);
+    runtime.meta.dirty.read = true;
+    runtime.meta.dirty.loadFrom = true;
+    runtime.meta.dirty.authorPrefs = true;
+    runtime.readOverflowNoticeUntilMs = 0;
+    if (runtime.firstDirtyAtMs === null) {
+      runtime.firstDirtyAtMs = nowMs();
+    }
+    persistMeta();
+  }
+  function applyResetLocallyAndBumpEpochs() {
+    applyResetLocallyToTargets({
+      readClearEpoch: runtime.meta.readClearEpoch + 1,
+      loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch + 1,
+      loadFromVersion: incrementSyncCounter(runtime.meta.loadFrom.version),
+      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch + 1
+    });
+  }
+  async function replayPendingResetIfNeeded() {
+    if (!runtime.meta.pendingRemoteReset) return;
+    if (!runtime.config || !runtime.syncNode) return;
+    try {
+      const remoteResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+      const remoteEnvelope = loadRemoteOrDefault(remoteResult);
+      const pendingTargets = runtime.meta.pendingRemoteResetTargets;
+      const targetReadClearEpoch = Math.max(
+        remoteEnvelope.fields.read.clearEpoch,
+        pendingTargets?.readClearEpoch ?? runtime.meta.readClearEpoch
+      );
+      const targetLoadFromClearEpoch = Math.max(
+        remoteEnvelope.fields.loadFrom.clearEpoch,
+        pendingTargets?.loadFromClearEpoch ?? runtime.meta.loadFrom.clearEpoch
+      );
+      const targetLoadFromVersion = Math.max(
+        remoteEnvelope.fields.loadFrom.version,
+        pendingTargets?.loadFromVersion ?? runtime.meta.loadFrom.version
+      );
+      const targetAuthorPrefsClearEpoch = Math.max(
+        remoteEnvelope.fields.authorPrefs.clearEpoch,
+        pendingTargets?.authorPrefsClearEpoch ?? runtime.meta.authorPrefsClearEpoch
+      );
+      runtime.meta.pendingRemoteResetTargets = {
+        site: runtime.site,
+        syncNode: runtime.syncNode,
+        userId: runtime.userId || void 0,
+        readClearEpoch: targetReadClearEpoch,
+        loadFromClearEpoch: targetLoadFromClearEpoch,
+        loadFromVersion: targetLoadFromVersion,
+        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch
+      };
+      applyResetLocallyToTargets({
+        readClearEpoch: targetReadClearEpoch,
+        loadFromClearEpoch: targetLoadFromClearEpoch,
+        loadFromVersion: targetLoadFromVersion,
+        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch
+      });
+      const wrote = await writeWithCas(remoteResult, true, runtime.resetGeneration);
+      if (wrote) {
+        runtime.meta.pendingRemoteReset = false;
+        runtime.meta.pendingRemoteResetAt = void 0;
+        runtime.meta.pendingRemoteResetTargets = void 0;
+        persistMeta();
+      }
+    } catch (error) {
+      logBackendError("sync pending reset replay failed", error);
+    }
+  }
+  async function runPersistenceResetFlow() {
+    runtime.site = computeSite();
+    runtime.meta = normalizeMeta(getSyncMeta());
+    runtime.localBudgetMeta = normalizeQuotaMeta(getSyncQuotaMeta());
+    runtime.config = getFirestoreBackendConfig();
+    const currentUserResult = await fetchCurrentUserSnapshotWithDetails();
+    runtime.identityPermissionDenied = currentUserResult.kind === "resolved" && currentUserResult.abTestOverridesPermissionDenied;
+    runtime.currentUser = currentUserResult.kind === "resolved" ? currentUserResult.currentUser : null;
+    runtime.userId = typeof runtime.currentUser?._id === "string" ? runtime.currentUser._id : null;
+    runtime.writerId = makeWriterId();
+    runtime.resetGeneration += 1;
+    applyResetLocallyAndBumpEpochs();
+    if (!runtime.userId || !runtime.config || runtime.identityPermissionDenied) {
+      runtime.secretUnavailable = runtime.identityPermissionDenied;
+      markPendingRemoteReset(null);
+      return;
+    }
+    let secret = extractSecret(runtime.currentUser);
+    if (!secret) {
+      secret = await bootstrapSyncSecret(runtime.site, runtime.userId);
+    }
+    if (!secret) {
+      runtime.secretUnavailable = true;
+      markPendingRemoteReset(null);
+      return;
+    }
+    runtime.secretUnavailable = false;
+    runtime.secret = secret;
+    runtime.syncNode = await deriveSyncNode(runtime.site, runtime.userId, secret);
+    markPendingRemoteReset(runtime.syncNode);
+    await replayPendingResetIfNeeded();
+  }
+  function canRunSync() {
+    if (!getSyncEnabled()) return false;
+    if (!runtime.config) return false;
+    return true;
+  }
+  async function startupEngine() {
+    if (!runtime.syncNode || !runtime.userId) return;
+    await replayPendingResetIfNeeded();
+    await performPullAndMerge();
+    if (hasAnyDirty()) {
+      await flushIfNeeded(false);
+    }
+  }
+  async function initPersistenceSync(options) {
+    const isTestMode = window.__PR_TEST_MODE__ === true;
+    if (isTestMode) {
+      runtime.active = false;
+      runtime.config = null;
+      runtime.currentUser = null;
+      runtime.userId = null;
+      runtime.syncNode = null;
+      runtime.secret = null;
+      runtime.secretUnavailable = false;
+      runtime.identityPermissionDenied = false;
+      runtime.connectivityBlocked = false;
+      runtime.localBudgetMeta = createDefaultQuotaMeta();
+      runtime.resetGeneration = 0;
+      runtime.startupDone = false;
+      runtime.startupTimedOut = false;
+      runtime.firstDirtyAtMs = null;
+      runtime.readOverflowNoticeUntilMs = 0;
+      return {
+        resetHandled: options.isResetRoute,
+
+currentUserSnapshot: void 0
+      };
+    }
+    runtime.site = computeSite();
+    runtime.meta = normalizeMeta(getSyncMeta());
+    runtime.config = getFirestoreBackendConfig();
+    runtime.active = false;
+    runtime.readOnly = false;
+    runtime.pushDisabled = false;
+    runtime.syncNode = null;
+    runtime.secret = null;
+    runtime.secretUnavailable = false;
+    runtime.identityPermissionDenied = false;
+    runtime.connectivityBlocked = false;
+    runtime.lateSyncAppliedUntilMs = 0;
+    runtime.resetGeneration = 0;
+    runtime.startupDone = false;
+    runtime.startupTimedOut = false;
+    runtime.readOverflowNoticeUntilMs = 0;
+    runtime.currentUser = null;
+    runtime.userId = null;
+    runtime.writerId = makeWriterId();
+    runtime.localBudgetMeta = normalizeQuotaMeta(getSyncQuotaMeta());
+    normalizeDailyBudgetRollover();
+    normalizeDirtyAfterRecovery();
+    persistMeta();
+    const currentUserResult = await fetchCurrentUserSnapshotWithDetails();
+    const identityResolved = currentUserResult.kind === "resolved";
+    const currentUserSnapshot = identityResolved ? currentUserResult.currentUser : void 0;
+    runtime.identityPermissionDenied = identityResolved && currentUserResult.abTestOverridesPermissionDenied;
+    runtime.currentUser = identityResolved ? currentUserResult.currentUser : null;
+    runtime.userId = identityResolved && typeof currentUserResult.currentUser?._id === "string" ? currentUserResult.currentUser._id : null;
+    if (options.isResetRoute) {
+      await runPersistenceResetFlow();
+      return {
+        resetHandled: true,
+        ...identityResolved ? { currentUserSnapshot } : {}
+      };
+    }
+    if (!identityResolved) {
+      runtime.active = false;
+      return {
+        resetHandled: false
+      };
+    }
+    if (!runtime.userId) {
+      runtime.active = false;
+      return {
+        resetHandled: false,
+        currentUserSnapshot
+      };
+    }
+    if (runtime.meta.lastUserId !== runtime.userId && (runtime.meta.lastSyncNode || runtime.meta.pendingRemoteReset || runtime.meta.pendingRemoteResetAt || runtime.meta.pendingRemoteResetTargets)) {
+      clearFallbackAndResetPointers();
+      persistMeta();
+    }
+    if (runtime.meta.lastUserId && runtime.meta.lastUserId !== runtime.userId) {
+      clearLocalSyncableFieldsForUserSwitch();
+    }
+    runtime.meta.lastUserId = runtime.userId;
+    persistMeta();
+    if (runtime.identityPermissionDenied) {
+      runtime.active = false;
+      runtime.secretUnavailable = true;
+      return {
+        resetHandled: false,
+        currentUserSnapshot
+      };
+    }
+    if (!canRunSync()) {
+      runtime.active = false;
+      return {
+        resetHandled: false,
+        currentUserSnapshot
+      };
+    }
+    let secret = extractSecret(runtime.currentUser);
+    if (!secret) {
+      secret = await bootstrapSyncSecret(runtime.site, runtime.userId);
+    }
+    if (!secret) {
+      runtime.active = false;
+      runtime.secretUnavailable = true;
+      if (runtime.meta.pendingRemoteReset) {
+        Logger.warn("sync reset pending: identity secret unavailable");
+      }
+      return {
+        resetHandled: false,
+        currentUserSnapshot
+      };
+    }
+    runtime.secret = secret;
+    runtime.secretUnavailable = false;
+    runtime.syncNode = await deriveSyncNode(runtime.site, runtime.userId, secret);
+    runtime.active = true;
+    installListeners();
+    const startup = startupEngine();
+    const startupOutcome = await Promise.race([
+      startup.then(() => "done"),
+      new Promise((resolve) => window.setTimeout(() => resolve("timeout"), SYNC_STARTUP_TIMEOUT_MS))
+    ]);
+    runtime.startupTimedOut = startupOutcome === "timeout";
+    if (runtime.startupTimedOut) {
+      void startup.finally(() => {
+        runtime.startupTimedOut = false;
+      });
+    }
+    runtime.startupDone = true;
+    return {
+      resetHandled: false,
+      currentUserSnapshot
+    };
+  }
+  function getSyncStatusLineText() {
+    const showReadOverflowNotice = runtime.readOverflowNoticeUntilMs > nowMs();
+    if (!getSyncEnabled()) return "Sync: off";
+    if (!runtime.config) return "Sync: unconfigured";
+    if (runtime.connectivityBlocked) return "Sync: blocked by userscript permissions/connectivity";
+    if (runtime.identityPermissionDenied) return "Sync: unavailable (identity permission)";
+    if (!runtime.userId) return "Sync: anonymous";
+    if (runtime.meta.pendingRemoteReset) {
+      if (runtime.secretUnavailable) {
+        return "Sync: reset pending (secret unavailable)";
+      }
+      return "Sync: reset pending";
+    }
+    if (runtime.secretUnavailable) return "Sync: unavailable";
+    if (runtime.meta.quotaMode === "quota_limited") {
+      const untilMs = runtime.meta.quotaDisabledUntilMs || runtime.quotaDisabledUntilMs || 0;
+      const remainingMin = Math.max(1, Math.ceil((untilMs - nowMs()) / 6e4));
+      return `Sync: quota-limited (retry in ${remainingMin}m)`;
+    }
+    if (runtime.startupTimedOut) return "Sync: syncing...";
+    if (isLocalBudgetLimitedNow() || runtime.localBudgetMeta.pushCount >= LOCAL_PUSH_SOFT_LIMIT) {
+      const untilMs = runtime.localBudgetMeta.budgetDisabledUntilMs || 0;
+      if (untilMs > nowMs()) {
+        const remainingMin = Math.max(1, Math.ceil((untilMs - nowMs()) / 6e4));
+        return `Sync: local budget-limited (retry in ${remainingMin}m)`;
+      }
+      return "Sync: local budget-limited";
+    }
+    if (runtime.lateSyncAppliedUntilMs > nowMs()) return "Sync: synced state applied";
+    if (runtime.readOnly) return "Sync: read-only";
+    if (runtime.pushDisabled) return "Sync: push-disabled";
+    if (!runtime.active) return "Sync: local-only";
+    if (hasAnyDirty()) {
+      return showReadOverflowNotice ? "Sync: syncing... (read overflow cleared)" : "Sync: syncing...";
+    }
+    if (showReadOverflowNotice) return "Sync: on (read overflow cleared)";
+    return "Sync: on";
+  }
+  function getPersistedSyncToggle() {
+    return getSyncEnabled();
+  }
+  function setPersistedSyncToggle(enabled) {
+    setSyncEnabled(enabled);
+  }
+  function getSyncDebugSnapshot() {
+    return {
+      active: runtime.active,
+      site: runtime.site,
+      userId: runtime.userId,
+      syncNodeSuffix: runtime.syncNode?.slice(-8),
+      readOnly: runtime.readOnly,
+      pushDisabled: runtime.pushDisabled,
+      pendingRemoteReset: runtime.meta.pendingRemoteReset,
+      pendingRemoteResetTargets: runtime.meta.pendingRemoteResetTargets,
+      dirty: runtime.meta.dirty,
+      lastSyncNodeSuffix: runtime.meta.lastSyncNode?.slice(-8),
+      lastServerAnchorIso: runtime.lastServerAnchorIso,
+      connectivityBlocked: runtime.connectivityBlocked,
+      secretUnavailable: runtime.secretUnavailable,
+      identityPermissionDenied: runtime.identityPermissionDenied,
+      startupTimedOut: runtime.startupTimedOut,
+      readOverflowNoticeUntilMs: runtime.readOverflowNoticeUntilMs,
+      localBudget: runtime.localBudgetMeta
+    };
+  }
+  function isConnectivityBlocked(error) {
+    return error instanceof FirestoreBackendError && (error.status === 0 || /timed out|network/i.test(error.message));
+  }
   const formatStatusDate = (iso) => {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return iso;
@@ -6229,7 +8287,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       stats
     };
   };
-  const renderHelpSection = (showHelp) => {
+  const renderHelpSection = (showHelp, syncEnabled) => {
     return `
     <details class="pr-help" ${showHelp ? "open" : ""} id="pr-help-section">
       <summary class="pr-help-header">
@@ -6321,6 +8379,13 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         <p>
           <button id="pr-export-state-btn" class="pr-debug-btn">Export State (Clipboard)</button>
           <button id="pr-reset-state-btn" class="pr-debug-btn">Reset State</button>
+          <button id="pr-copy-sync-debug-btn" class="pr-debug-btn">Copy Sync Debug Summary</button>
+        </p>
+        <p>
+          <label style="display: inline-flex; align-items: center; gap: 6px;">
+            <input type="checkbox" id="pr-sync-enabled-toggle" ${syncEnabled ? "checked" : ""} />
+            Sync enabled
+          </label>
         </p>
       </div>
     </details>
@@ -6340,19 +8405,22 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const startDate = loadFrom && loadFrom !== "__LOAD_RECENT__" ? formatStatusDate(loadFrom) : "?";
     const endDate = state2.initialBatchNewestDate ? formatStatusDate(state2.initialBatchNewestDate) : "now";
     const userLabel = state2.currentUsername ? `👤 ${state2.currentUsername}` : "👤 not logged in";
+    const syncLabel = getSyncStatusLineText();
+    const syncEnabled = getPersistedSyncToggle();
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.694"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.695"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
         · 💬 ${stats.totalComments} comments (${stats.unreadComments} new · ${stats.contextComments} context · ${stats.hiddenComments} hidden)
         · 📄 ${stats.visiblePosts} posts${stats.hiddenPosts > 0 ? ` (${stats.hiddenPosts} filtered)` : ""}
         · ${userLabel}
+        · ${syncLabel}
       </div>
     </div>
-    ${renderHelpSection(showHelp)}
+    ${renderHelpSection(showHelp, syncEnabled)}
   `;
     if (state2.moreCommentsAvailable) {
       html += `
@@ -6436,10 +8504,42 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       resetBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (confirm("Are you sure you want to reset all state (read status, author preferences)? This will reload the page.")) {
-          clearAllStorage();
-          window.location.href = "/reader";
+        if (confirm("Are you sure you want to reset all storage (reader state, sync metadata, and local settings)? This will reload the page.")) {
+          window.location.href = "/reader/reset";
         }
+      });
+    }
+    const copySyncBtn = document.getElementById("pr-copy-sync-debug-btn");
+    if (copySyncBtn) {
+      copySyncBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const payload = {
+          generatedAt: ( new Date()).toISOString(),
+          location: window.location.href,
+          statusLine: getSyncStatusLineText(),
+          syncEnabled: getPersistedSyncToggle(),
+          debug: getSyncDebugSnapshot()
+        };
+        const text = JSON.stringify(payload, null, 2);
+        if (navigator.clipboard) {
+          try {
+            await navigator.clipboard.writeText(text);
+            alert("Sync debug summary copied to clipboard.");
+            return;
+          } catch (error) {
+            Logger.warn("Failed to copy sync debug summary via clipboard API", error);
+          }
+        }
+        Logger.info("Sync debug summary:", text);
+        alert("Clipboard unavailable. Sync debug summary logged to console.");
+      });
+    }
+    const syncToggle = document.getElementById("pr-sync-enabled-toggle");
+    if (syncToggle) {
+      syncToggle.addEventListener("change", () => {
+        setPersistedSyncToggle(syncToggle.checked);
+        window.location.reload();
       });
     }
     const checkBtn = document.getElementById("pr-check-now-btn");
@@ -6453,7 +8553,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (changeBtn) {
       changeBtn.addEventListener("click", (e) => {
         e.preventDefault();
-        setLoadFrom("");
+        setLoadFromAndClearRead("");
         window.location.reload();
       });
     }
@@ -6490,7 +8590,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.694"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.695"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -9774,9 +11874,9 @@ getPromptPrefix: getAIStudioPrefix,
   const STORE_CONTEXTUAL = "contextual_cache";
   const CONTEXT_MAX_ENTRIES_PER_USER = 8e3;
   const CONTEXT_MAX_AGE_MS = 1e3 * 60 * 60 * 24 * 60;
-  const requestToPromise = (request) => new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+  const requestToPromise = (request2) => new Promise((resolve, reject) => {
+    request2.onsuccess = () => resolve(request2.result);
+    request2.onerror = () => reject(request2.error);
   });
   const transactionToPromise = (tx) => new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -9836,8 +11936,8 @@ getPromptPrefix: getAIStudioPrefix,
   };
   const openDB = () => {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = (event) => {
+      const request2 = indexedDB.open(DB_NAME, DB_VERSION);
+      request2.onupgradeneeded = (event) => {
         const db = event.target.result;
         if (!db.objectStoreNames.contains(STORE_ITEMS)) {
           const itemStore = db.createObjectStore(STORE_ITEMS, { keyPath: "_id" });
@@ -9855,8 +11955,8 @@ getPromptPrefix: getAIStudioPrefix,
           contextualStore.createIndex("lastAccessedAt", "lastAccessedAt", { unique: false });
         }
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+      request2.onsuccess = () => resolve(request2.result);
+      request2.onerror = () => reject(request2.error);
     });
   };
   const saveArchiveData = async (username, items, watermarks) => {
@@ -9883,20 +11983,20 @@ getPromptPrefix: getAIStudioPrefix,
     const db = await openDB();
     const metadata = await new Promise((resolve) => {
       const tx = db.transaction(STORE_METADATA, "readonly");
-      const request = tx.objectStore(STORE_METADATA).get(username);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => resolve(null);
+      const request2 = tx.objectStore(STORE_METADATA).get(username);
+      request2.onsuccess = () => resolve(request2.result);
+      request2.onerror = () => resolve(null);
     });
     const items = await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_ITEMS, "readonly");
       const index = tx.objectStore(STORE_ITEMS).index("username");
-      const request = index.getAll(IDBKeyRange.only(username));
-      request.onsuccess = () => {
-        const results = request.result;
+      const request2 = index.getAll(IDBKeyRange.only(username));
+      request2.onsuccess = () => {
+        const results = request2.result;
         results.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
         resolve(results);
       };
-      request.onerror = () => reject(request.error);
+      request2.onerror = () => reject(request2.error);
     });
     return {
       items,
@@ -10107,8 +12207,7 @@ getPromptPrefix: getAIStudioPrefix,
   const CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS = 2;
   const ARCHIVE_PARTIAL_QUERY_OPTIONS = {
     allowPartialData: true,
-    toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
-    operationName: "archive-sync"
+    toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i]
   };
   const isValidArchiveItem = (item) => {
     return !!item && typeof item._id === "string" && item._id.length > 0 && typeof item.postedAt === "string" && item.postedAt.length > 0;
@@ -10241,11 +12340,12 @@ getPromptPrefix: getAIStudioPrefix,
       try {
         console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
         const requestBatch = async (limit) => {
+          const operationName = key === "posts" ? "GetUserPosts" : "GetUserComments";
           const response = await queryGraphQL(query, {
             userId,
             limit,
             after: afterCursor
-          }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
+          }, { ...ARCHIVE_PARTIAL_QUERY_OPTIONS, operationName });
           return response[key]?.results || [];
         };
         let fetchLimitUsed = currentLimit;
@@ -10433,7 +12533,7 @@ getPromptPrefix: getAIStudioPrefix,
           response = await queryGraphQL(
             GET_COMMENTS_BY_IDS,
             { commentIds: chunk },
-            ARCHIVE_PARTIAL_QUERY_OPTIONS
+            { ...ARCHIVE_PARTIAL_QUERY_OPTIONS, operationName: "GetCommentsByIds" }
           );
           break;
         } catch (e) {
@@ -11963,7 +14063,7 @@ sortCanonicalItems() {
       });
       this.contextIndexSync = syncPromise;
     }
-    async runSearch(request) {
+    async runSearch(request2) {
       const requestSequence = ++this.requestSequence;
       this.docCount = this.authoredItems.length + this.contextItems.length;
       const syncTasks = [];
@@ -11972,10 +14072,10 @@ sortCanonicalItems() {
       if (syncTasks.length > 0) {
         await Promise.all(syncTasks);
         if (this.lastError) {
-          return this.createWorkerErrorResult(request, this.lastError);
+          return this.createWorkerErrorResult(request2, this.lastError);
         }
         if (requestSequence !== this.requestSequence) {
-          return this.createCancelledResult(request);
+          return this.createCancelledResult(request2);
         }
       }
       const requestId = randomRequestId();
@@ -11987,12 +14087,12 @@ sortCanonicalItems() {
         const response = await this.workerClient.runQuery({
           kind: "query.run",
           requestId,
-          query: request.query,
-          limit: request.limit,
-          sortMode: request.sortMode,
-          scopeParam: request.scopeParam,
-          budgetMs: request.budgetMs,
-          debugExplain: request.debugExplain,
+          query: request2.query,
+          limit: request2.limit,
+          sortMode: request2.sortMode,
+          scopeParam: request2.scopeParam,
+          budgetMs: request2.budgetMs,
+          debugExplain: request2.debugExplain,
           expectedIndexVersion: this.indexVersion
         });
         this.indexVersion = Math.max(this.indexVersion, response.indexVersion);
@@ -12007,7 +14107,7 @@ sortCanonicalItems() {
         const droppedIds = response.ids.length - ids.length;
         const total = Math.max(ids.length, response.total - droppedIds);
         let debugExplain;
-        if (request.debugExplain && response.debugExplain) {
+        if (request2.debugExplain && response.debugExplain) {
           const relevanceSignalsById = {};
           for (const id of ids) {
             const signals = response.debugExplain.relevanceSignalsById[id];
@@ -12028,10 +14128,10 @@ sortCanonicalItems() {
         };
       } catch (error) {
         if (error instanceof SearchQueryCancelledError) {
-          return this.createCancelledResult(request);
+          return this.createCancelledResult(request2);
         }
         this.lastError = error.message;
-        return this.createWorkerErrorResult(request, this.lastError);
+        return this.createWorkerErrorResult(request2, this.lastError);
       } finally {
         if (this.activeRequestId === requestId) {
           this.activeRequestId = null;
@@ -12059,13 +14159,13 @@ sortCanonicalItems() {
       }
       this.itemsById = map;
     }
-    createCancelledResult(request) {
+    createCancelledResult(request2) {
       return {
         ids: [],
         total: 0,
         items: [],
-        canonicalQuery: request.query,
-        resolvedScope: request.scopeParam ?? "authored",
+        canonicalQuery: request2.query,
+        resolvedScope: request2.scopeParam ?? "authored",
         diagnostics: {
           warnings: [],
           parseState: "valid",
@@ -12077,16 +14177,16 @@ sortCanonicalItems() {
           totalCandidatesBeforeLimit: 0,
           explain: ["cancelled-superseded"]
         },
-        ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
+        ...request2.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
       };
     }
-    createWorkerErrorResult(request, message) {
+    createWorkerErrorResult(request2, message) {
       return {
         ids: [],
         total: 0,
         items: [],
-        canonicalQuery: request.query,
-        resolvedScope: request.scopeParam ?? "authored",
+        canonicalQuery: request2.query,
+        resolvedScope: request2.scopeParam ?? "authored",
         diagnostics: {
           warnings: [{
             type: "invalid-query",
@@ -12102,7 +14202,7 @@ sortCanonicalItems() {
           totalCandidatesBeforeLimit: 0,
           explain: ["worker-error"]
         },
-        ...request.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
+        ...request2.debugExplain ? { debugExplain: { relevanceSignalsById: {} } } : {}
       };
     }
   }
@@ -12905,7 +15005,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.694"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.695"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -14409,37 +16509,44 @@ sortCanonicalItems() {
     } catch (e) {
       Logger.error("Reaction initialization failed:", e);
     }
+    rebuildDocument();
     if (route.path === "reset") {
       Logger.info("Resetting storage...");
-      clearAllStorage();
+      clearAllStorage({ silent: true });
+    }
+    const syncInit = await initPersistenceSync({ isResetRoute: route.path === "reset" });
+    if (syncInit.resetHandled) {
       window.location.href = "/reader";
       return;
     }
-    rebuildDocument();
     const loadFrom = getLoadFrom();
     if (!loadFrom) {
       showSetupUI(handleStartReading);
       signalReady();
       return;
     }
-    await loadAndRender();
+    if (syncInit.currentUserSnapshot === void 0) {
+      await loadAndRender();
+    } else {
+      await loadAndRender(syncInit.currentUserSnapshot);
+    }
   };
   const handleStartReading = async (loadFromDate) => {
     if (loadFromDate) {
-      setLoadFrom(loadFromDate);
+      setLoadFromAndClearRead(loadFromDate);
     } else {
-      setLoadFrom("__LOAD_RECENT__");
+      setLoadFromAndClearRead("__LOAD_RECENT__");
     }
     await loadAndRender();
   };
-  const loadAndRender = async () => {
+  const loadAndRender = async (currentUserSnapshot) => {
     const root = getRoot();
     if (!root) return;
     const state2 = getState();
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.694"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.695"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
@@ -14449,7 +16556,7 @@ sortCanonicalItems() {
     };
     try {
       Logger.info("Loading data...");
-      const initialResult = await loadInitial();
+      const initialResult = await loadInitial(currentUserSnapshot);
       Logger.info("loadInitial complete");
       applyInitialLoad(state2, initialResult);
       if (state2.comments.length > 0) {

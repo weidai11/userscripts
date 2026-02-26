@@ -44,6 +44,7 @@ const state: PreviewState = {
 let lastScrollTime = 0;
 let lastMouseMoveTime = 0;
 let lastKnownMousePos = { x: -1, y: -1 };
+let lastIntentionalHoverStartTime = 0;
 
 let listenersAdded = false;
 
@@ -66,8 +67,11 @@ export function initPreviewSystem(): void {
   // Track scrolling to ignore scroll-induced hovers
   window.addEventListener('scroll', () => {
     lastScrollTime = Date.now();
-    // Dismiss any active or pending preview on scroll
-    dismissPreview();
+    // Dismiss only active preview on scroll. Pending hover timers should remain,
+    // otherwise browser auto-scroll during hover can cancel intentional previews.
+    if (state.activePreview) {
+      dismissPreview();
+    }
   }, { passive: true });
 
   listenersAdded = true;
@@ -89,8 +93,9 @@ function trackMousePos(e: MouseEvent): void {
 export function isIntentionalHover(): boolean {
   const now = Date.now();
 
-  // If we scrolled recently, it's NOT intentional (even if mousemove was also recent)
-  if (now - lastScrollTime < 300) {
+  // If we scrolled recently and there was no mouse move after that scroll, it's not intentional.
+  // This avoids suppressing legitimate hover right after auto-scroll or user scroll+move.
+  if (now - lastScrollTime < 300 && lastScrollTime >= lastMouseMoveTime) {
     return false;
   }
 
@@ -171,6 +176,67 @@ function isPointInRect(x: number, y: number, rect: DOMRect): boolean {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+function getTriggerHref(trigger: HTMLElement): string {
+  return trigger.getAttribute('href') || trigger.dataset.href || '';
+}
+
+function getTriggerContainerKey(trigger: HTMLElement): string {
+  const scoped = trigger.closest('[data-id], [data-post-id]');
+  if (!scoped) return '';
+  return scoped.getAttribute('data-id') || scoped.getAttribute('data-post-id') || '';
+}
+
+function isEquivalentPreviewTrigger(
+  originalTrigger: HTMLElement,
+  candidateTrigger: HTMLElement,
+  explicitHref?: string
+): boolean {
+  const targetHref = explicitHref || getTriggerHref(originalTrigger);
+  const candidateHref = getTriggerHref(candidateTrigger);
+  if (targetHref && candidateHref && targetHref === candidateHref) {
+    return true;
+  }
+
+  const originalAction = originalTrigger.dataset.action;
+  const candidateAction = candidateTrigger.dataset.action;
+  if (originalAction && candidateAction && originalAction === candidateAction) {
+    return true;
+  }
+
+  const originalId = originalTrigger.id;
+  const candidateId = candidateTrigger.id;
+  if (originalId && candidateId && originalId === candidateId) {
+    return true;
+  }
+
+  const originalContainerId = getTriggerContainerKey(originalTrigger);
+  const candidateContainerId = getTriggerContainerKey(candidateTrigger);
+  const originalText = (originalTrigger.textContent || '').trim();
+  const candidateText = (candidateTrigger.textContent || '').trim();
+  return !!(
+    originalContainerId &&
+    candidateContainerId &&
+    originalContainerId === candidateContainerId &&
+    originalText.length > 0 &&
+    originalText === candidateText
+  );
+}
+
+function recoverHoveredTrigger(trigger: HTMLElement, explicitHref?: string): HTMLElement | null {
+  if (lastKnownMousePos.x < 0 || lastKnownMousePos.y < 0) return null;
+  const elementAtPointer = document.elementFromPoint(lastKnownMousePos.x, lastKnownMousePos.y) as HTMLElement | null;
+  if (!elementAtPointer) return null;
+
+  let probe: HTMLElement | null = elementAtPointer;
+  while (probe && probe !== document.body) {
+    if (probe.matches(':hover') && isEquivalentPreviewTrigger(trigger, probe, explicitHref)) {
+      return probe;
+    }
+    probe = probe.parentElement;
+  }
+  return null;
+}
+
 /**
  * Cancel any pending hover timer
  */
@@ -188,6 +254,7 @@ export function cancelHoverTimeout(): void {
 export function dismissPreview(): void {
   Logger.debug('dismissPreview called');
   cancelHoverTimeout();
+  lastIntentionalHoverStartTime = 0;
 
   if (state.activePreview) {
     Logger.debug('dismissPreview: removing active preview');
@@ -264,6 +331,7 @@ export function setupHoverPreview(
     if (!isIntentionalHover()) {
       return;
     }
+    lastIntentionalHoverStartTime = Date.now();
 
     // Check visibility for preview skipping
     if (targets && targets.length > 0) {
@@ -284,20 +352,35 @@ export function setupHoverPreview(
 
     state.hoverTimeout = window.setTimeout(async () => {
       state.hoverTimeout = null;
+      const withinIntentWindow = Date.now() - lastIntentionalHoverStartTime <= (HOVER_DELAY + 300);
+      const stillIntentional = isIntentionalHover() || withinIntentWindow;
+      let effectiveTrigger = trigger;
+      if (!trigger.isConnected || !trigger.matches(':hover') || !stillIntentional) {
+        const recoveredTrigger = recoverHoveredTrigger(trigger, options.href);
+        const canUseStickyFallback =
+          !recoveredTrigger &&
+          trigger.isConnected &&
+          !!trigger.closest('.pr-sticky-header') &&
+          stillIntentional;
+        if ((!recoveredTrigger && !canUseStickyFallback) || !(isIntentionalHover() || withinIntentWindow)) {
+          return;
+        }
+        effectiveTrigger = recoveredTrigger || trigger;
+      }
       Logger.debug('Preview timer triggered for', options.type);
-      state.triggerRect = trigger.getBoundingClientRect();
-      state.currentTrigger = trigger;
+      state.triggerRect = effectiveTrigger.getBoundingClientRect();
+      state.currentTrigger = effectiveTrigger;
 
       // Store href for click handling
       if (options.href) {
-        trigger.dataset.href = options.href;
+        effectiveTrigger.dataset.href = options.href;
       }
 
       try {
         const content = await fetchContent();
 
         // Check if we were dismissed while fetching
-        if (state.currentTrigger !== trigger) {
+        if (state.currentTrigger !== effectiveTrigger) {
           Logger.debug('Preview aborted: trigger changed during fetch');
           return;
         }
@@ -312,6 +395,7 @@ export function setupHoverPreview(
 
   trigger.addEventListener('mouseleave', () => {
     Logger.debug('Preview mouseleave: trigger=', trigger.tagName, trigger.className);
+    lastIntentionalHoverStartTime = 0;
     if (state.hoverTimeout) {
       clearTimeout(state.hoverTimeout);
       state.hoverTimeout = null;
@@ -340,6 +424,9 @@ export function manualPreview(
 
   state.hoverTimeout = window.setTimeout(async () => {
     state.hoverTimeout = null;
+    if (!trigger.isConnected || !trigger.matches(':hover') || !isIntentionalHover()) {
+      return;
+    }
     Logger.debug('Manual Preview triggered');
     state.triggerRect = trigger.getBoundingClientRect();
     state.currentTrigger = trigger;

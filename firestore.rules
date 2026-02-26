@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function validSyncCounter(value) {
+      return value is int && value >= 0 && value <= 1000000000;
+    }
+
+    function validEpochMs(value) {
+      return value is int && value >= 0 && value <= 253402300799999;
+    }
+
+    function validSite(site) {
+      return site == 'lw' || site == 'eaf';
+    }
+
+    function validSyncNode(syncNode) {
+      return syncNode.matches('^pr_sync_[0-9a-f]{64}$');
+    }
+
+    function validWriterLabel(value) {
+      return value is string && value.size() > 0 && value.size() <= 128;
+    }
+
+    function validBoundedTtl(expiresAt) {
+      return expiresAt is timestamp &&
+        expiresAt > request.time &&
+        expiresAt < request.time + duration.value(15638400, 's');
+    }
+
+    function validReadField(readField) {
+      return readField is map &&
+        readField.keys().hasAll(['updatedAt', 'updatedBy', 'clearEpoch', 'value']) &&
+        readField.keys().hasOnly(['updatedAt', 'updatedBy', 'clearEpoch', 'value']) &&
+        readField.updatedAt is timestamp &&
+        validWriterLabel(readField.updatedBy) &&
+        validSyncCounter(readField.clearEpoch) &&
+        readField.value is map &&
+        readField.value.size() <= 10000;
+      // Firestore rules cannot safely iterate dynamic map entries; entry-level
+      // key/value validation is enforced by client decode + merge guards.
+    }
+
+    function validLoadFromField(loadFromField) {
+      return loadFromField is map &&
+        loadFromField.keys().hasAll(['updatedAt', 'updatedBy', 'version', 'clearEpoch']) &&
+        loadFromField.keys().hasOnly(['updatedAt', 'updatedBy', 'version', 'clearEpoch', 'value']) &&
+        loadFromField.updatedAt is timestamp &&
+        validWriterLabel(loadFromField.updatedBy) &&
+        validSyncCounter(loadFromField.version) &&
+        validSyncCounter(loadFromField.clearEpoch) &&
+        (
+          !('value' in loadFromField) ||
+          (
+            loadFromField.value is string &&
+            loadFromField.value.size() <= 40 &&
+            (
+              loadFromField.value == '__LOAD_RECENT__' ||
+              loadFromField.value.matches('^\\d{4}-\\d{2}-\\d{2}T.*$')
+            )
+          )
+        );
+    }
+
+    function validAuthorPrefsField(authorPrefsField) {
+      return authorPrefsField is map &&
+        authorPrefsField.keys().hasAll(['updatedAt', 'updatedBy', 'clearEpoch', 'value']) &&
+        authorPrefsField.keys().hasOnly(['updatedAt', 'updatedBy', 'clearEpoch', 'value']) &&
+        authorPrefsField.updatedAt is timestamp &&
+        validWriterLabel(authorPrefsField.updatedBy) &&
+        validSyncCounter(authorPrefsField.clearEpoch) &&
+        authorPrefsField.value is map &&
+        authorPrefsField.value.size() <= 1000;
+      // Firestore rules cannot safely iterate dynamic map entries; entry-level
+      // key/value validation is enforced by client decode + merge guards.
+    }
+
+    function validEnvelope(data) {
+      return data.keys().hasOnly(['schemaVersion', 'site', 'lastPushedBy', 'lastPushedAt', 'lastPushedAtMs', 'expiresAt', 'fields']) &&
+        data.schemaVersion == 1 &&
+        validSite(data.site) &&
+        validWriterLabel(data.lastPushedBy) &&
+        data.lastPushedAt is timestamp &&
+        (!('lastPushedAtMs' in data) || validEpochMs(data.lastPushedAtMs)) &&
+        validBoundedTtl(data.expiresAt) &&
+        data.fields is map &&
+        data.fields.keys().hasOnly(['read', 'loadFrom', 'authorPrefs']) &&
+        validReadField(data.fields.read) &&
+        validLoadFromField(data.fields.loadFrom) &&
+        validAuthorPrefsField(data.fields.authorPrefs);
+    }
+
+    match /pr_sync_v1/{site}/nodes/{syncNode} {
+      allow get: if validSite(site) && validSyncNode(syncNode);
+      allow create, update: if validSite(site) && validSyncNode(syncNode) && validEnvelope(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

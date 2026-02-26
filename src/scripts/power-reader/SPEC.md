@@ -1,4 +1,4 @@
-# LW Power Reader - Detailed Specification
+﻿# LW Power Reader - Detailed Specification
 
 ## Overview
 
@@ -15,7 +15,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 
 **Route Behavior:**
 - **[PR-URL-04]** `/reader` - If `loadFrom` is set, load comments from that date. If empty, show setup UI.
-- **[PR-URL-05]** `/reader/reset` - Clear all persisted state (read dict, loadFrom, author prefs) and redirect to `/reader` to show setup UI.
+- **[PR-URL-05]** `/reader/reset` - Clear all local persisted state (reader state plus sync metadata/settings), then run reset-route sync replay and redirect to `/reader`.
 
 ---
 
@@ -41,6 +41,110 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-DATA-04]** **UI Fallbacks**: Rendering components MUST handle missing or null field values (like `pageUrl`) gracefully, providing sensible fallbacks (e.g., `'#'` for links) to prevent UI crashes or broken interactions when the server fails to resolve specific fields.
 - **[PR-DATA-05]** **Cross-Site Query Compatibility**: Queries are written in the modern `selector`/top-level-args syntax (for codegen type safety on LW). A runtime adapter in the GraphQL client automatically rewrites them to the legacy `input`/`terms` syntax when running on EA Forum. Every query using `selector` MUST be registered in `LEGACY_ADAPTERS` (`src/shared/graphql/legacyAdapter.ts`) so it works on EAF.
 
+### Reader Persistence Sync (Firestore)
+
+- **[PR-SYNC-01]** Sync defaults to enabled for authenticated users and is scoped per site (`lw`/`eaf`) so data never cross-pollinates between forums.
+- **[PR-SYNC-02]** Sync identity is derived from `currentUser._id` plus `currentUser.abTestOverrides.pr_sync_secret_v1`; when missing, the script bootstraps the secret via `updateUser`.
+- **[PR-SYNC-02.1]** Security posture for v3 is an accepted convenience tradeoff: `abTestOverrides` is treated as a capability-token store for low-sensitivity sync state, not a hardened secret vault. If the forum session, page JS context, privileged forum tooling, or browser extension environment is compromised, sync node derivation and remote sync state can be compromised too.
+- **[PR-SYNC-03]** Remote state is stored in Firestore at `pr_sync_v1/{site}/nodes/{syncNode}` using REST `documents:commit` with single-write CAS preconditions (`exists=false` or `updateTime`).
+- **[PR-SYNC-04]** Synced subset in v3: `read`, `loadFrom`, and `authorPrefs`, including clear-epoch barriers for durable reset/overflow clears across devices.
+- **[PR-SYNC-05]** `/reader/reset` clears local syncable fields immediately and attempts an authoritative remote clear; if identity/secret is unavailable, a pending-reset marker is persisted for replay.
+
+#### Persistence Plan v3 Requirement IDs (`PR-PERSIST-*`)
+- PR-PERSIST-01: deterministic sync node derivation
+- PR-PERSIST-02: external KV storage (Firestore document backend)
+- [PR-PERSIST-03]: site-scoped sync
+- [PR-PERSIST-04]: startup hydrate before setup gate
+- [PR-PERSIST-05]: reset clears local state + writes remote cleared envelope
+- [PR-PERSIST-06]: synced fields (`read`, `loadFrom`, `authorPrefs`)
+- [PR-PERSIST-07]: anonymous/missing-identity guard
+- PR-PERSIST-08: loadFrom override logging
+- PR-PERSIST-09: Firestore conflict handling (failed `updateTime` precondition path)
+- PR-PERSIST-10: `setLoadFrom` pure + explicit clear helper semantics
+- PR-PERSIST-11: identity fallback uses user-gated `lastSyncNode` probe for diagnostics only (no copy-forward writes)
+- PR-PERSIST-12: unknown-higher-schema read-only mode (including mid-CAS-retry re-read detection)
+- PR-PERSIST-13: strict envelope validation / corruption handling (invalid remote => local-only push-disabled session mode, reset still allowed)
+- [PR-PERSIST-14]: read-only throttling (default 45s, allowed 30-60s)
+- [PR-PERSIST-15]: one-time sync-secret bootstrap and verification in `abTestOverrides`
+- PR-PERSIST-16: late startup sync apply with visible non-blocking notice
+- [PR-PERSIST-17]: sync toggle (`power-reader-sync-enabled`) UX + behavior
+- PR-PERSIST-18: export/import dirty-mark + sync interaction semantics
+- [PR-PERSIST-19]: read-overflow guard (local read clear + `read.clearEpoch` propagation)
+- PR-PERSIST-20: authorPrefs overflow compaction (oldest `v:0` first, then oldest overall if required)
+- PR-PERSIST-21: pull-on-focus + fallback periodic pull with cross-tab coalescing, with flush deferral while pull is in-flight
+- PR-PERSIST-22: clear-epoch barriers for `read`, `loadFrom`, `authorPrefs`
+- [PR-PERSIST-23]: dirty-gated authorPrefs merge on write plus deterministic loadFrom merge resolution
+- [PR-PERSIST-24]: identity permission fail-closed (no retry storms)
+- [PR-PERSIST-25]: reset uses CAS loop and monotonic clear-epoch advancement under conflict
+- PR-PERSIST-26: conflict coalescing/backoff for repeated `updateTime` precondition failures
+- [PR-PERSIST-27]: Firestore rules enforce structure/caps while client validation enforces dynamic-leaf value shapes
+- PR-PERSIST-28: `loadFrom.version` lifecycle (init/increment/reset semantics)
+- PR-PERSIST-29: Firestore server-time diagnostics path supports optional `lastPushedAtMs`
+- PR-PERSIST-30: reset-failure durability via persisted barriers + `pendingRemoteReset`
+- PR-PERSIST-31: post-merge cap enforcement on all write paths (including CAS retries)
+- PR-PERSIST-32: optional `loadFrom.value` validation support for clear-barrier-only states
+- PR-PERSIST-33: `lastSyncNode` persisted only after secret finalization and confirmed current-node validity
+- [PR-PERSIST-34]: fallback-node probe is user-gated (`lastUserId` match) and blocked while `pendingRemoteReset` is active
+- [PR-PERSIST-35]: user-switch clears fallback/reset pointers (`lastSyncNode`, `pendingRemoteReset`, `pendingRemoteResetAt`, `pendingRemoteResetTargets`) and runtime CAS cache
+- PR-PERSIST-36: Firestore rules allow only exact doc-path get/create/update; `list` denied
+- PR-PERSIST-37: top-level allowlists in Firestore rules with client-side dynamic-entry validation fallback
+- [PR-PERSIST-38]: optional `lastPushedAtMs` acceptance in schema + rules
+- PR-PERSIST-39: idempotent pending-reset replay via stored target clear epochs
+- PR-PERSIST-40: `loadFrom.value` null-normalized-to-absent and bounded sentinel/ISO validation
+- PR-PERSIST-41: required-child enforcement for `read`, `loadFrom`, `authorPrefs` objects in Firestore rules
+- PR-PERSIST-42: delete unsupported in v3 Firestore rules (reset writes cleared envelope)
+- PR-PERSIST-43: sync node derivation uses lowercase hex encoding
+- [PR-PERSIST-44]: Firestore document path contract (`pr_sync_v1/{site}/nodes/{syncNode}`)
+- PR-PERSIST-45: concurrency via Firestore REST `currentDocument.updateTime` precondition
+- PR-PERSIST-46: Firestore rules enforce `read.value.size <= 10000` and `authorPrefs.value.size <= 1000`
+- PR-PERSIST-47: deny Firestore `list` to prevent parent enumeration
+- PR-PERSIST-48: required TTL retention via bounded `expiresAt` policy
+- PR-PERSIST-49: no client quota introspection; quota handling is error-driven (`429`/`RESOURCE_EXHAUSTED`)
+- PR-PERSIST-50: quota-limited circuit breaker persists cooldown and probe schedule
+- PR-PERSIST-51: quota-limited mode preserves dirty state and pending reset barriers (no data loss)
+- PR-PERSIST-52: cross-tab quota cooldown coordination via shared retry timestamp key
+- PR-PERSIST-53: per-user/day local push self-budget with soft/hard thresholds
+- PR-PERSIST-54: hidden/idle gating suspends non-critical sync activity
+- PR-PERSIST-55: post-recovery ramp-up avoids immediate full-rate burst
+- [PR-PERSIST-56]: UI exposes quota-limited and local-budget-limited states with retry ETA
+- PR-PERSIST-57: Firestore Emulator integration suite validates REST path end-to-end without production dependencies
+- PR-PERSIST-58: Emulator tests validate deployed rules behavior (path constraints, `list` deny, schema/map-size enforcement)
+- PR-PERSIST-59: Emulator tests validate `currentDocument.updateTime` CAS precondition conflict/retry behavior
+- PR-PERSIST-60: Integration tests enforce emulator-only endpoints (fail closed on production Firestore host)
+- PR-PERSIST-61: write protocol uses single-write `documents:commit` payloads only
+- PR-PERSIST-62: create-if-missing uses `exists=false` precondition with raced-creator re-read fallback
+- PR-PERSIST-63: bootstrap lock uses ownership token + expiry and stale-lock reclaim
+- PR-PERSIST-64: bootstrap lock prefers `navigator.locks` with localStorage fallback
+- PR-PERSIST-65: pending reset replay is prioritized over late pull-apply when reset is unresolved
+- PR-PERSIST-66: startup recovery marks syncable fields dirty when local sync meta is missing/invalid/inconsistent
+- PR-PERSIST-67: Firestore index overrides disable indexing for large dynamic maps (`fields.read.value`, `fields.authorPrefs.value`)
+- PR-PERSIST-68: incident response path supports temporary write-disable and API-key/TTL operational controls
+- PR-PERSIST-69: `expiresAt` is required and bounded by rules (`request.time < expiresAt < request.time + 181d`, where 180d target + 1d skew headroom)
+- PR-PERSIST-70: Firestore REST writer uses explicit typed-value serialization/deserialization
+- PR-PERSIST-71: CAS conflict detection handles Firestore contention/precondition variants (not single-code only)
+- PR-PERSIST-72: REST requests use bounded timeout, malformed commit token responses are treated as uncertain outcomes, and in-flight state always clears in `finally`
+- PR-PERSIST-73: missing doc (`404 NOT_FOUND`) is treated as empty remote envelope
+- [PR-PERSIST-74]: non-reset write cadence enforces per-node minimum interval with dirty coalescing
+- PR-PERSIST-75: best-effort cross-tab push coalescing uses shared last-push timestamp key
+- PR-PERSIST-76: invalid remote envelope enters local-only push-disabled mode for session
+- PR-PERSIST-77: long-lived pending reset with missing secret surfaces stronger user-facing status hint
+- PR-PERSIST-78: CAS update token (`updateTime`) is treated as opaque exact server string (no parse/reformat)
+- [PR-PERSIST-79]: rules bound `clearEpoch`/`version` integers to sane upper limits and client validates bounds
+- [PR-PERSIST-80]: missing/blocked Firestore userscript connect permission surfaces explicit sync status hint
+- PR-PERSIST-81: reset CAS writes include fresh bounded `expiresAt` and standard diagnostics fields
+- PR-PERSIST-82: dynamic-key hygiene enforces local key length/charset bounds before merge/write
+- [PR-PERSIST-83]: envelope timestamps (`expiresAt`, diagnostics) prefer server-time anchors; client-time fallback is first-write-only
+- [PR-PERSIST-84]: backend decode tolerates malformed dynamic author-preference leaf entries without crashing sync startup
+- [PR-PERSIST-85]: sync counter increments (`loadFrom.version`, `authorPrefs.*.version`) are overflow-safe and clamp at configured max
+- [PR-PERSIST-86]: uncertain write outcomes reconcile via authoritative re-read before retry and preserve dirty state on failure
+- [PR-PERSIST-87]: Firestore runtime config is not exported on `window` globals and host parsing rejects invalid URL-style hosts
+- [PR-PERSIST-88]: deep stable-compare utility is order-insensitive for nested maps used in merge/diff checks
+- [PR-PERSIST-89]: device id normalization is bounded so writer labels remain Firestore-rule-safe
+- [PR-PERSIST-90]: GraphQL client forwards explicit `operationName` when provided in request options
+- [PR-PERSIST-91]: reset clear-all path removes sync metadata/settings keys in addition to reader field storage
+- [PR-PERSIST-92]: preview open timers must re-check hover intent and visibility before rendering the preview
+- [PR-PERSIST-93]: TTL anchor computation clamps stale server anchors and does not fall back to remote diagnostic timestamps
+
 ---
 
 ## Features
@@ -55,11 +159,11 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 | Processing | Unified Stream | Merges posts and comments into post-centric groups |
 
 **[PR-POST-01]** **Post Header Layout**:
-- **Author Preference Arrows**: `↓` / `↑` for quick liking/disliking of authors.
+- **Author Preference Arrows**: `â†“` / `â†‘` for quick liking/disliking of authors.
 - **Metadata**: Author name (clickable link to profile), timestamp (link to original post).
 - **Vote Controls**: Karma and agreement vote buttons (posts and comments).
 - **Action Buttons**: `[e]` (expand), `[a]` (load all), `[c]` (scroll to comments), `[n]` (next post).
-- **Structural Toggles**: `[−]` (collapse), `[+]` (expand).
+- **Structural Toggles**: `[âˆ’]` (collapse), `[+]` (expand).
 
 **Data Flow:**
 
@@ -135,7 +239,7 @@ Items are organized post-centrically:
 Comments under a post are organized hierarchically:
 
 **Collapse behavior:**
-- **[PR-NEST-01]** `[−]` button to **recursively collapse** an item and all its children. Collapsing any item MUST reveal a `[+]` (Expand) button, regardless of whether that item has children.
+- **[PR-NEST-01]** `[âˆ’]` button to **recursively collapse** an item and all its children. Collapsing any item MUST reveal a `[+]` (Expand) button, regardless of whether that item has children.
 - **[PR-NEST-02]** **Post Collapse**: Collapsing a post hides both the **post body** (`.pr-post-content`) and all associated **comments**.
 - **[PR-NEST-03]** Hover over `[+]` or a collapsed placeholder to preview content.
 - **[PR-NEST-05]** **Interactive Thread Lines**: The left border of comment replies (`.pr-replies`) acts as a recursive toggle. Clicking the indentation line (or its 24px hit area) toggles the `collapsed` state of the parent comment. The line MUST darken and show a subtle background highlight on hover to indicate interactivity.
@@ -197,8 +301,8 @@ Users can also mark authors as favored or disfavored:
 
 | Action | UI | Effect |
 |--------|-----|--------|
-| **[PR-AUTH-01]** Favor | Click `[↑]` next to author | Comments highlighted (e.g., green tint) |
-| **[PR-AUTH-02]** Disfavor | Click `[↓]` next to author | Comments de-emphasized or hidden |
+| **[PR-AUTH-01]** Favor | Click `[â†‘]` next to author | Comments highlighted (e.g., green tint) |
+| **[PR-AUTH-02]** Disfavor | Click `[â†“]` next to author | Comments de-emphasized or hidden |
 
 ### 7. Visual Indicators
 
@@ -263,6 +367,7 @@ The status line at the top of the reader provides a summary of the current sessi
 - **[PR-STATUS-03]** **Comment Breakdown**: Shows total comments loaded, with a breakdown of `new` (unread), `context` (read but shown for structure), and `hidden` (read/collapsed).
 - **[PR-STATUS-04]** **Post Count**: Shows the number of visible post groups and an indicator if any posts were filtered out (fully read).
 - **[PR-STATUS-05]** **Logged-in User**: Displays the username of the current authenticated user or a "not logged in" indicator.
+- **[PR-STATUS-06]** **Sync Status**: Displays current reader-sync mode (`on`, `off`, `local-only`, `syncing`, `quota-limited`, etc.) in the main status row.
 
 ---
 
@@ -289,7 +394,7 @@ The status line at the top of the reader provides a summary of the current sessi
 
 ### 12. Post Header Action Buttons
 
-Action buttons are displayed in the post header (both sticky and regular), positioned to the **left** of the existing collapse `[−]`/`[+]` buttons.
+Action buttons are displayed in the post header (both sticky and regular), positioned to the **left** of the existing collapse `[âˆ’]`/`[+]` buttons.
 
 **[PR-POSTBTN-01]** **Load/Expand Post Body** (`[e]`):
 - If the post body is **not yet loaded** (header-only post):
@@ -323,7 +428,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 *   **Disabled State**: Disabled if this is the last post in the current feed.
 *   **Tooltip**: "Scroll to next post" (active); "No more posts in current feed" (disabled).
 
-**[PR-POSTBTN-05]** **Collapse/Expand Post** (`[−]`/`[+]`):
+**[PR-POSTBTN-05]** **Collapse/Expand Post** (`[âˆ’]`/`[+]`):
 - Toggles the visibility of the post body and its comments.
 - **Sticky Header Override**: If clicked from the **sticky header**, this action also scrolls the viewport back to the original post header. Regular post header buttons do not trigger a scroll. This prevents the user from being stranded in an empty scroll area after collapsing a long thread.
 
@@ -334,7 +439,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 *   **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)".
 
 **Button Rendering:**
-*   Buttons appear in this order (left to right): `[g]` `[m]` `[e]` `[a]` `[c]` `[n]` ... `[−]`/`[+]`
+*   Buttons appear in this order (left to right): `[g]` `[m]` `[e]` `[a]` `[c]` `[n]` ... `[âˆ’]`/`[+]`
 *   Sticky header mirrors these buttons.
 *   Disabled buttons use low opacity and `cursor: not-allowed`.
 
@@ -342,7 +447,7 @@ Action buttons are displayed in the post header (both sticky and regular), posit
 
 ### 13. Comment Header Action Buttons
 
-Action buttons are displayed in the comment header's `.pr-comment-controls` span, positioned to the **left** of the existing `[−]`/`[+]`/`[^]` buttons.
+Action buttons are displayed in the comment header's `.pr-comment-controls` span, positioned to the **left** of the existing `[âˆ’]`/`[+]`/`[^]` buttons.
 
 **[PR-CMTBTN-01]** **Load Replies** (`[r]`):
 - Fetches all descendants of the current comment (replaces old "Load All Descendants").
@@ -367,10 +472,10 @@ Action buttons are displayed in the comment header's `.pr-comment-controls` span
 - **Tooltip**: "Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)".
 
 **Button Rendering:**
-- Buttons appear in this order: `[g]` `[m]` `[r]` `[t]` ... `[^]` `[−]` `[+]`
+- Buttons appear in this order: `[g]` `[m]` `[r]` `[t]` ... `[^]` `[âˆ’]` `[+]`
 - **Visibility Policy**: Action buttons MUST never be hidden, only disabled (with `cursor: not-allowed` and reduced opacity). Disabled buttons MUST have a tooltip explaining why they are disabled.
 - **Tooltips**: All buttons MUST have descriptive tooltips (e.g., "[t]" -> "Load parents and scroll to root").
-- **Author Controls**: `[↑]` / `[↓]` must have tooltips explaining they affect author preferences.
+- **Author Controls**: `[â†‘]` / `[â†“]` must have tooltips explaining they affect author preferences.
 
 **[PR-GQL-01]** **GET_POST_COMMENTS**: Fetch all comments for a post.
 ```graphql
@@ -474,8 +579,8 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 ### 18. Voting Buttons
 
 - **[PR-VOTE-01]** Two-axis voting (karma + agreement) for posts and comments.
-- **[PR-VOTE-02]** **Karma voting**: `[▲]` `[▼]` buttons.
-- **[PR-VOTE-03]** **Agreement voting**: `[✓]` `[✗]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
+- **[PR-VOTE-02]** **Karma voting**: `[â–²]` `[â–¼]` buttons.
+- **[PR-VOTE-03]** **Agreement voting**: `[âœ“]` `[âœ—]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
 - **[PR-VOTE-05]** If not logged in: Open login page in new tab.
 - **[PR-VOTE-06]** On EA Forum host, `agree` and `disagree` reaction chips must remain visible even when their counts are `0`.
@@ -512,7 +617,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ### 21. Author Preferences
 
-- **[PR-AUTH-05]** **Preference Controls**: `↓` / `↑` arrows in all comment and post headers.
+- **[PR-AUTH-05]** **Preference Controls**: `â†“` / `â†‘` arrows in all comment and post headers.
 - **[PR-AUTH-06]** **Persistence**: Preferences are saved locally via `GM_setValue`.
 - **[PR-AUTH-07]** **Global Update**: Toggling a preference for an author immediately updates **all** visible comments and posts by that author across the entire interface.
 - **[PR-AUTH-08]** **Visual Feedback**: Preferred authors are highlighted (pink meta header); disliked authors are auto-hidden (collapsed by default).
@@ -610,7 +715,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-24] Sort Stability Across Rerenders**: The active sort mode (including thread-specific group sorting) MUST persist and correctly apply when archive rerenders are triggered by UI state changes.
 - **[PR-UARCH-26] Post-Rerender Initialization**: UI hooks like link previews and post action buttons MUST be re-initialized after archive rerenders.
 - **[PR-UARCH-18] Large Dataset Safety**: When an archive contains > 10,000 items, the UI MUST show a confirmation dialog before rendering to protect browser performance. Once the user selects a render count (or "Render All"), this preference MUST persist across sorting, filtering, and view mode changes for the duration of the session.
-- **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`📂 Archive`) targeting `/archive?username=[slug-or-username]`.
+- **[PR-UARCH-13] Author Preview Integration**: Author hover previews include a direct archive link (`ðŸ“‚ Archive`) targeting `/archive?username=[slug-or-username]`.
 - **[PR-UARCH-19] ReaderState Identity Stability**: After archive rerenders (triggered by sort/filter changes or sync updates), event handlers bound to the ReaderState reference MUST continue to function correctly. The ReaderState object identity MUST be preserved across rerenders (mutated in place rather than replaced) to prevent stale references in event listener closures.
 - **[PR-UARCH-23] Authentication Context**: The archive `ReaderState` MUST be correctly populated with the `currentUserId` and `currentUsername` of the logged-in user to enable authenticated actions like voting and reactions within the archive view.
 - **[PR-UARCH-20] Thread Group Date Sorting**: In `thread` view, post groups are sorted based on the timestamp of the newest item within that group (post or comment).
@@ -662,5 +767,6 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @connect      forum.effectivealtruism.org
 // ==/UserScript==
 ```
+
 
 

@@ -21,7 +21,7 @@ test.describe('Power Reader State and Continuation', () => {
         let confirmed = false;
         page.on('dialog', async dialog => {
             confirmed = true;
-            expect(dialog.message()).toContain('Are you sure you want to reset all state');
+            expect(dialog.message()).toMatch(/Are you sure you want to reset all (state|storage)/);
             await dialog.dismiss();
         });
 

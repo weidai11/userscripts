@@ -14,7 +14,7 @@ test.describe('Power Reader Reset Route', () => {
         scriptContent = fs.readFileSync(scriptPath, 'utf8');
     });
 
-    test('[PR-URL-02][PR-URL-05] visiting /reader/reset clears storage and redirects', async ({ page }) => {
+    test('[PR-URL-02][PR-URL-05][PR-SYNC-05][PR-PERSIST-05] visiting /reader/reset clears storage and redirects', async ({ page }) => {
         // Single route handler to prevent live server hits
         await page.route('**/*', route => {
             const url = route.request().url();

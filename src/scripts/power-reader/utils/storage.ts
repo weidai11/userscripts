@@ -16,7 +16,20 @@ const STORAGE_KEYS = {
   AUTHOR_PREFS: 'power-reader-author-prefs',
   VIEW_WIDTH: 'power-reader-view-width',
   AI_STUDIO_PREFIX: 'power-reader-ai-studio-prefix',
+  SYNC_META: 'power-reader-sync-meta',
+  SYNC_ENABLED: 'power-reader-sync-enabled',
+  DEVICE_ID: 'power-reader-device-id',
+  SYNC_QUOTA_META: 'power-reader-sync-quota-meta',
 } as const;
+
+const DEVICE_ID_MIN_LENGTH = 8;
+const DEVICE_ID_MAX_LENGTH = 96;
+
+export type SyncableField = 'read' | 'loadFrom' | 'authorPrefs';
+
+interface StorageWriteOptions {
+  silent?: boolean;
+}
 
 /**
  * Get domain-specific storage key prefix
@@ -43,6 +56,25 @@ let cachedReadState: ReadState | null = null;
 let lastReadStateFetch: number = 0;
 let cachedLoadFrom: string | null = null;
 let lastLoadFromFetch: number = 0;
+const syncFieldListeners = new Set<(field: SyncableField) => void>();
+
+const notifySyncFieldChanged = (field: SyncableField, options?: StorageWriteOptions): void => {
+  if (options?.silent) return;
+  for (const listener of syncFieldListeners) {
+    try {
+      listener(field);
+    } catch (error) {
+      Logger.warn(`sync field listener failed for ${field}`, error);
+    }
+  }
+};
+
+export const onSyncFieldChanged = (listener: (field: SyncableField) => void): (() => void) => {
+  syncFieldListeners.add(listener);
+  return () => syncFieldListeners.delete(listener);
+};
+
+export const STORAGE_KEY_NAMES = STORAGE_KEYS;
 
 // Clear caches on module load if in test mode to prevent cross-test pollution
 if (typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__) {
@@ -75,10 +107,11 @@ export function getReadState(): ReadState {
 /**
  * Save read comment IDs
  */
-export function setReadState(state: ReadState): void {
+export function setReadState(state: ReadState, options: StorageWriteOptions = {}): void {
   cachedReadState = state;
   lastReadStateFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state));
+  notifySyncFieldChanged('read', options);
 }
 
 /**
@@ -135,10 +168,23 @@ export function getLoadFrom(): string {
 /**
  * Set the starting datetime for continuation (ISO 8601 string)
  */
-export function setLoadFrom(isoDatetime: string): void {
+export function setLoadFrom(isoDatetime: string, options: StorageWriteOptions = {}): void {
   cachedLoadFrom = isoDatetime;
   lastLoadFromFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
+  notifySyncFieldChanged('loadFrom', options);
+}
+
+/**
+ * Explicit reset/setup helper: set loadFrom and clear read state together.
+ * setLoadFrom() intentionally remains pure and does not clear read state.
+ */
+export function setLoadFromAndClearRead(
+  isoDatetime: string,
+  options: StorageWriteOptions = {}
+): void {
+  setReadState({}, options);
+  setLoadFrom(isoDatetime, options);
 }
 
 /**
@@ -156,8 +202,12 @@ export function getAuthorPreferences(): AuthorPreferences {
 /**
  * Save author preferences
  */
-export function setAuthorPreferences(prefs: AuthorPreferences): void {
+export function setAuthorPreferences(
+  prefs: AuthorPreferences,
+  options: StorageWriteOptions = {}
+): void {
   GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
+  notifySyncFieldChanged('authorPrefs', options);
 }
 
 /**
@@ -206,13 +256,32 @@ export function clearReadState(): void {
 }
 
 /**
- * Clear ALL storage (factory reset)
+ * Clear reader-only storage (read/loadFrom/authorPrefs/view width).
  */
-export function clearAllStorage(): void {
+export function clearReaderStorage(options: StorageWriteOptions = {}): void {
+  cachedReadState = null;
+  lastReadStateFetch = 0;
+  cachedLoadFrom = null;
+  lastLoadFromFetch = 0;
   GM_setValue(getKey(STORAGE_KEYS.READ), '{}');
   GM_setValue(getKey(STORAGE_KEYS.READ_FROM), '');
   GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), '{}');
   GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), '0');
+  notifySyncFieldChanged('read', options);
+  notifySyncFieldChanged('loadFrom', options);
+  notifySyncFieldChanged('authorPrefs', options);
+}
+
+/**
+ * Clear ALL storage (factory reset)
+ */
+export function clearAllStorage(options: StorageWriteOptions = {}): void {
+  clearReaderStorage(options);
+  GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), '');
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_META), '');
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), '');
+  GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), '');
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), '');
 }
 
 /**
@@ -242,6 +311,60 @@ export function getAIStudioPrefix(): string {
  */
 export function setAIStudioPrefix(prefix: string): void {
   GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
+}
+
+export function getSyncMeta<T = unknown>(): T | null {
+  const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_META), '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function setSyncMeta(value: unknown): void {
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_META), JSON.stringify(value));
+}
+
+export function getSyncEnabled(): boolean {
+  const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_ENABLED), '');
+  if (raw === '') return true;
+  return raw === '1';
+}
+
+export function setSyncEnabled(enabled: boolean): void {
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), enabled ? '1' : '0');
+}
+
+export function getSyncQuotaMeta<T = unknown>(): T | null {
+  const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function setSyncQuotaMeta(value: unknown): void {
+  GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), JSON.stringify(value));
+}
+
+export function getDeviceId(): string {
+  const key = getKey(STORAGE_KEYS.DEVICE_ID);
+  const existing = GM_getValue(key, '');
+  if (existing && typeof existing === 'string') {
+    const normalized = existing.trim();
+    if (normalized.length >= DEVICE_ID_MIN_LENGTH && normalized.length <= DEVICE_ID_MAX_LENGTH) {
+      return normalized;
+    }
+  }
+  const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  GM_setValue(key, generated);
+  return generated;
 }
 
 export async function exportState(): Promise<void> {

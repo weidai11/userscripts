@@ -32,8 +32,8 @@ test.describe('Smart Preview Positioning', () => {
             comments: [comment],
             currentUser: user,
             onGraphQL: `
-                if (query.includes('GetCommentsByIds') && variables.commentIds.includes('parent_id')) {
-                    return { data: { comments: { results: [${JSON.stringify(parent)}] } } };
+                if (query.includes('GetComment') && variables.id === 'parent_id') {
+                    return { data: { comment: { result: ${JSON.stringify(parent)} } } };
                 }
             `
         });
@@ -45,13 +45,7 @@ test.describe('Smart Preview Positioning', () => {
         const btn = page.locator('.pr-find-parent').first();
         await btn.waitFor();
 
-        // Natural hover
-        const box = await btn.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        }
-        // Dispatch mouseenter to satisfy the intentional-hover check
-        await btn.dispatchEvent('mouseenter');
+        await btn.hover();
 
         const preview = page.locator('.pr-preview-overlay');
         await expect(preview).toBeVisible();
@@ -91,8 +85,8 @@ test.describe('Smart Preview Positioning', () => {
             comments: [comment],
             currentUser: user,
             onGraphQL: `
-                if (query.includes('GetCommentsByIds') && variables.commentIds.includes('parent_id')) {
-                    return { data: { comments: { results: [${JSON.stringify(parent)}] } } };
+                if (query.includes('GetComment') && variables.id === 'parent_id') {
+                    return { data: { comment: { result: ${JSON.stringify(parent)} } } };
                 }
             `
         });
@@ -106,11 +100,7 @@ test.describe('Smart Preview Positioning', () => {
         const btn = page.locator('.pr-find-parent').first();
         await btn.waitFor();
 
-        const box = await btn.boundingBox();
-        if (box) {
-            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        }
-        await btn.dispatchEvent('mouseenter');
+        await btn.hover();
 
         const preview = page.locator('.pr-preview-overlay');
         await expect(preview).toBeVisible();

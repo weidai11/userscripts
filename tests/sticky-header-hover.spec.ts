@@ -87,14 +87,14 @@ test('[PR-STICKY-05] sticky header title triggers hover preview', async ({ page 
     const stickyHeader = page.locator('#pr-sticky-header');
     await expect(stickyHeader).toHaveClass(/visible/);
 
-    // Hover over the title in the sticky header (now a span, not a link)
-    const titleSpan = stickyHeader.locator('.pr-post-title');
-    const titleBox = await titleSpan.boundingBox();
+    // Hover over the sticky title container (preview listener is on h2)
+    const titleContainer = stickyHeader.locator('h2').first();
+    const titleBox = await titleContainer.boundingBox();
     if (titleBox) {
         await page.mouse.move(0, 0);
         await page.mouse.move(titleBox.x + titleBox.width / 2, titleBox.y + titleBox.height / 2);
-        await titleSpan.dispatchEvent('mouseenter');
     }
+    await titleContainer.hover();
 
     // The preview overlay should appear
     const preview = page.locator('.pr-preview-overlay');

@@ -8,6 +8,18 @@ export const GET_CURRENT_USER = /* GraphQL */ `
       slug
       karma
       reactPaletteStyle
+      abTestOverrides
+    }
+  }
+`;
+
+export const UPDATE_SYNC_SECRET = /* GraphQL */ `
+  mutation UpdateSyncSecret($id: String!, $data: UpdateUserDataInput!) {
+    updateUser(selector: { _id: $id }, data: $data) {
+      data {
+        _id
+        abTestOverrides
+      }
     }
   }
 `;

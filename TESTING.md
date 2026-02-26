@@ -51,6 +51,7 @@ We use **Playwright** to inject the compiled userscript into a headless browser 
 | **UI-Only** | `npx playwright test tests/power-reader.ui.spec.ts` | Tests interactive features like Picker Toggle, Read Marking, and Parent Nav. |
 | **Voting Logic** | `npx playwright test tests/voting.*` | Runs unit (`voting.unit.spec.ts`) and E2E (`voting.e2e.spec.ts`, uses mocked responses) voting tests. |
 | **Live API** | `npx playwright test tests/api-sanity.spec.ts` | **Hits real LessWrong API**. Comprehensively checks all GraphQL fields used by the power-reader. |
+| **Firestore Sync** | `npm run test:sync-emulator` | Validates Firestore security rules and CAS logic using a local emulator. |
 
 ### Test Suites Breakdown
 
@@ -102,7 +103,27 @@ All other tests MUST be 100% mocked using:
 
 ---
 
-## 3. Debugging & Logs
+## 4. Firestore Sync Integration Testing (Emulator)
+This suite (`tests/integration/firestore-sync/run.ts`) validates the persistence sync layer (v3) against a local Firestore emulator.
+
+### Why use an emulator?
+- **Rules Validation**: Ensures the security rules (`firestore.rules`) correctly enforce the schema, map-size caps, and path constraints.
+- **CAS Correctness**: Validates that the optimistic concurrency (Check-And-Set) logic using `updateTime` preconditions works as intended under conflict.
+- **Protocol Safety**: Confirms that only single-write `documents:commit` operations are used.
+
+### Running the Tests
+```powershell
+# Autostart the emulator, run tests, and shut down
+$env:PR_SYNC_EMULATOR_AUTOSTART="1"; npm run test:sync-emulator
+
+# Or manually manage the emulator
+firebase emulators:start --only firestore --project demo-pr-sync
+npm run test:sync-emulator
+```
+
+---
+
+## 5. Debugging & Logs
 
 ### File Logging (Automatic)
 We use a custom `FileReporter` that automatically saves test output (stdout and stderr) to a timestamped file.
@@ -132,7 +153,7 @@ Archive testing can be slow if rendering thousands of items.
 
 ---
 
-## 4. How E2E Tests Work
+## 6. How E2E Tests Work
 Since userscripts run in a unique environment, our tests mimic this:
 
 1.  **Build**: `npm run build:power-reader` compiles the TS to a single `.user.js` file.
@@ -148,7 +169,7 @@ Since userscripts run in a unique environment, our tests mimic this:
 
 ---
 
-## 5. Build Verification
+## 7. Build Verification
 Always verify the build before committing.
 
 ```bash
@@ -161,7 +182,7 @@ Check `dist/power-reader.user.js`. The file should:
 
 ---
 
-## 6. Troubleshooting & Common Pitfalls
+## 8. Troubleshooting & Common Pitfalls
 
 ### Sticky Header & Discovered Posts
 The sticky header logic relies on `getBoundingClientRect()` to identify the current post. This can be problematic in headless tests where layout might differ from a real browser.

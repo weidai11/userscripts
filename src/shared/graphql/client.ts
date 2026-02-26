@@ -11,6 +11,17 @@ export interface GraphQLQueryOptions {
     timeout?: number;
 }
 
+export interface GraphQLErrorLike {
+    message?: string;
+    path?: Array<string | number>;
+    extensions?: Record<string, unknown>;
+}
+
+export interface GraphQLRawResponse<TData = any> {
+    data: TData | null;
+    errors: GraphQLErrorLike[];
+}
+
 function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): boolean {
     const message = typeof err?.message === 'string' ? err.message : '';
     const pathText = Array.isArray(err?.path) ? err.path.join('.') : '';
@@ -58,6 +69,34 @@ export async function queryGraphQL<TData = any, TVariables = any>(
     variables: TVariables = {} as TVariables,
     options: GraphQLQueryOptions = {}
 ): Promise<TData> {
+    const response = await queryGraphQLResponse<TData, TVariables>(query, variables, options);
+    if (response.errors.length > 0) {
+        const label = options.operationName ? ` (${options.operationName})` : '';
+
+        if (options.allowPartialData && response.data) {
+            const patterns = options.toleratedErrorPatterns || [];
+            const untolerated = response.errors.filter((err: any) => !isToleratedGraphQLError(err, patterns));
+
+            if (untolerated.length === 0) {
+                console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, response.errors);
+                return response.data;
+            }
+
+            console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
+            throw new Error(untolerated[0]?.message || 'GraphQL error');
+        }
+
+        console.error(LOG_PREFIX, `GraphQL errors${label}:`, response.errors);
+        throw new Error(response.errors[0]?.message || 'GraphQL error');
+    }
+    return response.data as TData;
+}
+
+export async function queryGraphQLResponse<TData = any, TVariables = any>(
+    query: string,
+    variables: TVariables = {} as TVariables,
+    options: GraphQLQueryOptions = {}
+): Promise<GraphQLRawResponse<TData>> {
     const url = getGraphQLEndpoint();
 
     let effectiveQuery = query;
@@ -68,7 +107,14 @@ export async function queryGraphQL<TData = any, TVariables = any>(
         effectiveVariables = adapted.variables;
     }
 
-    const data = JSON.stringify({ query: effectiveQuery, variables: effectiveVariables });
+    const body: { query: string; variables: TVariables; operationName?: string } = {
+        query: effectiveQuery,
+        variables: effectiveVariables,
+    };
+    if (options.operationName) {
+        body.operationName = options.operationName;
+    }
+    const data = JSON.stringify(body);
     const maxAttempts = 3;
     const delays = [1000, 2000];
 
@@ -92,27 +138,13 @@ export async function queryGraphQL<TData = any, TVariables = any>(
                 console.error(LOG_PREFIX, 'GraphQL response parse failed:', response.responseText);
                 throw error;
             }
-            if (res.errors) {
-                const errors = Array.isArray(res.errors) ? res.errors : [res.errors];
-                const label = options.operationName ? ` (${options.operationName})` : '';
-
-                if (options.allowPartialData && res.data) {
-                    const patterns = options.toleratedErrorPatterns || [];
-                    const untolerated = errors.filter((err: any) => !isToleratedGraphQLError(err, patterns));
-
-                    if (untolerated.length === 0) {
-                        console.warn(LOG_PREFIX, `GraphQL partial data accepted${label}:`, errors);
-                        return res.data;
-                    }
-
-                    console.error(LOG_PREFIX, `GraphQL errors (partial data rejected)${label}:`, untolerated);
-                    throw new Error(untolerated[0]?.message || 'GraphQL error');
-                }
-
-                console.error(LOG_PREFIX, `GraphQL errors${label}:`, errors);
-                throw new Error(errors[0]?.message || 'GraphQL error');
-            }
-            return res.data;
+            const errors = res?.errors
+                ? (Array.isArray(res.errors) ? res.errors : [res.errors])
+                : [];
+            return {
+                data: (res?.data ?? null) as TData | null,
+                errors: errors as GraphQLErrorLike[],
+            };
         } catch (err) {
             const isRetryable = err instanceof Error && (
                 err.message === 'Request timed out' ||

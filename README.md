@@ -92,3 +92,12 @@ For architecture notes and longer-term direction, see [ARCH_USER_ARCHIVE.md](./A
 [CHANGELOG.md](./CHANGELOG.md) | [Old Power Reader Docs](./archive/old_power_reader_doc.md) | [Old Source](./archive/old_power_reader.js)
 
 
+## Firestore Sync Ops
+- Firestore rules: `./firestore.rules`
+- Firestore indexes: `./firestore.indexes.json`
+- Firebase config: `./firebase.json`
+- Deploy rules + indexes:
+  - `firebase deploy --only firestore:rules,firestore:indexes --project <your-project-id>`
+- Emulator integration test:
+  - Start emulator: `firebase emulators:start --only firestore --project demo-pr-sync`
+  - Run checks: `npm run test:sync-emulator`

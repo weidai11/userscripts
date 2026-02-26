@@ -106,7 +106,7 @@ test.describe('Power Reader Architecture', () => {
         await expect(page.locator('div:text("Native Cleared Everything")')).not.toBeAttached();
     });
 
-    test('[PR-TECH-01] Built userscript contains required metadata block', async () => {
+    test('[PR-TECH-01][PR-SYNC-03][PR-PERSIST-80] Built userscript contains required metadata block', async () => {
         const scriptPath = path.resolve(__dirname, '../dist/power-reader.user.js');
         const content = fs.readFileSync(scriptPath, 'utf8');
 
@@ -115,6 +115,7 @@ test.describe('Power Reader Architecture', () => {
         expect(content).toMatch(/\/\/ @name\s+LW Power Reader/);
         expect(content).toMatch(/\/\/ @grant\s+GM_xmlhttpRequest/);
         expect(content).toMatch(/\/\/ @connect\s+lesswrong.com/);
+        expect(content).toMatch(/\/\/ @connect\s+firestore\.googleapis\.com/);
         expect(content).toMatch(/\/\/ ==\/UserScript==/);
 
         // Ensure it is at the start of the file (ignoring potential sheath comments/whitespace)
@@ -127,5 +128,14 @@ test.describe('Power Reader Architecture', () => {
     test('[PR-DEV-01] Automated codegen utility exists', async () => {
         const codegenPath = path.resolve(__dirname, '../tooling/maybe-codegen.js');
         expect(fs.existsSync(codegenPath)).toBe(true);
+    });
+
+    test('Firestore deployment artifacts exist for sync rules/index overrides', async () => {
+        const rulesPath = path.resolve(__dirname, '../firestore.rules');
+        const indexesPath = path.resolve(__dirname, '../firestore.indexes.json');
+        const firebaseJsonPath = path.resolve(__dirname, '../firebase.json');
+        expect(fs.existsSync(rulesPath)).toBe(true);
+        expect(fs.existsSync(indexesPath)).toBe(true);
+        expect(fs.existsSync(firebaseJsonPath)).toBe(true);
     });
 });

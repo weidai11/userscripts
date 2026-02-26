@@ -20,11 +20,12 @@ import {
 import { renderUI, showSetupUI } from './render/index';
 import { attachEventListeners } from './events/index';
 import { initializeReactions } from './utils/reactions';
-import { getLoadFrom, setLoadFrom, getReadState } from './utils/storage';
+import { getLoadFrom, setLoadFromAndClearRead, getReadState } from './utils/storage';
 import { clearAllStorage } from './utils/storage';
 import { Logger } from './utils/logger';
 import { setUIHost } from './render/uiHost';
 import { PowerReaderUIHost } from './render/powerReaderHost';
+import { initPersistenceSync } from './persistence/persistenceSync';
 
 // Features
 import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
@@ -72,23 +73,26 @@ const initReader = async (): Promise<void> => {
   // Initialize UI Host for Power Reader
   setUIHost(new PowerReaderUIHost(getState()));
 
-  // Initialize reactions data (needed for render)
+  // Initialize reactions data before DOM rebuild so script scraping can inspect page bundles.
   try {
     await initializeReactions();
   } catch (e) {
     Logger.error('Reaction initialization failed:', e);
   }
 
-  // Handle reset route
+  // Rebuild DOM
+  rebuildDocument();
+
+  // Handle sync lifecycle (including reset replay path) before setup gating.
   if (route.path === 'reset') {
     Logger.info('Resetting storage...');
-    clearAllStorage();
+    clearAllStorage({ silent: true });
+  }
+  const syncInit = await initPersistenceSync({ isResetRoute: route.path === 'reset' });
+  if (syncInit.resetHandled) {
     window.location.href = '/reader';
     return;
   }
-
-  // Rebuild DOM
-  rebuildDocument();
 
   // Check if setup is needed
   const loadFrom = getLoadFrom();
@@ -99,7 +103,11 @@ const initReader = async (): Promise<void> => {
   }
 
   // Load and render
-  await loadAndRender();
+  if (syncInit.currentUserSnapshot === undefined) {
+    await loadAndRender();
+  } else {
+    await loadAndRender(syncInit.currentUserSnapshot as unknown | null);
+  }
 };
 
 /**
@@ -107,9 +115,9 @@ const initReader = async (): Promise<void> => {
  */
 const handleStartReading = async (loadFromDate: string | null): Promise<void> => {
   if (loadFromDate) {
-    setLoadFrom(loadFromDate);
+    setLoadFromAndClearRead(loadFromDate);
   } else {
-    setLoadFrom('__LOAD_RECENT__');
+    setLoadFromAndClearRead('__LOAD_RECENT__');
   }
   await loadAndRender();
 };
@@ -117,7 +125,7 @@ const handleStartReading = async (loadFromDate: string | null): Promise<void> =>
 /**
  * Load all data and render the UI
  */
-const loadAndRender = async (): Promise<void> => {
+const loadAndRender = async (currentUserSnapshot?: unknown | null): Promise<void> => {
   const root = getRoot();
   if (!root) return;
 
@@ -138,7 +146,7 @@ const loadAndRender = async (): Promise<void> => {
 
   try {
     Logger.info('Loading data...');
-    const initialResult = await loadInitial();
+    const initialResult = await loadInitial(currentUserSnapshot as any);
     Logger.info('loadInitial complete');
     applyInitialLoad(state, initialResult);
 

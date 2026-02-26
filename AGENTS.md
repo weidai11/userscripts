@@ -16,7 +16,7 @@ userscripts for **LessWrong** and **EA Forum**.
 
 ## Key Commands
 - **Build**: `npm run build:power-reader`
-- **Test**: `npm test`
+- **Test**: `npm test` (E2E) | `npm run test:sync-emulator` (Firestore integration)
 - **Tooling**: `npm run codegen` (types) | `update-schema` (latest LW API). `codegen` runs automatically on `dev`/`build`.
 
 ## Conventions & Gotchas
@@ -24,6 +24,7 @@ userscripts for **LessWrong** and **EA Forum**.
 - **Shell Execution**: Run commands directly; do not prefix commands with shell executables like `cmd` or `powershell`. Quote `@` if used
 - **Code**: ESM only (no `__dirname`). Use `/// <reference types="vite-plugin-monkey/client" />` for `GM_*` types. Use `htmlBody` for content.
 - **Testing**: Wait for `#lw-power-reader-ready-signal`. Mock `GM_*` and GraphQL via `addInitScript`.
+- **Sync Testing**: Run Firestore integration checks with `$env:PR_SYNC_EMULATOR_AUTOSTART="1"; npm run test:sync-emulator`. This validates security rules and CAS logic against a local emulator.
 - **Playwright browser log piping**: Enable only for single-spec runs, or explicitly with `PW_FORCE_BROWSER_LOGS=true`.
 - **Spec-driven changes**: For behavior changes, update `src/scripts/power-reader/SPEC.md` requirement IDs and add/update matching tests.
 - **Logic**: Use getters (e.g., `() => state.data`) for component props to avoid stale closures.

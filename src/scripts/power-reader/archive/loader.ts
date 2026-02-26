@@ -36,7 +36,6 @@ const CONTEXT_FETCH_CHUNK_MAX_ATTEMPTS = 2;
 const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
     allowPartialData: true,
     toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
-    operationName: 'archive-sync'
 };
 
 const isValidArchiveItem = <T extends { _id: string; postedAt: string }>(
@@ -233,11 +232,12 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
         try {
             console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
             const requestBatch = async (limit: number): Promise<Array<T | null | undefined>> => {
+                const operationName = key === 'posts' ? 'GetUserPosts' : 'GetUserComments';
                 const response = await queryGraphQL<any, any>(query, {
                     userId,
                     limit,
                     after: afterCursor
-                }, ARCHIVE_PARTIAL_QUERY_OPTIONS);
+                }, { ...ARCHIVE_PARTIAL_QUERY_OPTIONS, operationName });
                 return (response[key]?.results || []) as Array<T | null | undefined>;
             };
 
@@ -494,7 +494,7 @@ export const fetchCommentsByIds = async (commentIds: string[], username?: string
                 response = await queryGraphQL<{ comments: { results: Comment[] } }, any>(
                     GET_COMMENTS_BY_IDS,
                     { commentIds: chunk },
-                    ARCHIVE_PARTIAL_QUERY_OPTIONS
+                    { ...ARCHIVE_PARTIAL_QUERY_OPTIONS, operationName: 'GetCommentsByIds' }
                 );
                 break;
             } catch (e) {
