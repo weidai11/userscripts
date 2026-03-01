@@ -205,7 +205,20 @@ test.describe('Persistence Sync Contracts', () => {
 
   test('[PR-PERSIST-19] read-overflow guard surfaces explicit status-line signal', async () => {
     const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    expect(sync).toContain("const waitingForPushWindow = computePushFloorWaitMs() > 0;");
+    expect(sync).toContain("'Sync: waiting for next sync time (read overflow cleared)'");
+    expect(sync).toContain("'Sync: waiting for next sync time'");
     expect(sync).toContain("return showReadOverflowNotice ? 'Sync: syncing... (read overflow cleared)' : 'Sync: syncing...';");
     expect(sync).toContain("if (showReadOverflowNotice) return 'Sync: on (read overflow cleared)';");
+  });
+
+  test('[PR-STATUS-06] main status line refreshes sync status label after render', async () => {
+    const render = readRepoFile('src/scripts/power-reader/render/index.ts');
+    expect(render).toContain('id="pr-sync-status-label"');
+    expect(render).toContain('const SYNC_STATUS_REFRESH_MS = 1_000;');
+    expect(render).toContain('ensureSyncStatusAutoRefresh();');
+    expect(render).toContain('const isDocumentHidden = (): boolean =>');
+    expect(render).toContain('stopSyncStatusRefreshTimer();');
+    expect(render).toContain("document.addEventListener('visibilitychange'");
   });
 });

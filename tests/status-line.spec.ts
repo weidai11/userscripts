@@ -37,8 +37,8 @@ test.describe('Status Line Display', () => {
         const status = page.locator('.pr-status');
         await expect(status).toBeVisible();
 
-        // Check date range (formatted from loadFrom and newest comment)
-        await expect(status).toContainText('Jan 10');
+        // Check date range (formatted from loadFrom and newest comment, local-timezone aware)
+        await expect(status).toContainText(/Jan (9|10)/);
         await expect(status).toContainText('Jan 12');
 
         // Check emoji sections present

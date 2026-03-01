@@ -41,6 +41,9 @@ import {
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
 declare const GM_setValue: (key: string, value: any) => void;
 declare const __APP_VERSION__: string;
+const SYNC_STATUS_REFRESH_MS = 1_000;
+let syncStatusRefreshTimer: number | null = null;
+let syncStatusListenersInstalled = false;
 
 /**
  * Stats returned by buildPostGroups for the status line
@@ -67,6 +70,58 @@ const formatStatusDate = (iso: string): string => {
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   return `${mon} ${day} ${hh}:${mm}`;
+};
+
+const refreshSyncStatusLabel = (): void => {
+  const syncLabelEl = document.getElementById('pr-sync-status-label');
+  if (!syncLabelEl) return;
+  const next = getSyncStatusLineText();
+  if (syncLabelEl.textContent !== next) {
+    syncLabelEl.textContent = next;
+  }
+};
+
+const isDocumentHidden = (): boolean =>
+  typeof document !== 'undefined' && document.hidden;
+
+const stopSyncStatusRefreshTimer = (): void => {
+  if (syncStatusRefreshTimer !== null) {
+    window.clearInterval(syncStatusRefreshTimer);
+    syncStatusRefreshTimer = null;
+  }
+};
+
+const startSyncStatusRefreshTimer = (): void => {
+  if (syncStatusRefreshTimer !== null || isDocumentHidden()) return;
+  syncStatusRefreshTimer = window.setInterval(() => {
+    refreshSyncStatusLabel();
+  }, SYNC_STATUS_REFRESH_MS) as unknown as number;
+};
+
+const ensureSyncStatusAutoRefresh = (): void => {
+  if (isDocumentHidden()) {
+    stopSyncStatusRefreshTimer();
+  } else {
+    startSyncStatusRefreshTimer();
+    refreshSyncStatusLabel();
+  }
+  if (!syncStatusListenersInstalled) {
+    window.addEventListener('focus', () => {
+      if (!isDocumentHidden()) {
+        startSyncStatusRefreshTimer();
+        refreshSyncStatusLabel();
+      }
+    }, { passive: true });
+    document.addEventListener('visibilitychange', () => {
+      if (isDocumentHidden()) {
+        stopSyncStatusRefreshTimer();
+        return;
+      }
+      startSyncStatusRefreshTimer();
+      refreshSyncStatusLabel();
+    }, { passive: true });
+    syncStatusListenersInstalled = true;
+  }
 };
 
 /**
@@ -388,7 +443,7 @@ export const renderUI = (state: ReaderState): void => {
         · 💬 ${stats.totalComments} comments (${stats.unreadComments} new · ${stats.contextComments} context · ${stats.hiddenComments} hidden)
         · 📄 ${stats.visiblePosts} posts${stats.hiddenPosts > 0 ? ` (${stats.hiddenPosts} filtered)` : ''}
         · ${userLabel}
-        · ${syncLabel}
+        · <span id="pr-sync-status-label">${syncLabel}</span>
       </div>
     </div>
     ${renderHelpSection(showHelp, syncEnabled)}
@@ -467,6 +522,7 @@ export const renderUI = (state: ReaderState): void => {
 
   setupInlineReactions(state);
   setupExternalLinks();
+  ensureSyncStatusAutoRefresh();
 
   refreshPostActionButtons();
 

@@ -171,7 +171,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
    - Comments use `allRecentComments` view.
    - If `loadFrom` is set: use `sortBy: "oldest"` to load forward.
    - If `loadFrom` is `__LOAD_RECENT__`: use `sortBy: "newest"` to get the latest batch.
-   - **[PR-LOAD-01.1]** **Initial `loadFrom` Snapshot**: Immediately after the initial comments batch is fetched, set `loadFrom` to the datetime of the **oldest fetched comment**. This ensures that if the user leaves before reaching the bottom and later returns, the same comment window is loaded again.
+   - **[PR-LOAD-01.1]** **Initial `loadFrom` Snapshot (Recent Mode)**: If startup began with `loadFrom = __LOAD_RECENT__`, immediately after the initial comments batch is fetched, set `loadFrom` to the datetime of the **oldest fetched comment**. If startup began from an explicit datetime, preserve it unchanged.
 2. **[PR-LOAD-02]** **Content Enrichment**: Before rendering, additional data is fetched:
    - **Post Bodies**: Full post content for the post batch is fetched via GraphQL (`new` selector), including body fields (`htmlBody`/`contents`).
    - **Header-Only Exception**: Full bodies are fetched only for posts in the **current post window**; header-only posts are created only for out-of-window posts referenced by comments and their bodies load on-demand.

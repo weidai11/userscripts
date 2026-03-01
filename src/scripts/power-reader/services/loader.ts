@@ -45,6 +45,8 @@ export interface InitialLoadResult {
   currentUsername: string | null;
   currentUserId: string | null;
   currentUserPaletteStyle: 'listView' | 'gridView' | null;
+  startedInRecentMode: boolean;
+  lastInitialCommentDate?: string;
 }
 
 interface CurrentUserBootstrapSnapshot {
@@ -108,7 +110,9 @@ const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> 
  */
 export const loadInitial = async (
   currentUserOverride?: CurrentUserBootstrapSnapshot | null
-): Promise<InitialLoadResult & { lastInitialCommentDate?: string }> => {
+): Promise<InitialLoadResult> => {
+  const startingLoadFrom = getLoadFrom();
+  const startedInRecentMode = startingLoadFrom === '__LOAD_RECENT__';
   const injection = (window as any).__PR_TEST_STATE_INJECTION__;
   if (injection) {
     Logger.info('Using injected test state');
@@ -117,12 +121,12 @@ export const loadInitial = async (
       posts: injection.posts || [],
       currentUsername: injection.currentUsername || null,
       currentUserId: injection.currentUserId || null,
-      currentUserPaletteStyle: injection.currentUserPaletteStyle || null
+      currentUserPaletteStyle: injection.currentUserPaletteStyle || null,
+      startedInRecentMode,
     };
   }
 
-  const loadFrom = getLoadFrom();
-  const afterDate = loadFrom === '__LOAD_RECENT__' ? undefined : loadFrom;
+  const afterDate = startedInRecentMode ? undefined : startingLoadFrom;
 
   Logger.info(`Initial fetch: after=${afterDate}`);
   const start = performance.now();
@@ -176,6 +180,7 @@ export const loadInitial = async (
     currentUsername,
     currentUserId,
     currentUserPaletteStyle,
+    startedInRecentMode,
     lastInitialCommentDate: comments.length > 0 ? comments[comments.length - 1].postedAt : undefined
   };
   const totalTime = performance.now() - start;
@@ -611,8 +616,8 @@ export const applyInitialLoad = (state: ReaderState, result: InitialLoadResult):
   state.primaryPostsCount = 0;
   rebuildIndexes(state);
 
-  // [PR-LOAD-01.1] Initial loadFrom Snapshot
-  if (state.comments.length > 0) {
+  // [PR-LOAD-01.1] Initial loadFrom Snapshot (recent-mode only)
+  if (result.startedInRecentMode && state.comments.length > 0) {
     const validComments = state.comments.filter(c => c.postedAt && !isNaN(new Date(c.postedAt).getTime()));
     if (validComments.length > 0) {
       const sorted = [...validComments].sort((a, b) => new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime());

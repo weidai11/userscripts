@@ -1857,6 +1857,12 @@ export function getSyncStatusLineText(): string {
   if (runtime.pushDisabled) return 'Sync: push-disabled';
   if (!runtime.active) return 'Sync: local-only';
   if (hasAnyDirty()) {
+    const waitingForPushWindow = computePushFloorWaitMs() > 0;
+    if (waitingForPushWindow) {
+      return showReadOverflowNotice
+        ? 'Sync: waiting for next sync time (read overflow cleared)'
+        : 'Sync: waiting for next sync time';
+    }
     return showReadOverflowNotice ? 'Sync: syncing... (read overflow cleared)' : 'Sync: syncing...';
   }
   if (showReadOverflowNotice) return 'Sync: on (read overflow cleared)';

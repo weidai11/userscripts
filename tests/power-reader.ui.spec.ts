@@ -63,7 +63,12 @@ test.describe('Power Reader UI Interactions', () => {
 
     test('[PR-READ-04] Read State should mark as read after 5s off-screen', async ({ page }) => {
         // We use testMode: false here because we specifically want to test the 5s delay
-        await initPowerReader(page, { testMode: false });
+        await initPowerReader(page, {
+            testMode: false,
+            storage: {
+                'power-reader-sync-enabled': '0'
+            }
+        });
 
         await page.evaluate(() => {
             document.body.style.minHeight = '5000px';

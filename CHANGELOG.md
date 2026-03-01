@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.697] - 2026-03-01
+
+### Changed
+- **Recent-mode loadFrom snapshot hardening ([PR-LOAD-01.1])**: Initial snapshot behavior now keys off the startup mode captured at load start, so explicit ISO `loadFrom` values are preserved and only `__LOAD_RECENT__` sessions are snapshotted to the oldest fetched comment.
+- **Sync status wording**: Dirty state blocked by push-floor timing now reports `Sync: waiting for next sync time` instead of `Sync: syncing...`, making queued vs active sync states explicit.
+
+### Fixed
+- **Status line staleness ([PR-STATUS-06])**: Main reader sync status now refreshes after initial render via a dedicated sync label updater.
+- **Background refresh churn**: Sync status timer now pauses while `document.hidden` and resumes on focus/visibility, avoiding unnecessary hidden-tab polling.
+- **Test stability**: Added coverage for explicit-cutoff preservation, mid-load `loadFrom` mutation safety, and hidden-tab sync status refresh behavior.
+
 ## [1.2.696] - 2026-03-01
 
 ### Added

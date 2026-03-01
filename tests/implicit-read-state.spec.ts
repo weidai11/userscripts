@@ -9,8 +9,8 @@ import { initPowerReader } from './helpers/setup';
  * 'loadFrom' session value is treated as READ by default, even if its ID is not
  * present in the explicit readState storage.
  *
- * NOTE on the loadFrom snap: applyInitialLoad() always snaps loadFrom to
- * the oldest comment's date. Therefore:
+ * NOTE on the loadFrom snap: applyInitialLoad() snaps loadFrom to
+ * the oldest comment's date only when startup begins in __LOAD_RECENT__ mode. Therefore:
  *   - Tests 1 & 2 use POSTS that are older than all comments (posts don't affect the snap).
  *   - Test 3 uses page.evaluate to manually set loadFrom after init, then re-renders.
  */
