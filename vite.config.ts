@@ -58,6 +58,7 @@ export default defineConfig({
                     'GM_log',
                     'GM_deleteValue',
                     'GM_addValueChangeListener',
+                    'GM_removeValueChangeListener',
                     'GM_openInTab',
                 ],
                 connect: ['lesswrong.com', 'forum.effectivealtruism.org', 'arena.ai', 'firestore.googleapis.com'],

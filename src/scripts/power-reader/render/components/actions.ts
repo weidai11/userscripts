@@ -3,9 +3,23 @@
  */
 
 import { escapeHtml, readQuoteText } from '../../utils/rendering';
-import { getReactions, DEFAULT_FILTER } from '../../utils/reactions';
+import { getReactions, DEFAULT_FILTER, type ReactionMetadata } from '../../utils/reactions';
 import { isEAForumHost } from '../../utils/forum';
 import type { NamesAttachedReactionsScore, CurrentUserExtendedVote, ReactionUser } from '../../../../shared/graphql/queries';
+
+const UNKNOWN_REACTION_SVG = 'https://www.lesswrong.com/reactionImages/nounproject/noun-question-5771604.svg';
+
+const toFallbackReactionLabel = (name: string): string => {
+    const normalized = name.replace(/[-_]+/g, ' ').trim();
+    if (!normalized) return 'Reaction';
+    return normalized.replace(/\b\w/g, (ch) => ch.toUpperCase());
+};
+
+const createFallbackReactionMetadata = (name: string): ReactionMetadata => ({
+    name,
+    label: toFallbackReactionLabel(name),
+    svg: UNKNOWN_REACTION_SVG,
+});
 
 const formatQuotesForTooltip = (quotes: unknown): string => {
     if (!Array.isArray(quotes)) return '';
@@ -13,6 +27,43 @@ const formatQuotesForTooltip = (quotes: unknown): string => {
         .map(readQuoteText)
         .filter((q): q is string => !!q);
     return normalized.map(q => `"${q}"`).join('; ');
+};
+
+interface ReactionTotals {
+    pro: number;
+    anti: number;
+    net: number;
+}
+
+const computeReactionTotals = (
+    reactionName: string,
+    entries: ReactionUser[],
+    extendedScore: NamesAttachedReactionsScore | null
+): ReactionTotals => {
+    const totals: ReactionTotals = {
+        pro: 0,
+        anti: 0,
+        net: 0,
+    };
+
+    for (const entry of entries) {
+        if (entry.reactType === 'disagreed') {
+            totals.anti += 1;
+        } else {
+            totals.pro += 1;
+        }
+    }
+
+    // EA-style counts can be top-level numeric fields.
+    if (entries.length === 0 && extendedScore) {
+        const topLevelCount = (extendedScore as any)[reactionName];
+        if (typeof topLevelCount === 'number' && topLevelCount > 0) {
+            totals.pro += topLevelCount;
+        }
+    }
+
+    totals.net = totals.pro - totals.anti;
+    return totals;
 };
 
 /**
@@ -115,34 +166,28 @@ export const renderReactions = (
     const alwaysVisibleReactions = isEAHost ? new Set(['agree', 'disagree']) : new Set<string>();
 
     const allReactions = getReactions();
-
-    // Calculate counts for each reaction type
-    const reactionCounts: Record<string, number> = {};
-
-    // 1. Add top-level counts (e.g. EA Forum "agree", "disagree")
-    if (extendedScore) {
-        allReactions.forEach(reaction => {
-            const count = (extendedScore as any)[reaction.name];
-            if (typeof count === 'number' && count > 0) {
-                reactionCounts[reaction.name] = (reactionCounts[reaction.name] || 0) + count;
-            }
-        });
-    }
-
-    // 2. Add counts from reacts array (named reactions)
-    Object.entries(reacts).forEach(([reactName, users]) => {
-        let score = 0;
-        users.forEach(u => {
-            if (u.reactType === 'disagreed') score -= 1;
-            else score += 1;
-        });
-        if (score > 0) {
-            reactionCounts[reactName] = (reactionCounts[reactName] || 0) + score;
+    const reactionByName = new Map(allReactions.map((reaction) => [reaction.name, reaction]));
+    const unknownReactionNames = new Set<string>();
+    Object.keys(reacts).forEach((name) => {
+        if (!reactionByName.has(name)) {
+            unknownReactionNames.add(name);
         }
     });
+    userReacts.forEach((vote) => {
+        if (vote?.react && !reactionByName.has(vote.react)) {
+            unknownReactionNames.add(vote.react);
+        }
+    });
+    const orderedReactionNames = [
+        ...allReactions.map((reaction) => reaction.name),
+        ...Array.from(unknownReactionNames).sort((a, b) => a.localeCompare(b)),
+    ];
 
-    allReactions.forEach(reaction => {
-        const count = reactionCounts[reaction.name] || 0;
+    orderedReactionNames.forEach((reactionName) => {
+        const reaction = reactionByName.get(reactionName) || createFallbackReactionMetadata(reactionName);
+        const reactionEntries = (reacts[reaction.name] || []) as ReactionUser[];
+        const totals = computeReactionTotals(reaction.name, reactionEntries, extendedScore);
+        const hasOpposedPair = totals.pro > 0 && totals.anti > 0;
         const isAlwaysVisible = alwaysVisibleReactions.has(reaction.name);
         let userVoted = userReacts.some(r => r.react === reaction.name);
 
@@ -151,7 +196,7 @@ export const renderReactions = (
             userVoted = true;
         }
 
-        if (count > 0 || userVoted || isAlwaysVisible) {
+        if (totals.net > 0 || hasOpposedPair || userVoted || isAlwaysVisible) {
             const filter = reaction.filter || DEFAULT_FILTER;
             const opacity = filter.opacity ?? 1;
             const saturate = filter.saturate ?? 1;
@@ -167,18 +212,27 @@ export const renderReactions = (
       `;
 
             const labelAttr = `data-tooltip-label="${escapeHtml(reaction.label)}"`;
-            const descAttr = `data-tooltip-description="${escapeHtml(reaction.description || '')}"`;
+            const descriptionLines: string[] = [];
+            if (reaction.description) {
+                descriptionLines.push(reaction.description);
+            }
+            if (totals.anti > 0) {
+                descriptionLines.push(`Total: ${Math.max(totals.net, 0)} (${totals.pro} reacted, ${totals.anti} opposed)`);
+            } else if (totals.pro > 0) {
+                descriptionLines.push(`Total: ${totals.pro}`);
+            }
+            const descAttr = `data-tooltip-description="${escapeHtml(descriptionLines.join('\n'))}"`;
             
             // Format users and quotes for tooltip
-            const reactionEntries = (reacts[reaction.name] || []) as ReactionUser[];
             const userList = reactionEntries.map(u => {
                 const name = u.displayName || u.userName || u.username || u.userId;
                 const quotesStr = formatQuotesForTooltip(u.quotes);
-                return name + (quotesStr ? ` (${quotesStr})` : '');
+                const stance = u.reactType === 'disagreed' ? ' [Opposed]' : ' [Reacted]';
+                return name + stance + (quotesStr ? ` (${quotesStr})` : '');
             }).join('\n');
             const usersAttr = userList ? `data-tooltip-users="${escapeHtml(userList)}"` : '';
 
-            const countText = count > 0 || isAlwaysVisible ? String(count) : '';
+            const countText = String(Math.max(totals.net, 0));
 
             html += `
         <span class="pr-reaction-chip ${userVoted ? 'voted' : ''}" 

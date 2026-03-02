@@ -10,6 +10,7 @@ import { renderPostHeader, escapeHtml } from '../utils/rendering';
 import { buildRenderDescendantMetrics, renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
 import { Logger } from '../utils/logger';
+import { toPostedAtEpochMs } from '../utils/dom';
 import { renderPostBody as renderSharedPostBody } from './components/body';
 
 export interface PostGroup {
@@ -210,11 +211,13 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
   const postBodyHtml = isFullPost ? renderPostBody(group.fullPost!, currentlyTruncated !== false) : '';
 
   const authorHandle = postToRender.user?.username || '';
+  const postPostedAtMs = toPostedAtEpochMs(postToRender.postedAt);
 
   return `
     <div class="pr-post pr-item ${isReadPost ? 'read' : ''}" 
          data-post-id="${group.postId}" 
          data-id="${group.postId}"
+         data-posted-at-ms="${postPostedAtMs}"
          data-author="${escapeHtml(authorHandle)}">
       ${headerHtml}
       ${postBodyHtml}

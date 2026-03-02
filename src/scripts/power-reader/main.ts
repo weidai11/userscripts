@@ -34,6 +34,7 @@ import { initReactionTooltips } from './features/reactionTooltips';
 import { setupHeaderInjection } from './features/headerInjection';
 import { initArchive } from './archive/index';
 import { getForumMeta } from './utils/forum';
+import { setupSyncUiConsistencyLayer } from './features/syncUiConsistency';
 
 declare const __APP_VERSION__: string;
 
@@ -175,6 +176,7 @@ const loadAndRender = async (currentUserSnapshot?: unknown | null): Promise<void
     Logger.info(`Loaded ${state.comments.length} comments and ${state.posts.length} posts`);
 
     renderUI(state);
+    setupSyncUiConsistencyLayer(state);
     Logger.info('renderUI complete');
 
     signalReady();

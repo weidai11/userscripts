@@ -1446,3 +1446,81 @@ Layering requirement:
 - Firestore quotas and limits (including document size): <https://firebase.google.com/docs/firestore/enterprise/quotas-native-mode>
 - Firestore REST precondition reference (`updateTime`, `exists`): <https://firebase.google.com/docs/firestore/reference/rest/v1beta1/Precondition>
 - Firestore single-document write-rate guidance discussion: <https://groups.google.com/g/firebase-talk/c/sXmPclfystk>
+
+## Appendix A. UI Consistency Layer (Hot Patch + Cross-Tab + Resume Pull)
+
+### Summary
+
+This appendix is a UI consistency layer, not a sync-correctness layer. Remote merges already avoid dirty loops via `{ silent: true }`. The goals here are:
+
+1. Hot-patch visible UI state after local, remote, or cross-tab applies.
+2. Keep short-lived in-memory caches coherent with external applies.
+3. Resume pull on return from idle/hidden state by reusing the existing pull path.
+
+### Scope Clarification
+
+- No new correctness path for sync conflict handling, quota, or CAS behavior.
+- No GM write-back from cross-tab listeners.
+- No direct Firestore calls from this layer.
+
+### Implementation Notes
+
+1. Applied-event hook (UI trigger only)
+- Add `onSyncFieldApplied(listener)` and `notifySyncFieldApplied(field, source)`. Support batched notifications if multiple fields change in the same external update.
+- Ensure `setReadState`, `setLoadFrom`, `setAuthorPreferences`, and reset helpers call `notifySyncFieldApplied` even when `{ silent: true }`.
+- Treat this as an "applied state changed" signal, separate from dirty/flush scheduling.
+- Coalesce multi-field apply bursts into one UI patch queue so one `requestAnimationFrame` cycle can cover all pending fields.
+
+2. External apply functions and cache coherence
+- `applyExternalReadState(next)`: update UI and write through the `getReadState()` 100 ms cache via an explicit cache-write helper (not by re-reading GM).
+- `applyExternalLoadFrom(next)`: update UI and write through the `getLoadFrom()` 100 ms cache via an explicit cache-write helper (not by re-reading GM).
+- `applyExternalAuthorPrefs(next)`: update UI and write through the `getAuthorPreferences()` short-lived cache.
+- External apply functions must never call `GM_setValue`.
+
+3. Idle/visibility recovery via existing pull path
+- Do not add a separate 90 s idle pull timer.
+- On resume signals (visibility back to visible, user activity after idle gap), request a pull through existing `performPullAndMerge()` scheduling.
+- Idle gap uses the existing sync idle-threshold configuration (no new timer constant in this appendix).
+- Reuse existing gating (`shouldBlockForQuota()`, cross-tab `lastPull` stamp, throttles) so behavior stays centralized.
+
+4. GM listener loop safety and compatibility
+- Cross-tab listener callbacks are read/apply only and must never write GM storage.
+- Feature detect `GM_addValueChangeListener` and `GM_removeValueChangeListener`.
+- If unavailable or unreliable, fall back to throttled key polling (read/loadFrom/authorPrefs) with last-seen snapshots.
+- Polling fallback default interval: 500-1000 ms (configurable for tests).
+- Optional tighter interval (250-500 ms) may be enabled for `readState` only if user testing shows cross-tab lag.
+
+5. Hot-patch mechanics and bounded work
+- Build and maintain a comment index keyed by comment id with `{ element, postedAtMs }`; initialize on takeover and incrementally update on comment insert/remove.
+- Incremental index maintenance must handle batch inserts/removes (fragments or multi-node updates) without full-index rebuilds; utilize `requestIdleCallback` or the same 50-node/frame batching used for patching.
+- Prune detached/stale elements from the index during incremental maintenance.
+- Resolve `postedAtMs` from `data-posted-at-ms` first; parse `time[datetime]` only as fallback.
+- Normalize `postedAtMs` to numeric epoch milliseconds at ingestion to avoid string comparison errors.
+- When fallback parsing is used, memoize parsed epoch ms back to a temporary data attribute to avoid repeated parse cost.
+- Downgrade rule: do not move an item from read to unread when its timestamp is missing/invalid, and do not move `loadFrom` backward due to missing/invalid timestamps.
+- Ignore out-of-order apply payloads using a monotonic apply sequence (or equivalent last-applied stamp) per field.
+- Avoid full-thread rescans per update: compute affected ids/dates first, then patch only impacted nodes.
+- Bound per-frame work (single `requestAnimationFrame` batch, max 50 nodes/frame) so large threads remain responsive.
+
+### Tests
+
+1. Cross-tab read hot patch
+- Trigger remote read-state change; assert `.read` classes and unread counters update with no GM write-back.
+2. Cross-tab loadFrom hot patch
+- Trigger remote `loadFrom` change; assert date-threshold class updates and cache coherence.
+3. Cross-tab author prefs hot patch
+- Trigger remote `authorPrefs` change; assert `.pr-author-up`/`.pr-author-down` class refresh.
+4. Resume pull path reuse
+- Simulate idle/hidden return; assert pull request goes through `performPullAndMerge()` path and still honors quota and `lastPull` gating.
+5. Long background resume
+- Simulate a tab inactive for hours; assert first user activity/visibility resume schedules exactly one pull via `performPullAndMerge()`.
+6. Listener compatibility fallback
+- Run the same cross-tab tests with `GM_addValueChangeListener` unavailable; assert polling fallback updates UI without loops.
+7. Bounded patch cost
+- Large-thread test asserts the 50 nodes/frame cap is enforced (no full scan on each apply).
+
+### Assumptions
+
+- No structural re-render or re-sort from this layer (aligns with `PR-SORT-04`).
+- Counters reflect logical state after patching, even when element order is unchanged.
+- Watchers/fallback monitor only `readState`, `loadFrom`, and `authorPrefs`.

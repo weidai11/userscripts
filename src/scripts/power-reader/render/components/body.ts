@@ -3,9 +3,125 @@
  */
 
 import { sanitizeHtml } from '../../utils/sanitize';
-import type { NamesAttachedReactionsScore } from '../../../../shared/graphql/queries';
+import type { NamesAttachedReactionsScore, ReactionUser } from '../../../../shared/graphql/queries';
 import { CONFIG } from '../../config';
 import { readQuoteText } from '../../utils/rendering';
+import { getReactions } from '../../utils/reactions';
+
+interface QuoteTooltipData {
+    reactionLabels: Set<string>;
+    reactionDescriptions: Set<string>;
+    users: Set<string>;
+}
+
+interface QuoteReactionAccumulator {
+    label: string;
+    description: string;
+    proCount: number;
+    antiCount: number;
+    proUsers: Set<string>;
+    antiUsers: Set<string>;
+}
+
+const fallbackReactionLabel = (reactionName: string): string => {
+    const normalized = reactionName.replace(/[-_]+/g, ' ').trim();
+    if (!normalized) return 'Reaction';
+    return normalized.replace(/\b\w/g, (ch) => ch.toUpperCase());
+};
+
+const buildQuoteTooltipData = (extendedScore: NamesAttachedReactionsScore): Map<string, QuoteTooltipData> => {
+    const reactionsByQuote = new Map<string, Map<string, QuoteReactionAccumulator>>();
+    const reactionByName = new Map(getReactions().map((reaction) => [reaction.name, reaction]));
+
+    Object.entries(extendedScore.reacts || {}).forEach(([reactionName, users]) => {
+        const reaction = reactionByName.get(reactionName);
+        const reactionLabel = reaction?.label || fallbackReactionLabel(reactionName);
+        const reactionDescription = reaction?.description || '';
+
+        (users as ReactionUser[]).forEach((user) => {
+            const userName = user.displayName || user.userName || user.username || user.userId;
+            const delta = user.reactType === 'disagreed'
+                ? -1
+                : user.reactType === 'created'
+                    ? 1
+                    : 0;
+            if (!Array.isArray(user.quotes)) return;
+            user.quotes.forEach((quoteEntry) => {
+                const quoteText = readQuoteText(quoteEntry);
+                if (!quoteText) return;
+
+                let quoteReactions = reactionsByQuote.get(quoteText);
+                if (!quoteReactions) {
+                    quoteReactions = new Map<string, QuoteReactionAccumulator>();
+                    reactionsByQuote.set(quoteText, quoteReactions);
+                }
+
+                let aggregate = quoteReactions.get(reactionName);
+                if (!aggregate) {
+                    aggregate = {
+                        label: reactionLabel,
+                        description: reactionDescription,
+                        proCount: 0,
+                        antiCount: 0,
+                        proUsers: new Set<string>(),
+                        antiUsers: new Set<string>(),
+                    };
+                    quoteReactions.set(reactionName, aggregate);
+                }
+
+                if (delta < 0) {
+                    aggregate.antiCount += 1;
+                    if (userName) {
+                        aggregate.antiUsers.add(userName);
+                    }
+                } else if (delta > 0) {
+                    aggregate.proCount += 1;
+                    if (userName) {
+                        aggregate.proUsers.add(userName);
+                    }
+                }
+            });
+        });
+    });
+
+    const tooltipByQuote = new Map<string, QuoteTooltipData>();
+    reactionsByQuote.forEach((quoteReactions, quoteText) => {
+        const tooltipData: QuoteTooltipData = {
+            reactionLabels: new Set<string>(),
+            reactionDescriptions: new Set<string>(),
+            users: new Set<string>(),
+        };
+
+        quoteReactions.forEach((aggregate) => {
+            const totalReactions = aggregate.proCount + aggregate.antiCount;
+            if (totalReactions <= 0) return;
+            const net = aggregate.proCount - aggregate.antiCount;
+            tooltipData.reactionLabels.add(aggregate.label);
+            if (aggregate.antiCount > 0) {
+                tooltipData.reactionDescriptions.add(
+                    `${aggregate.label}: ${Math.max(net, 0)} total (${aggregate.proCount} reacted, ${aggregate.antiCount} opposed)`
+                );
+            } else {
+                tooltipData.reactionDescriptions.add(`${aggregate.label}: ${aggregate.proCount} reacted`);
+            }
+            if (aggregate.description) {
+                tooltipData.reactionDescriptions.add(`${aggregate.label}: ${aggregate.description}`);
+            }
+            aggregate.proUsers.forEach((userName) => {
+                tooltipData.users.add(`${userName} [${aggregate.label} +]`);
+            });
+            aggregate.antiUsers.forEach((userName) => {
+                tooltipData.users.add(`${userName} [${aggregate.label} -]`);
+            });
+        });
+
+        if (tooltipData.reactionLabels.size > 0) {
+            tooltipByQuote.set(quoteText, tooltipData);
+        }
+    });
+
+    return tooltipByQuote;
+};
 
 /**
  * Highlight quotes in the HTML body based on reactions
@@ -13,21 +129,9 @@ import { readQuoteText } from '../../utils/rendering';
 export const highlightQuotes = (html: string, extendedScore: NamesAttachedReactionsScore | null): string => {
     const safeHtml = sanitizeHtml(html);
     if (!extendedScore || !extendedScore.reacts) return safeHtml;
+    const tooltipByQuote = buildQuoteTooltipData(extendedScore);
 
-    // Collect all quotes
-    const quotesToHighlight: string[] = [];
-    Object.values(extendedScore.reacts).forEach(users => {
-        users.forEach(u => {
-            if (u.quotes) {
-                u.quotes.forEach(q => {
-                    const quoteText = readQuoteText(q);
-                    if (quoteText) {
-                        quotesToHighlight.push(quoteText);
-                    }
-                });
-            }
-        });
-    });
+    const quotesToHighlight = Array.from(tooltipByQuote.keys());
 
     if (quotesToHighlight.length === 0) return safeHtml;
 
@@ -51,9 +155,36 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
             }
             if (index < parts.length - 1) {
                 const span = doc.createElement('span');
-                span.className = 'pr-highlight';
-                span.title = 'Reacted content';
+                span.className = 'pr-highlight pr-tooltip-target';
                 span.textContent = quote;
+                const tooltip = tooltipByQuote.get(quote);
+                if (tooltip) {
+                    const reactionLabels = Array.from(tooltip.reactionLabels);
+                    const reactionDescriptions = Array.from(tooltip.reactionDescriptions);
+                    const userLines = Array.from(tooltip.users);
+
+                    const label = reactionLabels.length === 1
+                        ? reactionLabels[0]
+                        : `Reacted content (${reactionLabels.length} reactions)`;
+                    span.setAttribute('data-tooltip-label', label);
+
+                    const descriptionLines: string[] = [];
+                    if (reactionLabels.length > 0) {
+                        descriptionLines.push(`Reactions: ${reactionLabels.join(', ')}`);
+                    }
+                    if (reactionDescriptions.length === 1) {
+                        descriptionLines.push(reactionDescriptions[0]);
+                    }
+                    if (descriptionLines.length > 0) {
+                        span.setAttribute('data-tooltip-description', descriptionLines.join('\n'));
+                    }
+
+                    if (userLines.length > 0) {
+                        span.setAttribute('data-tooltip-users', userLines.join('\n'));
+                    }
+                } else {
+                    span.title = 'Reacted content';
+                }
                 fragment.appendChild(span);
             }
         });

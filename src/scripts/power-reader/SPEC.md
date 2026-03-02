@@ -63,7 +63,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - PR-PERSIST-10: `setLoadFrom` pure + explicit clear helper semantics
 - PR-PERSIST-11: identity fallback uses user-gated `lastSyncNode` probe for diagnostics only (no copy-forward writes)
 - PR-PERSIST-12: unknown-higher-schema read-only mode (including mid-CAS-retry re-read detection)
-- PR-PERSIST-13: strict envelope validation / corruption handling (invalid remote => local-only push-disabled session mode, reset still allowed)
+- [PR-PERSIST-13]: strict envelope validation / corruption handling (invalid remote => local-only push-disabled session mode, reset still allowed)
 - [PR-PERSIST-14]: read-only throttling (default 45s, allowed 30-60s)
 - [PR-PERSIST-15]: one-time sync-secret bootstrap and verification in `abTestOverrides`
 - PR-PERSIST-16: late startup sync apply with visible non-blocking notice
@@ -145,6 +145,12 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - [PR-PERSIST-92]: preview open timers must re-check hover intent and visibility before rendering the preview
 - [PR-PERSIST-93]: TTL anchor computation clamps stale server anchors and does not fall back to remote diagnostic timestamps
 - [PR-PERSIST-94]: dirty local `loadFrom` clears (empty-string intent) MUST advance `loadFrom.clearEpoch` so stale remote values cannot be resurrected on merge/reload
+- [PR-PERSIST-95]: sync storage emits an "applied" event channel distinct from dirty-change tracking; silent applies still notify the applied channel
+- [PR-PERSIST-96]: cross-tab sync watchers are apply-only (no GM write-back) and support manager compatibility via listener feature-detection plus polling fallback
+- [PR-PERSIST-97]: UI consistency layer hot-patches read/author visual state without structural re-render and bounds patch work to 50 nodes per frame
+- [PR-PERSIST-98]: external read/loadFrom applies update in-memory read/loadFrom caches directly (no forced GM re-read)
+- [PR-PERSIST-99]: idle/visibility resume pull requests route through existing `performPullAndMerge()` gating (quota + cross-tab `lastPull`)
+- [PR-PERSIST-100]: hot-patch timestamps prefer `data-posted-at-ms`, fallback to `time[datetime]`, and avoid unread downgrades when timestamps are missing/invalid
 
 ---
 
@@ -777,6 +783,4 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @connect      forum.effectivealtruism.org
 // ==/UserScript==
 ```
-
-
 

@@ -175,7 +175,7 @@ export const renderMetadata = (
               title="Mark author as preferred (highlight their future comments)">↑</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl || '#'}" target="_blank">${timeStr}</a>
+        <a href="${item.pageUrl || '#'}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
       </span>
       ${children}
     </div>

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.697
+// @version    1.2.700
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -19,6 +19,7 @@
 // @grant      GM_getValue
 // @grant      GM_log
 // @grant      GM_openInTab
+// @grant      GM_removeValueChangeListener
 // @grant      GM_setValue
 // @grant      GM_xmlhttpRequest
 // @grant      window.close
@@ -2239,7 +2240,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.697"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.700"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2925,7 +2926,11 @@ reset: () => {
   let lastReadStateFetch = 0;
   let cachedLoadFrom = null;
   let lastLoadFromFetch = 0;
+  let cachedAuthorPrefs = null;
+  let lastAuthorPrefsFetch = 0;
   const syncFieldListeners = new Set();
+  const syncFieldAppliedListeners = new Set();
+  let syncFieldAppliedSequence = 0;
   const notifySyncFieldChanged = (field, options) => {
     if (options?.silent) return;
     for (const listener of syncFieldListeners) {
@@ -2936,19 +2941,41 @@ reset: () => {
       }
     }
   };
+  const notifySyncFieldApplied = (field, source) => {
+    const event = {
+      field,
+      source,
+      sequence: ++syncFieldAppliedSequence
+    };
+    for (const listener of syncFieldAppliedListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        Logger.warn(`sync field applied listener failed for ${field}`, error);
+      }
+    }
+  };
   const onSyncFieldChanged = (listener) => {
     syncFieldListeners.add(listener);
     return () => syncFieldListeners.delete(listener);
   };
+  const onSyncFieldApplied = (listener) => {
+    syncFieldAppliedListeners.add(listener);
+    return () => syncFieldAppliedListeners.delete(listener);
+  };
+  const STORAGE_KEY_NAMES = STORAGE_KEYS;
   if (typeof window !== "undefined" && window.__PR_TEST_MODE__) {
     cachedLoadFrom = null;
     lastLoadFromFetch = 0;
     cachedReadState = null;
     lastReadStateFetch = 0;
+    cachedAuthorPrefs = null;
+    lastAuthorPrefsFetch = 0;
   }
   function getReadState() {
     const now = Date.now();
-    if (cachedReadState && now - lastReadStateFetch < 100) {
+    const isTest = typeof window !== "undefined" && window.__PR_TEST_MODE__;
+    if (!isTest && cachedReadState && now - lastReadStateFetch < 100) {
       return cachedReadState;
     }
     try {
@@ -2965,6 +2992,7 @@ reset: () => {
     lastReadStateFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state2));
     notifySyncFieldChanged("read", options);
+    notifySyncFieldApplied("read", options.source ?? "local");
   }
   function isRead(id, state2, postedAt) {
     const readMap = state2 || getReadState();
@@ -2982,7 +3010,7 @@ reset: () => {
     return false;
   }
   function markAsRead(target) {
-    const state2 = getReadState();
+    const state2 = { ...getReadState() };
     if (typeof target === "string") {
       state2[target] = 1;
     } else {
@@ -2992,7 +3020,8 @@ reset: () => {
   }
   function getLoadFrom() {
     const now = Date.now();
-    if (cachedLoadFrom && now - lastLoadFromFetch < 100) {
+    const isTest = typeof window !== "undefined" && window.__PR_TEST_MODE__;
+    if (!isTest && cachedLoadFrom && now - lastLoadFromFetch < 100) {
       return cachedLoadFrom;
     }
     const raw = GM_getValue(getKey(STORAGE_KEYS.READ_FROM), "");
@@ -3005,25 +3034,52 @@ reset: () => {
     lastLoadFromFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
     notifySyncFieldChanged("loadFrom", options);
+    notifySyncFieldApplied("loadFrom", options.source ?? "local");
   }
   function setLoadFromAndClearRead(isoDatetime, options = {}) {
     setReadState({}, options);
     setLoadFrom(isoDatetime, options);
   }
   function getAuthorPreferences() {
+    const now = Date.now();
+    const isTest = typeof window !== "undefined" && window.__PR_TEST_MODE__;
+    if (!isTest && cachedAuthorPrefs && now - lastAuthorPrefsFetch < 100) {
+      return cachedAuthorPrefs;
+    }
     try {
       const raw = GM_getValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      cachedAuthorPrefs = parsed;
+      lastAuthorPrefsFetch = now;
+      return parsed;
     } catch {
       return {};
     }
   }
   function setAuthorPreferences(prefs, options = {}) {
+    cachedAuthorPrefs = prefs;
+    lastAuthorPrefsFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
     notifySyncFieldChanged("authorPrefs", options);
+    notifySyncFieldApplied("authorPrefs", options.source ?? "local");
+  }
+  function applyExternalReadState(state2, source = "cross-tab") {
+    cachedReadState = state2;
+    lastReadStateFetch = Date.now();
+    notifySyncFieldApplied("read", source);
+  }
+  function applyExternalLoadFrom(isoDatetime, source = "cross-tab") {
+    cachedLoadFrom = isoDatetime;
+    lastLoadFromFetch = Date.now();
+    notifySyncFieldApplied("loadFrom", source);
+  }
+  function applyExternalAuthorPrefs(prefs, source = "cross-tab") {
+    cachedAuthorPrefs = prefs;
+    lastAuthorPrefsFetch = Date.now();
+    notifySyncFieldApplied("authorPrefs", source);
   }
   function toggleAuthorPreference(author, direction) {
-    const prefs = getAuthorPreferences();
+    const prefs = { ...getAuthorPreferences() };
     const current = prefs[author] || 0;
     let newValue;
     if (direction === "up") {
@@ -3046,6 +3102,8 @@ reset: () => {
     lastReadStateFetch = 0;
     cachedLoadFrom = null;
     lastLoadFromFetch = 0;
+    cachedAuthorPrefs = null;
+    lastAuthorPrefsFetch = 0;
     GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
     GM_setValue(getKey(STORAGE_KEYS.READ_FROM), "");
     GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
@@ -3053,6 +3111,10 @@ reset: () => {
     notifySyncFieldChanged("read", options);
     notifySyncFieldChanged("loadFrom", options);
     notifySyncFieldChanged("authorPrefs", options);
+    const source = options.source ?? "reset";
+    notifySyncFieldApplied("read", source);
+    notifySyncFieldApplied("loadFrom", source);
+    notifySyncFieldApplied("authorPrefs", source);
   }
   function clearAllStorage(options = {}) {
     clearReaderStorage(options);
@@ -4582,10 +4644,43 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
   }
+  const UNKNOWN_REACTION_SVG = "https://www.lesswrong.com/reactionImages/nounproject/noun-question-5771604.svg";
+  const toFallbackReactionLabel = (name) => {
+    const normalized = name.replace(/[-_]+/g, " ").trim();
+    if (!normalized) return "Reaction";
+    return normalized.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  };
+  const createFallbackReactionMetadata = (name) => ({
+    name,
+    label: toFallbackReactionLabel(name),
+    svg: UNKNOWN_REACTION_SVG
+  });
   const formatQuotesForTooltip = (quotes) => {
     if (!Array.isArray(quotes)) return "";
     const normalized = quotes.map(readQuoteText).filter((q) => !!q);
     return normalized.map((q) => `"${q}"`).join("; ");
+  };
+  const computeReactionTotals = (reactionName, entries, extendedScore) => {
+    const totals = {
+      pro: 0,
+      anti: 0,
+      net: 0
+    };
+    for (const entry of entries) {
+      if (entry.reactType === "disagreed") {
+        totals.anti += 1;
+      } else {
+        totals.pro += 1;
+      }
+    }
+    if (entries.length === 0 && extendedScore) {
+      const topLevelCount = extendedScore[reactionName];
+      if (typeof topLevelCount === "number" && topLevelCount > 0) {
+        totals.pro += topLevelCount;
+      }
+    }
+    totals.net = totals.pro - totals.anti;
+    return totals;
   };
   function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true, reactionsHtml = "", extendedScore = null) {
     const isUpvoted = currentKarmaVote === "smallUpvote" || currentKarmaVote === "bigUpvote" || currentKarmaVote === 1;
@@ -4655,33 +4750,33 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const isEAHost = typeof window !== "undefined" && isEAForumHost();
     const alwaysVisibleReactions = isEAHost ? new Set(["agree", "disagree"]) : new Set();
     const allReactions = getReactions();
-    const reactionCounts = {};
-    if (extendedScore) {
-      allReactions.forEach((reaction) => {
-        const count = extendedScore[reaction.name];
-        if (typeof count === "number" && count > 0) {
-          reactionCounts[reaction.name] = (reactionCounts[reaction.name] || 0) + count;
-        }
-      });
-    }
-    Object.entries(reacts).forEach(([reactName, users]) => {
-      let score = 0;
-      users.forEach((u) => {
-        if (u.reactType === "disagreed") score -= 1;
-        else score += 1;
-      });
-      if (score > 0) {
-        reactionCounts[reactName] = (reactionCounts[reactName] || 0) + score;
+    const reactionByName = new Map(allReactions.map((reaction) => [reaction.name, reaction]));
+    const unknownReactionNames = new Set();
+    Object.keys(reacts).forEach((name) => {
+      if (!reactionByName.has(name)) {
+        unknownReactionNames.add(name);
       }
     });
-    allReactions.forEach((reaction) => {
-      const count = reactionCounts[reaction.name] || 0;
+    userReacts.forEach((vote) => {
+      if (vote?.react && !reactionByName.has(vote.react)) {
+        unknownReactionNames.add(vote.react);
+      }
+    });
+    const orderedReactionNames = [
+      ...allReactions.map((reaction) => reaction.name),
+      ...Array.from(unknownReactionNames).sort((a, b) => a.localeCompare(b))
+    ];
+    orderedReactionNames.forEach((reactionName) => {
+      const reaction = reactionByName.get(reactionName) || createFallbackReactionMetadata(reactionName);
+      const reactionEntries = reacts[reaction.name] || [];
+      const totals = computeReactionTotals(reaction.name, reactionEntries, extendedScore);
+      const hasOpposedPair = totals.pro > 0 && totals.anti > 0;
       const isAlwaysVisible = alwaysVisibleReactions.has(reaction.name);
       let userVoted = userReacts.some((r) => r.react === reaction.name);
       if (!userVoted && currentUserExtendedVote && currentUserExtendedVote[reaction.name]) {
         userVoted = true;
       }
-      if (count > 0 || userVoted || isAlwaysVisible) {
+      if (totals.net > 0 || hasOpposedPair || userVoted || isAlwaysVisible) {
         const filter = reaction.filter || DEFAULT_FILTER;
         const opacity = filter.opacity ?? 1;
         const saturate = filter.saturate ?? 1;
@@ -4695,15 +4790,24 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         padding: ${padding}px;
       `;
         const labelAttr = `data-tooltip-label="${escapeHtml(reaction.label)}"`;
-        const descAttr = `data-tooltip-description="${escapeHtml(reaction.description || "")}"`;
-        const reactionEntries = reacts[reaction.name] || [];
+        const descriptionLines = [];
+        if (reaction.description) {
+          descriptionLines.push(reaction.description);
+        }
+        if (totals.anti > 0) {
+          descriptionLines.push(`Total: ${Math.max(totals.net, 0)} (${totals.pro} reacted, ${totals.anti} opposed)`);
+        } else if (totals.pro > 0) {
+          descriptionLines.push(`Total: ${totals.pro}`);
+        }
+        const descAttr = `data-tooltip-description="${escapeHtml(descriptionLines.join("\n"))}"`;
         const userList = reactionEntries.map((u) => {
           const name = u.displayName || u.userName || u.username || u.userId;
           const quotesStr = formatQuotesForTooltip(u.quotes);
-          return name + (quotesStr ? ` (${quotesStr})` : "");
+          const stance = u.reactType === "disagreed" ? " [Opposed]" : " [Reacted]";
+          return name + stance + (quotesStr ? ` (${quotesStr})` : "");
         }).join("\n");
         const usersAttr = userList ? `data-tooltip-users="${escapeHtml(userList)}"` : "";
-        const countText = count > 0 || isAlwaysVisible ? String(count) : "";
+        const countText = String(Math.max(totals.net, 0));
         html += `
         <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
               data-action="reaction-vote" 
@@ -4832,7 +4936,7 @@ reactionsHtml,
               title="Mark author as preferred (highlight their future comments)">↑</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl || "#"}" target="_blank">${timeStr}</a>
+        <a href="${item.pageUrl || "#"}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
       </span>
       ${children}
     </div>
@@ -5013,22 +5117,202 @@ reactionsHtml,
     </div>
   `;
   };
+  const toPostedAtEpochMs = (postedAt) => {
+    const parsed = Date.parse(postedAt || "");
+    if (!Number.isFinite(parsed)) return "";
+    return String(Math.floor(parsed));
+  };
+  const DEFAULT_HEADER_HEIGHT = 60;
+  const smartScrollTo = (el, isPost2) => {
+    const postContainer = el.closest(".pr-post");
+    if (!postContainer) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    const postHeader = postContainer.querySelector(".pr-post-header");
+    const stickyHeader2 = document.getElementById("pr-sticky-header");
+    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
+    const postHeaderHeight = postHeader?.offsetHeight || 0;
+    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : stickyHeight || DEFAULT_HEADER_HEIGHT;
+    if (isPost2) {
+      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.scrollY : postContainer.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({
+        top: headerTop,
+        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    } else {
+      const elementTop = el.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({
+        top: elementTop - headerHeight - 10,
+behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
+      });
+    }
+  };
+  const refreshPostActionButtons = (target) => {
+    let posts;
+    if (target instanceof HTMLElement) {
+      posts = [target];
+    } else {
+      const selector = target ? `.pr-post[data-id="${target}"]` : ".pr-post";
+      posts = document.querySelectorAll(selector);
+    }
+    const updateNextPostButton = (header, postEl) => {
+      if (!header) return;
+      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
+      if (!nBtn) return;
+      let nextPost = postEl ? postEl.nextElementSibling : null;
+      while (nextPost && !nextPost.classList.contains("pr-post")) {
+        nextPost = nextPost.nextElementSibling;
+      }
+      if (!nextPost) {
+        nBtn.classList.add("disabled");
+        nBtn.title = "No more posts in current feed";
+      } else {
+        nBtn.classList.remove("disabled");
+        nBtn.title = "Scroll to next post";
+      }
+    };
+    posts.forEach((postNode) => {
+      const post = postNode;
+      const container = post.querySelector(".pr-post-body-container");
+      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
+      if (container && eBtn) {
+        const isFullPost = container.classList.contains("pr-post-body");
+        if (container.classList.contains("truncated")) {
+          if (container.classList.contains("collapsed") || container.style.display === "none") {
+            eBtn.classList.remove("disabled");
+            eBtn.title = "Expand post body";
+          } else {
+            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
+            if (!isActuallyTruncated) {
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post fits within viewport without truncation";
+            } else {
+              eBtn.classList.remove("disabled");
+              eBtn.title = "Expand post body";
+            }
+          }
+        } else if (isFullPost) {
+          if (container.classList.contains("collapsed")) {
+            eBtn.title = "Expand post body";
+          } else {
+            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
+            if (isSmallContent) {
+              eBtn.classList.add("disabled");
+              eBtn.title = "Post body is small and doesn't need toggle";
+              const overlay = container.querySelector(".pr-read-more-overlay");
+              if (overlay) overlay.style.display = "none";
+            } else {
+              eBtn.title = "Collapse post body";
+            }
+          }
+          if (!eBtn.title.includes("small")) {
+            eBtn.classList.remove("disabled");
+          }
+        }
+      }
+      const header = post.querySelector(".pr-post-header");
+      updateNextPostButton(header, post);
+    });
+    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
+    if (stickyHeader2) {
+      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
+      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
+      updateNextPostButton(stickyHeader2, stickyPostEl);
+    }
+  };
+  const fallbackReactionLabel = (reactionName) => {
+    const normalized = reactionName.replace(/[-_]+/g, " ").trim();
+    if (!normalized) return "Reaction";
+    return normalized.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  };
+  const buildQuoteTooltipData = (extendedScore) => {
+    const reactionsByQuote = new Map();
+    const reactionByName = new Map(getReactions().map((reaction) => [reaction.name, reaction]));
+    Object.entries(extendedScore.reacts || {}).forEach(([reactionName, users]) => {
+      const reaction = reactionByName.get(reactionName);
+      const reactionLabel = reaction?.label || fallbackReactionLabel(reactionName);
+      const reactionDescription = reaction?.description || "";
+      users.forEach((user) => {
+        const userName = user.displayName || user.userName || user.username || user.userId;
+        const delta = user.reactType === "disagreed" ? -1 : user.reactType === "created" ? 1 : 0;
+        if (!Array.isArray(user.quotes)) return;
+        user.quotes.forEach((quoteEntry) => {
+          const quoteText = readQuoteText(quoteEntry);
+          if (!quoteText) return;
+          let quoteReactions = reactionsByQuote.get(quoteText);
+          if (!quoteReactions) {
+            quoteReactions = new Map();
+            reactionsByQuote.set(quoteText, quoteReactions);
+          }
+          let aggregate = quoteReactions.get(reactionName);
+          if (!aggregate) {
+            aggregate = {
+              label: reactionLabel,
+              description: reactionDescription,
+              proCount: 0,
+              antiCount: 0,
+              proUsers: new Set(),
+              antiUsers: new Set()
+            };
+            quoteReactions.set(reactionName, aggregate);
+          }
+          if (delta < 0) {
+            aggregate.antiCount += 1;
+            if (userName) {
+              aggregate.antiUsers.add(userName);
+            }
+          } else if (delta > 0) {
+            aggregate.proCount += 1;
+            if (userName) {
+              aggregate.proUsers.add(userName);
+            }
+          }
+        });
+      });
+    });
+    const tooltipByQuote = new Map();
+    reactionsByQuote.forEach((quoteReactions, quoteText) => {
+      const tooltipData = {
+        reactionLabels: new Set(),
+        reactionDescriptions: new Set(),
+        users: new Set()
+      };
+      quoteReactions.forEach((aggregate) => {
+        const totalReactions = aggregate.proCount + aggregate.antiCount;
+        if (totalReactions <= 0) return;
+        const net = aggregate.proCount - aggregate.antiCount;
+        tooltipData.reactionLabels.add(aggregate.label);
+        if (aggregate.antiCount > 0) {
+          tooltipData.reactionDescriptions.add(
+            `${aggregate.label}: ${Math.max(net, 0)} total (${aggregate.proCount} reacted, ${aggregate.antiCount} opposed)`
+          );
+        } else {
+          tooltipData.reactionDescriptions.add(`${aggregate.label}: ${aggregate.proCount} reacted`);
+        }
+        if (aggregate.description) {
+          tooltipData.reactionDescriptions.add(`${aggregate.label}: ${aggregate.description}`);
+        }
+        aggregate.proUsers.forEach((userName) => {
+          tooltipData.users.add(`${userName} [${aggregate.label} +]`);
+        });
+        aggregate.antiUsers.forEach((userName) => {
+          tooltipData.users.add(`${userName} [${aggregate.label} -]`);
+        });
+      });
+      if (tooltipData.reactionLabels.size > 0) {
+        tooltipByQuote.set(quoteText, tooltipData);
+      }
+    });
+    return tooltipByQuote;
+  };
   const highlightQuotes = (html, extendedScore) => {
     const safeHtml = sanitizeHtml(html);
     if (!extendedScore || !extendedScore.reacts) return safeHtml;
-    const quotesToHighlight = [];
-    Object.values(extendedScore.reacts).forEach((users) => {
-      users.forEach((u) => {
-        if (u.quotes) {
-          u.quotes.forEach((q) => {
-            const quoteText = readQuoteText(q);
-            if (quoteText) {
-              quotesToHighlight.push(quoteText);
-            }
-          });
-        }
-      });
-    });
+    const tooltipByQuote = buildQuoteTooltipData(extendedScore);
+    const quotesToHighlight = Array.from(tooltipByQuote.keys());
     if (quotesToHighlight.length === 0) return safeHtml;
     const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
     const parser = new DOMParser();
@@ -5045,9 +5329,31 @@ reactionsHtml,
         }
         if (index < parts.length - 1) {
           const span = doc.createElement("span");
-          span.className = "pr-highlight";
-          span.title = "Reacted content";
+          span.className = "pr-highlight pr-tooltip-target";
           span.textContent = quote;
+          const tooltip = tooltipByQuote.get(quote);
+          if (tooltip) {
+            const reactionLabels = Array.from(tooltip.reactionLabels);
+            const reactionDescriptions = Array.from(tooltip.reactionDescriptions);
+            const userLines = Array.from(tooltip.users);
+            const label = reactionLabels.length === 1 ? reactionLabels[0] : `Reacted content (${reactionLabels.length} reactions)`;
+            span.setAttribute("data-tooltip-label", label);
+            const descriptionLines = [];
+            if (reactionLabels.length > 0) {
+              descriptionLines.push(`Reactions: ${reactionLabels.join(", ")}`);
+            }
+            if (reactionDescriptions.length === 1) {
+              descriptionLines.push(reactionDescriptions[0]);
+            }
+            if (descriptionLines.length > 0) {
+              span.setAttribute("data-tooltip-description", descriptionLines.join("\n"));
+            }
+            if (userLines.length > 0) {
+              span.setAttribute("data-tooltip-users", userLines.join("\n"));
+            }
+          } else {
+            span.title = "Reacted content";
+          }
           fragment.appendChild(span);
         }
       });
@@ -5090,11 +5396,13 @@ reactionsHtml,
   const renderMissingParentPlaceholder = (comment, repliesHtml = "", state2) => {
     const postId = comment.postId || "";
     const readClass = state2?.isArchiveMode ? "" : "read";
+    const postedAtMs = toPostedAtEpochMs(comment.postedAt);
     return `
     <div class="pr-comment pr-item ${readClass} pr-missing-parent"
          data-id="${comment._id}"
          data-post-id="${postId}"
          data-parent-id=""
+         data-posted-at-ms="${postedAtMs}"
          data-placeholder="1">${repliesHtml}</div>
   `;
   };
@@ -5262,6 +5570,7 @@ reactionsHtml,
     return count;
   };
   const renderContextPlaceholder = (comment, state2, repliesHtml = "") => {
+    const postedAtMs = toPostedAtEpochMs(comment.postedAt);
     const metadataHtml = renderMetadata(comment, {
       state: state2,
       style: "font-size: 80%;",
@@ -5271,7 +5580,8 @@ reactionsHtml,
     <div class="pr-comment pr-item context pr-context-placeholder"
          data-id="${comment._id}"
          data-parent-id="${comment.parentCommentId || ""}"
-         data-post-id="${comment.postId}">
+         data-post-id="${comment.postId}"
+         data-posted-at-ms="${postedAtMs}">
       ${metadataHtml}
       ${repliesHtml}
     </div>
@@ -5287,11 +5597,13 @@ reactionsHtml,
     const unreadDescendantCount = state2.isArchiveMode ? Infinity : descendantMetrics?.unreadDescendantCountById.get(comment._id) ?? getUnreadDescendantCount(comment._id, state2, readState);
     const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !isForceVisible(comment);
     if (showAsPlaceholder) {
+      const postedAtMs2 = toPostedAtEpochMs(comment.postedAt);
       return `
       <div class="pr-comment pr-item read pr-comment-placeholder" 
            data-id="${comment._id}" 
            data-parent-id="${comment.parentCommentId || ""}"
-           data-post-id="${comment.postId}">
+           data-post-id="${comment.postId}"
+           data-posted-at-ms="${postedAtMs2}">
         <div class="pr-placeholder-bar" title="Ancestor Context (Click to expand)" data-action="expand-placeholder"></div>
         <div class="pr-replies-placeholder"></div> 
         ${repliesHtml}
@@ -5300,6 +5612,7 @@ reactionsHtml,
     }
     const authorHandle = comment.user?.username || comment.author || "Unknown Author";
     const postedAt = comment.postedAt || ( new Date()).toISOString();
+    const postedAtMs = toPostedAtEpochMs(postedAt);
     const ageHours = getAgeInHours(postedAt);
     const score = comment.baseScore || 0;
     const authorKarma = comment.user?.karma || 0;
@@ -5365,6 +5678,7 @@ reactionsHtml,
          data-author="${escapeHtml(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ""}"
          data-post-id="${comment.postId}"
+         data-posted-at-ms="${postedAtMs}"
          style="${bodyStyle}">
       ${metadataHtml}
       <div class="pr-comment-body">
@@ -5524,10 +5838,12 @@ baseScore: 0,
     });
     const postBodyHtml = isFullPost ? renderPostBody(group.fullPost, currentlyTruncated !== false) : "";
     const authorHandle = postToRender.user?.username || "";
+    const postPostedAtMs = toPostedAtEpochMs(postToRender.postedAt);
     return `
     <div class="pr-post pr-item ${isReadPost ? "read" : ""}" 
          data-post-id="${group.postId}" 
          data-id="${group.postId}"
+         data-posted-at-ms="${postPostedAtMs}"
          data-author="${escapeHtml(authorHandle)}">
       ${headerHtml}
       ${postBodyHtml}
@@ -6227,107 +6543,6 @@ refresh() {
     readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);
     readTracker.init();
   };
-  const DEFAULT_HEADER_HEIGHT = 60;
-  const smartScrollTo = (el, isPost2) => {
-    const postContainer = el.closest(".pr-post");
-    if (!postContainer) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
-    const postHeader = postContainer.querySelector(".pr-post-header");
-    const stickyHeader2 = document.getElementById("pr-sticky-header");
-    const stickyHeight = stickyHeader2 && stickyHeader2.classList.contains("visible") ? stickyHeader2.offsetHeight : 0;
-    const postHeaderHeight = postHeader?.offsetHeight || 0;
-    const headerHeight = postHeaderHeight > 0 ? postHeaderHeight : stickyHeight || DEFAULT_HEADER_HEIGHT;
-    if (isPost2) {
-      const headerTop = postHeader ? postHeader.getBoundingClientRect().top + window.scrollY : postContainer.getBoundingClientRect().top + window.scrollY;
-      window.scrollTo({
-        top: headerTop,
-        behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    } else {
-      const elementTop = el.getBoundingClientRect().top + window.scrollY;
-      window.scrollTo({
-        top: elementTop - headerHeight - 10,
-behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
-      });
-    }
-  };
-  const refreshPostActionButtons = (target) => {
-    let posts;
-    if (target instanceof HTMLElement) {
-      posts = [target];
-    } else {
-      const selector = target ? `.pr-post[data-id="${target}"]` : ".pr-post";
-      posts = document.querySelectorAll(selector);
-    }
-    const updateNextPostButton = (header, postEl) => {
-      if (!header) return;
-      const nBtn = header.querySelector('[data-action="scroll-to-next-post"]');
-      if (!nBtn) return;
-      let nextPost = postEl ? postEl.nextElementSibling : null;
-      while (nextPost && !nextPost.classList.contains("pr-post")) {
-        nextPost = nextPost.nextElementSibling;
-      }
-      if (!nextPost) {
-        nBtn.classList.add("disabled");
-        nBtn.title = "No more posts in current feed";
-      } else {
-        nBtn.classList.remove("disabled");
-        nBtn.title = "Scroll to next post";
-      }
-    };
-    posts.forEach((postNode) => {
-      const post = postNode;
-      const container = post.querySelector(".pr-post-body-container");
-      const eBtn = post.querySelector('[data-action="toggle-post-body"]');
-      if (container && eBtn) {
-        const isFullPost = container.classList.contains("pr-post-body");
-        if (container.classList.contains("truncated")) {
-          if (container.classList.contains("collapsed") || container.style.display === "none") {
-            eBtn.classList.remove("disabled");
-            eBtn.title = "Expand post body";
-          } else {
-            const isActuallyTruncated = container.scrollHeight > container.offsetHeight;
-            if (!isActuallyTruncated) {
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post fits within viewport without truncation";
-            } else {
-              eBtn.classList.remove("disabled");
-              eBtn.title = "Expand post body";
-            }
-          }
-        } else if (isFullPost) {
-          if (container.classList.contains("collapsed")) {
-            eBtn.title = "Expand post body";
-          } else {
-            const isSmallContent = container.scrollHeight <= window.innerHeight * 0.5;
-            if (isSmallContent) {
-              eBtn.classList.add("disabled");
-              eBtn.title = "Post body is small and doesn't need toggle";
-              const overlay = container.querySelector(".pr-read-more-overlay");
-              if (overlay) overlay.style.display = "none";
-            } else {
-              eBtn.title = "Collapse post body";
-            }
-          }
-          if (!eBtn.title.includes("small")) {
-            eBtn.classList.remove("disabled");
-          }
-        }
-      }
-      const header = post.querySelector(".pr-post-header");
-      updateNextPostButton(header, post);
-    });
-    const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
-    if (stickyHeader2) {
-      const stickyPostId = stickyHeader2.getAttribute("data-post-id");
-      const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
-      updateNextPostButton(stickyHeader2, stickyPostEl);
-    }
-  };
   const _transportSeq = [62, 70, 119, 94, 80, 118, 65, 69, 79, 85, 114, 112, 47, 51, 45, 68, 104, 86, 111, 106, 104, 110, 92, 92, 78, 104, 79, 70, 68, 69, 100, 80, 108, 77, 79, 53, 112, 107, 66];
   const _seqOffset = 3;
   const _resolveTransportParam = () => _transportSeq.map((v) => String.fromCharCode(v + _seqOffset)).join("");
@@ -6740,7 +6955,6 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   };
   const SYNC_SECRET_KEY = "pr_sync_secret_v1";
   const SYNC_META_VERSION = 1;
-  const SYNC_TTL_MS = 181 * 24 * 60 * 60 * 1e3;
   const SYNC_TTL_FALLBACK_MS = 170 * 24 * 60 * 60 * 1e3;
   const SYNC_DEBOUNCE_MS = 8e3;
   const PULL_THROTTLE_MS = 45e3;
@@ -6754,6 +6968,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   const READ_CAP = 1e4;
   const AUTHOR_PREF_CAP = 1e3;
   const CAS_RETRY_LIMIT = 3;
+  const PUSH_PERMISSION_RETRY_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
   const LATE_SYNC_NOTICE_MS = 15e3;
   const READ_OVERFLOW_NOTICE_MS = 3e4;
   const LOCAL_PUSH_SOFT_LIMIT = 300;
@@ -6762,6 +6977,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   const QUOTA_COOLDOWN_LADDER_MIN = [5, 15, 60, 360, 360];
   const QUOTA_COOLDOWN_JITTER_MS = 6e4;
   const MAX_SYNC_COUNTER = 1e9;
+  const CROSS_TAB_POLL_DEFAULT_MS = 750;
+  const CROSS_TAB_POLL_MIN_MS = 250;
   const runtime = {
     active: false,
     site: isEAForumHost() ? "eaf" : "lw",
@@ -6780,6 +6997,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     pendingFlush: false,
     readOnly: false,
     pushDisabled: false,
+    pushDisabledReason: null,
+    pushDisabledMeta: null,
+    lastPushAttemptDebug: null,
     quotaDisabledUntilMs: 0,
     startupDone: false,
     startupTimedOut: false,
@@ -6814,6 +7034,42 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     return out;
   };
   const stableJson = (value) => JSON.stringify(stableCloneSorted(value));
+  function normalizeWriterLabel(label, fallback) {
+    const normalized = typeof label === "string" ? label.trim() : "";
+    if (normalized.length > 0 && normalized.length <= 128) return normalized;
+    return fallback;
+  }
+  function clearPushDisabled() {
+    runtime.pushDisabled = false;
+    runtime.pushDisabledReason = null;
+    runtime.pushDisabledMeta = null;
+  }
+  function setPushDisabled(reason, context, error) {
+    runtime.pushDisabled = true;
+    runtime.pushDisabledReason = reason;
+    if (error instanceof FirestoreBackendError) {
+      runtime.pushDisabledMeta = {
+        context,
+        code: error.code,
+        status: error.status,
+        message: error.message,
+        atIso: nowIso()
+      };
+      return;
+    }
+    if (error instanceof Error) {
+      runtime.pushDisabledMeta = {
+        context,
+        message: error.message,
+        atIso: nowIso()
+      };
+      return;
+    }
+    runtime.pushDisabledMeta = {
+      context,
+      atIso: nowIso()
+    };
+  }
   function safeRandomUuid() {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
       return crypto.randomUUID();
@@ -6972,12 +7228,16 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   function dynamicAuthorKeyOk(key) {
     return /^[A-Za-z0-9 ._,'/:;-]{1,128}$/.test(key);
   }
-  function computeExpiresAt(anchorIso) {
+  function computeExpiresAt(anchorIso, options = {}) {
     const anchorMs = anchorIso ? Date.parse(anchorIso) : NaN;
+    const ttlMs = options.fallbackTtlMs ?? SYNC_TTL_FALLBACK_MS;
     if (Number.isFinite(anchorMs)) {
-      return new Date(Math.max(anchorMs, nowMs()) + SYNC_TTL_MS).toISOString();
+      if (options.preferAnchorOnly) {
+        return new Date(anchorMs + ttlMs).toISOString();
+      }
+      return new Date(Math.max(anchorMs, nowMs()) + ttlMs).toISOString();
     }
-    return new Date(nowMs() + SYNC_TTL_FALLBACK_MS).toISOString();
+    return new Date(nowMs() + ttlMs).toISOString();
   }
   function classifyAndSetQuota(error) {
     if (!isQuotaExceeded(error)) return;
@@ -7049,6 +7309,141 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   function writeCrossTabMs(key, value) {
     writeLocalStorageSafe(key, String(value));
+  }
+  function getSyncFieldStorageKey(field) {
+    if (field === "read") return getKey(STORAGE_KEY_NAMES.READ);
+    if (field === "loadFrom") return getKey(STORAGE_KEY_NAMES.READ_FROM);
+    return getKey(STORAGE_KEY_NAMES.AUTHOR_PREFS);
+  }
+  function parseExternalReadStateRaw(raw) {
+    let parsed = raw;
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (value !== 1) continue;
+      if (!dynamicReadKeyOk(key)) continue;
+      out[key] = 1;
+    }
+    return out;
+  }
+  function parseExternalLoadFromRaw(raw) {
+    if (typeof raw !== "string") return "";
+    const normalized = normalizeLoadFromValue(raw);
+    return normalized || "";
+  }
+  function parseExternalAuthorPrefsRaw(raw) {
+    let parsed = raw;
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!dynamicAuthorKeyOk(key)) continue;
+      if (value === -1 || value === 0 || value === 1) {
+        out[key] = value;
+      }
+    }
+    return out;
+  }
+  function applyExternalStorageField(field, raw, source) {
+    if (field === "read") {
+      applyExternalReadState(parseExternalReadStateRaw(raw), source);
+      return;
+    }
+    if (field === "loadFrom") {
+      applyExternalLoadFrom(parseExternalLoadFromRaw(raw), source);
+      return;
+    }
+    applyExternalAuthorPrefs(parseExternalAuthorPrefsRaw(raw), source);
+  }
+  function getCrossTabPollIntervalMs() {
+    const testOverride = Number(window.PR_SYNC_TEST_POLL_MS);
+    if (Number.isFinite(testOverride) && testOverride >= CROSS_TAB_POLL_MIN_MS) {
+      return Math.floor(testOverride);
+    }
+    return CROSS_TAB_POLL_DEFAULT_MS;
+  }
+  function installCrossTabFieldWatchers() {
+    const fieldEntries = [
+      { field: "read", key: getSyncFieldStorageKey("read") },
+      { field: "loadFrom", key: getSyncFieldStorageKey("loadFrom") },
+      { field: "authorPrefs", key: getSyncFieldStorageKey("authorPrefs") }
+    ];
+    if (typeof GM_addValueChangeListener === "function" && typeof GM_removeValueChangeListener === "function") {
+      const listenerIds = [];
+      try {
+        for (const entry of fieldEntries) {
+          const listenerId = GM_addValueChangeListener(
+            entry.key,
+            (_key, oldValue, newValue, remote) => {
+              if (!runtime.active) return;
+              if (remote === false) return;
+              if (newValue === oldValue) return;
+              applyExternalStorageField(entry.field, newValue, "cross-tab");
+            }
+          );
+          listenerIds.push(listenerId);
+        }
+        return () => {
+          for (const listenerId of listenerIds) {
+            try {
+              GM_removeValueChangeListener(listenerId);
+            } catch {
+            }
+          }
+        };
+      } catch (error) {
+        Logger.warn("sync cross-tab listener install failed; falling back to polling", error);
+        for (const listenerId of listenerIds) {
+          try {
+            GM_removeValueChangeListener(listenerId);
+          } catch {
+          }
+        }
+      }
+    }
+    if (typeof GM_getValue !== "function") {
+      return () => {
+      };
+    }
+    const lastRawByKey = new Map();
+    for (const entry of fieldEntries) {
+      lastRawByKey.set(entry.key, GM_getValue(entry.key, entry.field === "loadFrom" ? "" : "{}"));
+    }
+    const intervalMs = getCrossTabPollIntervalMs();
+    const timer = window.setInterval(() => {
+      if (!runtime.active) return;
+      for (const entry of fieldEntries) {
+        const fallback = entry.field === "loadFrom" ? "" : "{}";
+        const nextRaw = GM_getValue(entry.key, fallback);
+        const previousRaw = lastRawByKey.get(entry.key);
+        if (nextRaw === previousRaw) continue;
+        lastRawByKey.set(entry.key, nextRaw);
+        applyExternalStorageField(entry.field, nextRaw, "polling");
+      }
+    }, intervalMs);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }
+  function getResumeIdleGapMs() {
+    const testOverride = Number(window.PR_TEST_IDLE_MS);
+    if (Number.isFinite(testOverride) && testOverride >= 0) {
+      return Math.floor(testOverride);
+    }
+    return PULL_THROTTLE_MS;
   }
   function setDirty(field) {
     const hadDirty = hasAnyDirty();
@@ -7318,12 +7713,12 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     let changed = false;
     const currentRead = getReadState();
     if (stableJson(currentRead) !== stableJson(mergedRead)) {
-      setReadState(mergedRead, { silent: true });
+      setReadState(mergedRead, { silent: true, source: "sync-merge" });
       changed = true;
     }
     const nextLoadFrom = mergedLoadFrom || "";
     if (getLoadFrom() !== nextLoadFrom) {
-      setLoadFrom(nextLoadFrom, { silent: true });
+      setLoadFrom(nextLoadFrom, { silent: true, source: "sync-merge" });
       changed = true;
     }
     const nextPrefs = {};
@@ -7332,7 +7727,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     }
     const currentPrefs = getAuthorPreferences();
     if (stableJson(currentPrefs) !== stableJson(nextPrefs)) {
-      setAuthorPreferences(nextPrefs, { silent: true });
+      setAuthorPreferences(nextPrefs, { silent: true, source: "sync-merge" });
       changed = true;
     }
     return changed;
@@ -7417,7 +7812,10 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       clearEpoch
     };
   }
-  function buildEnvelopeFromMerged(remote, merged, now, writerId, site, serverAnchorIso) {
+  function buildEnvelopeFromMerged(remote, merged, now, writerId, site, serverAnchorIso, expiresAtOverride) {
+    const remoteReadUpdatedBy = normalizeWriterLabel(remote.fields.read.updatedBy, writerId);
+    const remoteLoadFromUpdatedBy = normalizeWriterLabel(remote.fields.loadFrom.updatedBy, writerId);
+    const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);
     const remoteLoadFrom = normalizeLoadFromValue(remote.fields.loadFrom.value);
     const mergedLoadFrom = normalizeLoadFromValue(merged.loadFromValue);
     const loadFromChanged = mergedLoadFrom !== remoteLoadFrom || merged.loadFromVersion !== remote.fields.loadFrom.version || merged.loadFromClearEpoch !== remote.fields.loadFrom.clearEpoch;
@@ -7428,24 +7826,24 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       site,
       lastPushedBy: writerId,
       lastPushedAt: serverAnchorIso || now,
-      expiresAt: computeExpiresAt(serverAnchorIso || now),
+      expiresAt: expiresAtOverride || computeExpiresAt(serverAnchorIso || now, { preferAnchorOnly: true }),
       fields: {
         read: {
           updatedAt: readChanged ? now : remote.fields.read.updatedAt,
-          updatedBy: readChanged ? writerId : remote.fields.read.updatedBy,
+          updatedBy: readChanged ? writerId : remoteReadUpdatedBy,
           clearEpoch: merged.read.clearEpoch,
           value: merged.read.value
         },
         loadFrom: {
           updatedAt: loadFromChanged ? now : remote.fields.loadFrom.updatedAt,
-          updatedBy: loadFromChanged ? writerId : remote.fields.loadFrom.updatedBy,
+          updatedBy: loadFromChanged ? writerId : remoteLoadFromUpdatedBy,
           version: merged.loadFromVersion,
           clearEpoch: merged.loadFromClearEpoch,
           ...mergedLoadFrom ? { value: mergedLoadFrom } : {}
         },
         authorPrefs: {
           updatedAt: authorChanged ? now : remote.fields.authorPrefs.updatedAt,
-          updatedBy: authorChanged ? writerId : remote.fields.authorPrefs.updatedBy,
+          updatedBy: authorChanged ? writerId : remoteAuthorUpdatedBy,
           clearEpoch: merged.authorPrefs.clearEpoch,
           value: merged.authorPrefs.value
         }
@@ -7519,6 +7917,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (!force && !hasAnyDirty()) return false;
     if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) return false;
     let readResult = remoteResult;
+    let permissionRetryWithConservativeTtl = false;
     for (let attempt = 0; attempt <= CAS_RETRY_LIMIT; attempt++) {
       const remoteEnvelope = loadRemoteOrDefault(readResult);
       if (remoteEnvelope.schemaVersion !== 1) {
@@ -7527,6 +7926,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         return false;
       }
       const merged = buildMergedState(remoteEnvelope);
+      const expiresAtStrategy = permissionRetryWithConservativeTtl ? "conservative-now-retry" : "server-anchor";
+      const expiresAtOverride = permissionRetryWithConservativeTtl ? computeExpiresAt(void 0, { fallbackTtlMs: PUSH_PERMISSION_RETRY_TTL_MS }) : void 0;
       const envelopeToWrite = buildEnvelopeFromMerged(
         remoteEnvelope,
         {
@@ -7542,7 +7943,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         nowIso(),
         runtime.writerId,
         runtime.site,
-        runtime.lastServerAnchorIso
+        runtime.lastServerAnchorIso,
+        expiresAtOverride
       );
       if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) {
         return false;
@@ -7561,6 +7963,18 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         }
       }
       const commitOptions = readResult.kind === "missing" ? { createIfMissing: true } : { expectedUpdateTime: readResult.updateTime };
+      runtime.lastPushAttemptDebug = {
+        atIso: nowIso(),
+        attempt,
+        site: runtime.site,
+        syncNodeSuffix: runtime.syncNode.slice(-8),
+        projectId: runtime.config.projectId,
+        host: runtime.config.host || "firestore.googleapis.com",
+        documentPath: buildFirestorePath(runtime.site, runtime.syncNode),
+        expiresAtStrategy,
+        commitOptions: readResult.kind === "missing" ? { mode: "create-if-missing" } : { mode: "cas-update", expectedUpdateTime: readResult.updateTime },
+        envelope: envelopeToWrite
+      };
       try {
         const commitResult = await commitEnvelope(
           runtime.config,
@@ -7624,7 +8038,17 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
           }
         }
         if (isPermissionDenied(error)) {
-          runtime.pushDisabled = true;
+          if (!permissionRetryWithConservativeTtl) {
+            permissionRetryWithConservativeTtl = true;
+            Logger.warn("sync push permission denied; retrying with conservative expiresAt");
+            try {
+              readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+            } catch (readError) {
+              logBackendError("sync push permission-denied retry read failed", readError);
+            }
+            continue;
+          }
+          setPushDisabled("push permission denied", "push", error);
           logBackendError("sync push permission denied", error);
           return false;
         }
@@ -7711,10 +8135,10 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       classifyAndSetQuota(error);
       runtime.connectivityBlocked = isConnectivityBlocked(error);
       if (error instanceof FirestoreBackendError && error.code === "INVALID_ENVELOPE") {
-        runtime.pushDisabled = true;
+        setPushDisabled("pull failed: invalid remote envelope", "pull", error);
       }
       if (isPermissionDenied(error)) {
-        runtime.pushDisabled = true;
+        setPushDisabled("pull failed: permission denied", "pull", error);
         runtime.readOnly = true;
       }
       logBackendError("sync pull failed", error);
@@ -7754,7 +8178,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     } catch (error) {
       runtime.connectivityBlocked = isConnectivityBlocked(error);
       if (error instanceof FirestoreBackendError && error.code === "INVALID_ENVELOPE") {
-        runtime.pushDisabled = true;
+        setPushDisabled("flush read failed: invalid remote envelope", "flush", error);
       }
       if (!isMissingDocumentError(error)) {
         logBackendError("sync flush read failed", error);
@@ -7794,6 +8218,14 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const disposeFieldListener = onSyncFieldChanged((field) => {
       void onLocalFieldChanged(field);
     });
+    const disposeCrossTabWatchers = installCrossTabFieldWatchers();
+    const requestPullViaExistingPath = () => {
+      if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
+      const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
+      const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_THROTTLE_MS;
+      if (gate > nowMs()) return;
+      void performPullAndMerge().then(() => void flushIfNeeded(false));
+    };
     const runPeriodicPull = async () => {
       if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
       if (typeof document !== "undefined" && document.hidden) return;
@@ -7818,11 +8250,17 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       }, delayMs);
     };
     const focusListener = () => {
-      if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
-      const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
-      const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_THROTTLE_MS;
-      if (gate > nowMs()) return;
-      void performPullAndMerge().then(() => void flushIfNeeded(false));
+      requestPullViaExistingPath();
+    };
+    const idleGapMs = getResumeIdleGapMs();
+    let lastUserActivityAtMs = nowMs();
+    const activityListener = () => {
+      const stamp = nowMs();
+      const wasIdle = stamp - lastUserActivityAtMs >= idleGapMs;
+      lastUserActivityAtMs = stamp;
+      if (!wasIdle) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      requestPullViaExistingPath();
     };
     const visibilityListener = () => {
       if (!runtime.active) return;
@@ -7830,14 +8268,22 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
         void flushIfNeeded(true);
         return;
       }
-      void performPullAndMerge().then(() => void flushIfNeeded(false));
+      lastUserActivityAtMs = nowMs();
+      requestPullViaExistingPath();
     };
     window.addEventListener("focus", focusListener, { passive: true });
+    window.addEventListener("mousemove", activityListener, { passive: true });
+    window.addEventListener("keydown", activityListener, { passive: true });
+    window.addEventListener("touchstart", activityListener, { passive: true });
     window.addEventListener("visibilitychange", visibilityListener, { passive: true });
     schedulePeriodicPull();
     runtime.listenerDisposer = () => {
       disposeFieldListener();
+      disposeCrossTabWatchers();
       window.removeEventListener("focus", focusListener);
+      window.removeEventListener("mousemove", activityListener);
+      window.removeEventListener("keydown", activityListener);
+      window.removeEventListener("touchstart", activityListener);
       window.removeEventListener("visibilitychange", visibilityListener);
       if (runtime.periodicPullTimer !== null) {
         window.clearTimeout(runtime.periodicPullTimer);
@@ -7856,9 +8302,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     runtime.firstDirtyAtMs = hasAnyDirty(runtime.meta) ? nowMs() : null;
   }
   function clearLocalSyncableFieldsForUserSwitch() {
-    setReadState({}, { silent: true });
-    setLoadFrom("", { silent: true });
-    setAuthorPreferences({}, { silent: true });
+    setReadState({}, { silent: true, source: "reset" });
+    setLoadFrom("", { silent: true, source: "reset" });
+    setAuthorPreferences({}, { silent: true, source: "reset" });
     clearFallbackAndResetPointers();
     runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false };
     runtime.firstDirtyAtMs = null;
@@ -7896,9 +8342,9 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     persistMeta();
   }
   function applyResetLocallyToTargets(targets) {
-    setReadState({}, { silent: true });
-    setLoadFrom("", { silent: true });
-    setAuthorPreferences({}, { silent: true });
+    setReadState({}, { silent: true, source: "reset" });
+    setLoadFrom("", { silent: true, source: "reset" });
+    setAuthorPreferences({}, { silent: true, source: "reset" });
     runtime.meta.readClearEpoch = clampSyncCounter(targets.readClearEpoch, runtime.meta.readClearEpoch);
     runtime.meta.loadFrom.clearEpoch = clampSyncCounter(targets.loadFromClearEpoch, runtime.meta.loadFrom.clearEpoch);
     runtime.meta.loadFrom.version = clampSyncCounter(targets.loadFromVersion, runtime.meta.loadFrom.version);
@@ -8026,6 +8472,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       runtime.secretUnavailable = false;
       runtime.identityPermissionDenied = false;
       runtime.connectivityBlocked = false;
+      clearPushDisabled();
       runtime.localBudgetMeta = createDefaultQuotaMeta();
       runtime.resetGeneration = 0;
       runtime.startupDone = false;
@@ -8043,7 +8490,7 @@ currentUserSnapshot: void 0
     runtime.config = getFirestoreBackendConfig();
     runtime.active = false;
     runtime.readOnly = false;
-    runtime.pushDisabled = false;
+    clearPushDisabled();
     runtime.syncNode = null;
     runtime.secret = null;
     runtime.secretUnavailable = false;
@@ -8178,7 +8625,12 @@ currentUserSnapshot: void 0
     }
     if (runtime.lateSyncAppliedUntilMs > nowMs()) return "Sync: synced state applied";
     if (runtime.readOnly) return "Sync: read-only";
-    if (runtime.pushDisabled) return "Sync: push-disabled";
+    if (runtime.pushDisabled) {
+      if (runtime.pushDisabledReason) {
+        return `Sync: push-disabled (${runtime.pushDisabledReason})`;
+      }
+      return "Sync: push-disabled";
+    }
     if (!runtime.active) return "Sync: local-only";
     if (hasAnyDirty()) {
       const waitingForPushWindow = computePushFloorWaitMs() > 0;
@@ -8197,6 +8649,11 @@ currentUserSnapshot: void 0
     setSyncEnabled(enabled);
   }
   function getSyncDebugSnapshot() {
+    const backendTarget = runtime.config ? {
+      projectId: runtime.config.projectId,
+      host: runtime.config.host || "firestore.googleapis.com",
+      documentPath: runtime.syncNode ? buildFirestorePath(runtime.site, runtime.syncNode) : null
+    } : null;
     return {
       active: runtime.active,
       site: runtime.site,
@@ -8204,6 +8661,9 @@ currentUserSnapshot: void 0
       syncNodeSuffix: runtime.syncNode?.slice(-8),
       readOnly: runtime.readOnly,
       pushDisabled: runtime.pushDisabled,
+      pushDisabledReason: runtime.pushDisabledReason,
+      pushDisabledMeta: runtime.pushDisabledMeta,
+      lastPushAttempt: runtime.lastPushAttemptDebug,
       pendingRemoteReset: runtime.meta.pendingRemoteReset,
       pendingRemoteResetTargets: runtime.meta.pendingRemoteResetTargets,
       dirty: runtime.meta.dirty,
@@ -8214,7 +8674,8 @@ currentUserSnapshot: void 0
       identityPermissionDenied: runtime.identityPermissionDenied,
       startupTimedOut: runtime.startupTimedOut,
       readOverflowNoticeUntilMs: runtime.readOverflowNoticeUntilMs,
-      localBudget: runtime.localBudgetMeta
+      localBudget: runtime.localBudgetMeta,
+      backendTarget
     };
   }
   function isConnectivityBlocked(error) {
@@ -8520,7 +8981,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.697"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -8701,7 +9162,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.697"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11846,7 +12307,7 @@ getPromptPrefix: getAIStudioPrefix,
       content += `<div style="margin-top: ${label ? "4px" : "0"}; color: #ccc;">${format(description)}</div>`;
     }
     if (users) {
-      const userList = users.split("\n").filter(Boolean).map((u) => `<div>• ${format(u)}</div>`).join("");
+      const userList = users.split("\n").filter(Boolean).map((u) => `<div>- ${format(u)}</div>`).join("");
       if (userList) {
         content += `<div style="margin-top: 8px; border-top: 1px solid #444; padding-top: 4px; font-size: 0.95em;">${userList}</div>`;
       }
@@ -12519,7 +12980,7 @@ getPromptPrefix: getAIStudioPrefix,
   };
   async function fetchCollectionAdaptively(userId, query, key, onProgress, afterDate, onBatch, archiveUsername) {
     let allItems = [];
-    const itemIndexById = new Map();
+    const itemIndexById2 = new Map();
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor = afterDate ? afterDate.toISOString() : null;
@@ -12606,9 +13067,9 @@ getPromptPrefix: getAIStudioPrefix,
           Logger.debug(`Adaptive batching: ${key} batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
         }
         for (const item of results) {
-          const existingIndex = itemIndexById.get(item._id);
+          const existingIndex = itemIndexById2.get(item._id);
           if (existingIndex === void 0) {
-            itemIndexById.set(item._id, allItems.length);
+            itemIndexById2.set(item._id, allItems.length);
             allItems.push(item);
           } else {
             allItems[existingIndex] = item;
@@ -15196,7 +15657,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.697"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -16672,6 +17133,417 @@ sortCanonicalItems() {
       });
     }
   };
+  const ITEM_SELECTOR = ".pr-item[data-id]";
+  const AUTHOR_CONTROL_SELECTOR = '[data-action="author-up"][data-author], [data-action="author-down"][data-author]';
+  const PARSED_POSTED_AT_ATTR = "prParsedPostedAtMs";
+  const MAX_PATCH_NODES_PER_FRAME = 50;
+  let installedState = null;
+  let disposeAppliedListener = null;
+  let domObserver = null;
+  let pendingAnimationFrame = null;
+  const itemIndexById = new Map();
+  let itemEntryByElement = new WeakMap();
+  const authorControlsByName = new Map();
+  let authorNameByControl = new WeakMap();
+  const pendingReadItemIds = new Set();
+  const pendingReadEntryOffsetById = new Map();
+  const pendingAuthorControls = new Set();
+  let pendingUnreadCounterRefresh = false;
+  let lastReadSnapshot = {};
+  let lastLoadFromSnapshot = "";
+  let lastAuthorPrefsSnapshot = {};
+  const lastAppliedSequenceByField = {
+    read: 0,
+    loadFrom: 0,
+    authorPrefs: 0
+  };
+  const parseLoadFromMs = (value) => {
+    if (!value || value === "__LOAD_RECENT__" || !value.includes("T")) return null;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const parsePostedAtMs = (value) => {
+    if (!value) return null;
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const resolvePostedAtMs = (element) => {
+    const dataPostedAtMs = parsePostedAtMs(element.dataset.postedAtMs);
+    if (dataPostedAtMs !== null) return dataPostedAtMs;
+    const memoizedParsed = parsePostedAtMs(element.dataset[PARSED_POSTED_AT_ATTR]);
+    if (memoizedParsed !== null) return memoizedParsed;
+    const timeEl = element.querySelector("time[datetime]");
+    if (!timeEl) return null;
+    const parsed = Date.parse(timeEl.getAttribute("datetime") || "");
+    if (!Number.isFinite(parsed)) return null;
+    const epoch = Math.floor(parsed);
+    element.dataset[PARSED_POSTED_AT_ATTR] = String(epoch);
+    return epoch;
+  };
+  const addItemEntry = (element) => {
+    const id = element.dataset.id;
+    if (!id) return;
+    if (itemEntryByElement.has(element)) return;
+    const entry = {
+      element,
+      postedAtMs: resolvePostedAtMs(element)
+    };
+    itemEntryByElement.set(element, entry);
+    const bucket = itemIndexById.get(id) || new Set();
+    bucket.add(entry);
+    itemIndexById.set(id, bucket);
+  };
+  const removeItemEntry = (element) => {
+    const id = element.dataset.id;
+    const entry = itemEntryByElement.get(element);
+    if (!id || !entry) return;
+    const bucket = itemIndexById.get(id);
+    if (bucket) {
+      bucket.delete(entry);
+      if (bucket.size === 0) {
+        itemIndexById.delete(id);
+      }
+    }
+    itemEntryByElement.delete(element);
+  };
+  const addAuthorControl = (element) => {
+    const author = element.dataset.author;
+    if (!author) return;
+    if (authorNameByControl.has(element)) return;
+    authorNameByControl.set(element, author);
+    const bucket = authorControlsByName.get(author) || new Set();
+    bucket.add(element);
+    authorControlsByName.set(author, bucket);
+  };
+  const removeAuthorControl = (element) => {
+    const author = authorNameByControl.get(element);
+    if (!author) return;
+    const bucket = authorControlsByName.get(author);
+    if (!bucket) return;
+    bucket.delete(element);
+    if (bucket.size === 0) {
+      authorControlsByName.delete(author);
+    }
+    authorNameByControl.delete(element);
+    pendingAuthorControls.delete(element);
+  };
+  const collectMatchingElements = (node, selector) => {
+    const matches = [];
+    if (node instanceof HTMLElement && node.matches(selector)) {
+      matches.push(node);
+    }
+    if (node instanceof Element || node instanceof DocumentFragment) {
+      matches.push(...Array.from(node.querySelectorAll(selector)));
+    }
+    return matches;
+  };
+  const indexNode = (node) => {
+    const itemEls = collectMatchingElements(node, ITEM_SELECTOR);
+    for (const itemEl of itemEls) {
+      addItemEntry(itemEl);
+    }
+    const authorControls = collectMatchingElements(node, AUTHOR_CONTROL_SELECTOR);
+    for (const control of authorControls) {
+      addAuthorControl(control);
+    }
+  };
+  const deindexNode = (node) => {
+    const itemEls = collectMatchingElements(node, ITEM_SELECTOR);
+    for (const itemEl of itemEls) {
+      removeItemEntry(itemEl);
+    }
+    const authorControls = collectMatchingElements(node, AUTHOR_CONTROL_SELECTOR);
+    for (const control of authorControls) {
+      removeAuthorControl(control);
+    }
+  };
+  const pruneDetachedEntries = () => {
+    for (const [id, bucket] of itemIndexById.entries()) {
+      for (const entry of Array.from(bucket)) {
+        if (!entry.element.isConnected) {
+          bucket.delete(entry);
+        }
+      }
+      if (bucket.size === 0) {
+        itemIndexById.delete(id);
+      }
+    }
+    for (const [author, bucket] of authorControlsByName.entries()) {
+      for (const element of Array.from(bucket)) {
+        if (!element.isConnected) {
+          bucket.delete(element);
+        }
+      }
+      if (bucket.size === 0) {
+        authorControlsByName.delete(author);
+      }
+    }
+  };
+  const queueAllKnownItemIds = () => {
+    for (const id of itemIndexById.keys()) {
+      pendingReadItemIds.add(id);
+    }
+    if (!installedState) return;
+    for (const comment of installedState.comments) {
+      pendingReadItemIds.add(comment._id);
+    }
+    for (const post of installedState.posts) {
+      pendingReadItemIds.add(post._id);
+    }
+  };
+  const queueReadDelta = () => {
+    const nextRead = getReadState();
+    for (const id of Object.keys(lastReadSnapshot)) {
+      if (nextRead[id] !== 1) {
+        pendingReadItemIds.add(id);
+      }
+    }
+    for (const id of Object.keys(nextRead)) {
+      if (lastReadSnapshot[id] !== 1) {
+        pendingReadItemIds.add(id);
+      }
+    }
+    lastReadSnapshot = nextRead;
+    pendingUnreadCounterRefresh = true;
+  };
+  const queueLoadFromDelta = () => {
+    const nextLoadFrom = getLoadFrom();
+    const prevMs = parseLoadFromMs(lastLoadFromSnapshot);
+    const nextMs = parseLoadFromMs(nextLoadFrom);
+    lastLoadFromSnapshot = nextLoadFrom;
+    if (prevMs === nextMs) return;
+    if (prevMs === null || nextMs === null || !installedState) {
+      queueAllKnownItemIds();
+      pendingUnreadCounterRefresh = true;
+      return;
+    }
+    const lower = Math.min(prevMs, nextMs);
+    const upper = Math.max(prevMs, nextMs);
+    for (const comment of installedState.comments) {
+      const postedAtMs = Date.parse(comment.postedAt || "");
+      if (!Number.isFinite(postedAtMs)) continue;
+      if (postedAtMs >= lower && postedAtMs <= upper) {
+        pendingReadItemIds.add(comment._id);
+      }
+    }
+    for (const post of installedState.posts) {
+      const postedAtMs = Date.parse(post.postedAt || "");
+      if (!Number.isFinite(postedAtMs)) continue;
+      if (postedAtMs >= lower && postedAtMs <= upper) {
+        pendingReadItemIds.add(post._id);
+      }
+    }
+    pendingUnreadCounterRefresh = true;
+  };
+  const queueAuthorPrefsDelta = () => {
+    const nextPrefs = getAuthorPreferences();
+    const authors = new Set([
+      ...Object.keys(lastAuthorPrefsSnapshot),
+      ...Object.keys(nextPrefs)
+    ]);
+    for (const author of authors) {
+      const prevValue = lastAuthorPrefsSnapshot[author] ?? 0;
+      const nextValue = nextPrefs[author] ?? 0;
+      if (prevValue !== nextValue) {
+        const controls = authorControlsByName.get(author);
+        if (!controls) continue;
+        for (const control of controls) {
+          pendingAuthorControls.add(control);
+        }
+      }
+    }
+    lastAuthorPrefsSnapshot = nextPrefs;
+  };
+  const refreshUnreadCounter = () => {
+    const unreadEl = document.getElementById("pr-unread-count");
+    if (!unreadEl) return;
+    const unreadCount = document.querySelectorAll(".pr-item:not(.read):not(.context)").length;
+    if (unreadEl.textContent !== String(unreadCount)) {
+      unreadEl.textContent = String(unreadCount);
+    }
+  };
+  const applyReadClassPatch = (id, entry, readState, loadFromMs) => {
+    const { element } = entry;
+    if (!element.isConnected) return;
+    if (entry.postedAtMs === null) {
+      entry.postedAtMs = resolvePostedAtMs(element);
+    }
+    if (element.classList.contains("context")) {
+      element.classList.add("read");
+      return;
+    }
+    const explicitRead = readState[id] === 1;
+    const implicitRead = loadFromMs !== null && entry.postedAtMs !== null && entry.postedAtMs < loadFromMs;
+    const shouldBeRead = explicitRead || implicitRead;
+    if (shouldBeRead) {
+      element.classList.add("read");
+      return;
+    }
+    if (entry.postedAtMs === null) {
+      return;
+    }
+    element.classList.remove("read");
+  };
+  const processPendingReadItems = (budget) => {
+    if (pendingReadItemIds.size === 0) return budget;
+    const readState = getReadState();
+    const loadFromMs = parseLoadFromMs(getLoadFrom());
+    for (const id of Array.from(pendingReadItemIds)) {
+      if (budget <= 0) break;
+      const entries = itemIndexById.get(id);
+      if (!entries || entries.size === 0) {
+        pendingReadItemIds.delete(id);
+        pendingReadEntryOffsetById.delete(id);
+        continue;
+      }
+      const entriesArray = Array.from(entries);
+      let startIndex = pendingReadEntryOffsetById.get(id) ?? 0;
+      if (startIndex >= entriesArray.length) {
+        startIndex = 0;
+      }
+      let index = startIndex;
+      for (; index < entriesArray.length; index += 1) {
+        if (budget <= 0) break;
+        applyReadClassPatch(id, entriesArray[index], readState, loadFromMs);
+        budget -= 1;
+      }
+      if (index >= entriesArray.length) {
+        pendingReadItemIds.delete(id);
+        pendingReadEntryOffsetById.delete(id);
+        continue;
+      }
+      pendingReadEntryOffsetById.set(id, index);
+      pendingReadItemIds.delete(id);
+      pendingReadItemIds.add(id);
+    }
+    return budget;
+  };
+  const resolveAuthorPreferenceForControl = (control, author, authorPrefs) => {
+    const explicit = authorPrefs[author];
+    if (explicit === -1 || explicit === 1) return explicit;
+    if (!installedState) return 0;
+    const owner = control.closest(".pr-comment-meta, .pr-post-meta, .pr-post-header, .pr-sticky-header-content, .pr-item");
+    const authorLink = owner?.querySelector(".pr-author[data-author-id]");
+    const authorId = authorLink?.getAttribute("data-author-id") || "";
+    if (authorId && installedState.subscribedAuthorIds.has(authorId)) {
+      return 1;
+    }
+    return 0;
+  };
+  const processPendingAuthorPatches = (budget) => {
+    if (pendingAuthorControls.size === 0) return budget;
+    const authorPrefs = getAuthorPreferences();
+    for (const control of Array.from(pendingAuthorControls)) {
+      if (budget <= 0) break;
+      pendingAuthorControls.delete(control);
+      if (!control.isConnected) continue;
+      const author = authorNameByControl.get(control) || control.dataset.author;
+      if (!author) continue;
+      const resolvedPreference = resolveAuthorPreferenceForControl(control, author, authorPrefs);
+      if (control.dataset.action === "author-up") {
+        control.classList.toggle("active-up", resolvedPreference > 0);
+      } else if (control.dataset.action === "author-down") {
+        control.classList.toggle("active-down", resolvedPreference < 0);
+      }
+      budget -= 1;
+    }
+    return budget;
+  };
+  const flushPatchQueues = () => {
+    pendingAnimationFrame = null;
+    pruneDetachedEntries();
+    let budget = MAX_PATCH_NODES_PER_FRAME;
+    budget = processPendingReadItems(budget);
+    budget = processPendingAuthorPatches(budget);
+    if (pendingUnreadCounterRefresh && pendingReadItemIds.size === 0) {
+      refreshUnreadCounter();
+      pendingUnreadCounterRefresh = false;
+    }
+    if (pendingReadItemIds.size > 0 || pendingAuthorControls.size > 0 || pendingUnreadCounterRefresh) {
+      schedulePatchFrame();
+    }
+  };
+  const schedulePatchFrame = () => {
+    if (pendingAnimationFrame !== null) return;
+    pendingAnimationFrame = window.requestAnimationFrame(flushPatchQueues);
+  };
+  const handleAppliedSyncField = (event) => {
+    const priorSequence = lastAppliedSequenceByField[event.field];
+    if (event.sequence <= priorSequence) return;
+    lastAppliedSequenceByField[event.field] = event.sequence;
+    if (!installedState) return;
+    if (installedState.isArchiveMode) return;
+    if (event.field === "read") {
+      queueReadDelta();
+    } else if (event.field === "loadFrom") {
+      queueLoadFromDelta();
+    } else if (event.field === "authorPrefs") {
+      queueAuthorPrefsDelta();
+    }
+    schedulePatchFrame();
+  };
+  const startDomIndexing = () => {
+    const root = document.getElementById("power-reader-root");
+    if (!root) return;
+    itemIndexById.clear();
+    pendingReadEntryOffsetById.clear();
+    itemEntryByElement = new WeakMap();
+    authorControlsByName.clear();
+    authorNameByControl = new WeakMap();
+    indexNode(root);
+    if (domObserver) {
+      domObserver.disconnect();
+    }
+    domObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const added of mutation.addedNodes) {
+          indexNode(added);
+        }
+        for (const removed of mutation.removedNodes) {
+          deindexNode(removed);
+        }
+      }
+    });
+    domObserver.observe(root, { childList: true, subtree: true });
+  };
+  const setupSyncUiConsistencyLayer = (state2) => {
+    if (installedState === state2 && disposeAppliedListener) {
+      return;
+    }
+    teardownSyncUiConsistencyLayer();
+    installedState = state2;
+    lastReadSnapshot = getReadState();
+    lastLoadFromSnapshot = getLoadFrom();
+    lastAuthorPrefsSnapshot = getAuthorPreferences();
+    lastAppliedSequenceByField.read = 0;
+    lastAppliedSequenceByField.loadFrom = 0;
+    lastAppliedSequenceByField.authorPrefs = 0;
+    startDomIndexing();
+    disposeAppliedListener = onSyncFieldApplied(handleAppliedSyncField);
+  };
+  const teardownSyncUiConsistencyLayer = () => {
+    if (disposeAppliedListener) {
+      disposeAppliedListener();
+      disposeAppliedListener = null;
+    }
+    if (domObserver) {
+      domObserver.disconnect();
+      domObserver = null;
+    }
+    if (pendingAnimationFrame !== null) {
+      window.cancelAnimationFrame(pendingAnimationFrame);
+      pendingAnimationFrame = null;
+    }
+    pendingReadItemIds.clear();
+    pendingReadEntryOffsetById.clear();
+    pendingAuthorControls.clear();
+    pendingUnreadCounterRefresh = false;
+    itemIndexById.clear();
+    itemEntryByElement = new WeakMap();
+    authorControlsByName.clear();
+    authorNameByControl = new WeakMap();
+    installedState = null;
+  };
   const initReader = async () => {
     const route = getRoute();
     if (route.type === "skip") {
@@ -16737,7 +17609,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.697"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
@@ -16769,6 +17641,7 @@ sortCanonicalItems() {
       }
       Logger.info(`Loaded ${state2.comments.length} comments and ${state2.posts.length} posts`);
       renderUI(state2);
+      setupSyncUiConsistencyLayer(state2);
       Logger.info("renderUI complete");
       signalReady();
       Logger.info("signalReady called");

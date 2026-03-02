@@ -27,8 +27,17 @@ const DEVICE_ID_MAX_LENGTH = 96;
 
 export type SyncableField = 'read' | 'loadFrom' | 'authorPrefs';
 
-interface StorageWriteOptions {
+export type SyncFieldApplySource = 'local' | 'sync-merge' | 'cross-tab' | 'polling' | 'reset';
+
+export interface SyncFieldAppliedEvent {
+  field: SyncableField;
+  source: SyncFieldApplySource;
+  sequence: number;
+}
+
+export interface StorageWriteOptions {
   silent?: boolean;
+  source?: SyncFieldApplySource;
 }
 
 /**
@@ -56,7 +65,11 @@ let cachedReadState: ReadState | null = null;
 let lastReadStateFetch: number = 0;
 let cachedLoadFrom: string | null = null;
 let lastLoadFromFetch: number = 0;
+let cachedAuthorPrefs: AuthorPreferences | null = null;
+let lastAuthorPrefsFetch: number = 0;
 const syncFieldListeners = new Set<(field: SyncableField) => void>();
+const syncFieldAppliedListeners = new Set<(event: SyncFieldAppliedEvent) => void>();
+let syncFieldAppliedSequence = 0;
 
 const notifySyncFieldChanged = (field: SyncableField, options?: StorageWriteOptions): void => {
   if (options?.silent) return;
@@ -69,9 +82,29 @@ const notifySyncFieldChanged = (field: SyncableField, options?: StorageWriteOpti
   }
 };
 
+const notifySyncFieldApplied = (field: SyncableField, source: SyncFieldApplySource): void => {
+  const event: SyncFieldAppliedEvent = {
+    field,
+    source,
+    sequence: ++syncFieldAppliedSequence,
+  };
+  for (const listener of syncFieldAppliedListeners) {
+    try {
+      listener(event);
+    } catch (error) {
+      Logger.warn(`sync field applied listener failed for ${field}`, error);
+    }
+  }
+};
+
 export const onSyncFieldChanged = (listener: (field: SyncableField) => void): (() => void) => {
   syncFieldListeners.add(listener);
   return () => syncFieldListeners.delete(listener);
+};
+
+export const onSyncFieldApplied = (listener: (event: SyncFieldAppliedEvent) => void): (() => void) => {
+  syncFieldAppliedListeners.add(listener);
+  return () => syncFieldAppliedListeners.delete(listener);
 };
 
 export const STORAGE_KEY_NAMES = STORAGE_KEYS;
@@ -82,6 +115,8 @@ if (typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__) {
   lastLoadFromFetch = 0;
   cachedReadState = null;
   lastReadStateFetch = 0;
+  cachedAuthorPrefs = null;
+  lastAuthorPrefsFetch = 0;
 }
 
 /**
@@ -90,7 +125,8 @@ if (typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__) {
 export function getReadState(): ReadState {
   // Simple cache for 100ms to prevent redundant parsing during a single render pass
   const now = Date.now();
-  if (cachedReadState && (now - lastReadStateFetch < 100)) {
+  const isTest = typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__;
+  if (!isTest && cachedReadState && (now - lastReadStateFetch < 100)) {
     return cachedReadState;
   }
 
@@ -112,6 +148,7 @@ export function setReadState(state: ReadState, options: StorageWriteOptions = {}
   lastReadStateFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.READ), JSON.stringify(state));
   notifySyncFieldChanged('read', options);
+  notifySyncFieldApplied('read', options.source ?? 'local');
 }
 
 /**
@@ -141,7 +178,7 @@ export function isRead(id: string, state?: ReadState, postedAt?: string | null):
  * Mark a comment as read
  */
 export function markAsRead(target: string | Record<string, 1>): void {
-  const state = getReadState();
+  const state = { ...getReadState() };
   if (typeof target === 'string') {
     state[target] = 1;
   } else {
@@ -155,7 +192,8 @@ export function markAsRead(target: string | Record<string, 1>): void {
  */
 export function getLoadFrom(): string {
   const now = Date.now();
-  if (cachedLoadFrom && (now - lastLoadFromFetch < 100)) {
+  const isTest = typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__;
+  if (!isTest && cachedLoadFrom && (now - lastLoadFromFetch < 100)) {
     return cachedLoadFrom;
   }
 
@@ -173,6 +211,7 @@ export function setLoadFrom(isoDatetime: string, options: StorageWriteOptions = 
   lastLoadFromFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.READ_FROM), isoDatetime);
   notifySyncFieldChanged('loadFrom', options);
+  notifySyncFieldApplied('loadFrom', options.source ?? 'local');
 }
 
 /**
@@ -191,9 +230,18 @@ export function setLoadFromAndClearRead(
  * Get author preferences
  */
 export function getAuthorPreferences(): AuthorPreferences {
+  const now = Date.now();
+  const isTest = typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__;
+  if (!isTest && cachedAuthorPrefs && (now - lastAuthorPrefsFetch < 100)) {
+    return cachedAuthorPrefs;
+  }
+
   try {
     const raw = GM_getValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), '{}');
-    return JSON.parse(raw);
+    const parsed: AuthorPreferences = JSON.parse(raw);
+    cachedAuthorPrefs = parsed;
+    lastAuthorPrefsFetch = now;
+    return parsed;
   } catch {
     return {};
   }
@@ -206,8 +254,38 @@ export function setAuthorPreferences(
   prefs: AuthorPreferences,
   options: StorageWriteOptions = {}
 ): void {
+  cachedAuthorPrefs = prefs;
+  lastAuthorPrefsFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), JSON.stringify(prefs));
   notifySyncFieldChanged('authorPrefs', options);
+  notifySyncFieldApplied('authorPrefs', options.source ?? 'local');
+}
+
+export function applyExternalReadState(
+  state: ReadState,
+  source: SyncFieldApplySource = 'cross-tab'
+): void {
+  cachedReadState = state;
+  lastReadStateFetch = Date.now();
+  notifySyncFieldApplied('read', source);
+}
+
+export function applyExternalLoadFrom(
+  isoDatetime: string,
+  source: SyncFieldApplySource = 'cross-tab'
+): void {
+  cachedLoadFrom = isoDatetime;
+  lastLoadFromFetch = Date.now();
+  notifySyncFieldApplied('loadFrom', source);
+}
+
+export function applyExternalAuthorPrefs(
+  prefs: AuthorPreferences,
+  source: SyncFieldApplySource = 'cross-tab'
+): void {
+  cachedAuthorPrefs = prefs;
+  lastAuthorPrefsFetch = Date.now();
+  notifySyncFieldApplied('authorPrefs', source);
 }
 
 /**
@@ -217,7 +295,7 @@ export function toggleAuthorPreference(
   author: string,
   direction: 'up' | 'down'
 ): -1 | 0 | 1 {
-  const prefs = getAuthorPreferences();
+  const prefs = { ...getAuthorPreferences() };
   const current = prefs[author] || 0;
 
   let newValue: -1 | 0 | 1;
@@ -263,6 +341,8 @@ export function clearReaderStorage(options: StorageWriteOptions = {}): void {
   lastReadStateFetch = 0;
   cachedLoadFrom = null;
   lastLoadFromFetch = 0;
+  cachedAuthorPrefs = null;
+  lastAuthorPrefsFetch = 0;
   GM_setValue(getKey(STORAGE_KEYS.READ), '{}');
   GM_setValue(getKey(STORAGE_KEYS.READ_FROM), '');
   GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), '{}');
@@ -270,6 +350,10 @@ export function clearReaderStorage(options: StorageWriteOptions = {}): void {
   notifySyncFieldChanged('read', options);
   notifySyncFieldChanged('loadFrom', options);
   notifySyncFieldChanged('authorPrefs', options);
+  const source = options.source ?? 'reset';
+  notifySyncFieldApplied('read', source);
+  notifySyncFieldApplied('loadFrom', source);
+  notifySyncFieldApplied('authorPrefs', source);
 }
 
 /**

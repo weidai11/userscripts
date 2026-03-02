@@ -3,6 +3,16 @@
  */
 
 /**
+ * Convert an ISO date string to an epoch millisecond string.
+ * Returns an empty string if the input is invalid or null.
+ */
+export const toPostedAtEpochMs = (postedAt?: string | null): string => {
+  const parsed = Date.parse(postedAt || '');
+  if (!Number.isFinite(parsed)) return '';
+  return String(Math.floor(parsed));
+};
+
+/**
  * Smart scroll to an element, accounting for the correct post's header height
  */
 const DEFAULT_HEADER_HEIGHT = 60;
@@ -51,7 +61,7 @@ export const refreshAllPostActionButtons = (container: HTMLElement | Document = 
     const viewportHeight = window.innerHeight;
 
     // Pre-calculate next sibling links for all posts in this container
-    posts.forEach((post, idx) => {
+    posts.forEach((post) => {
         const bodyContainer = post.querySelector('.pr-post-body-container') as HTMLElement;
         const eBtn = post.querySelector('[data-action="toggle-post-body"]') as HTMLElement;
         const nBtn = post.querySelector('[data-action="scroll-to-next-post"]') as HTMLElement;

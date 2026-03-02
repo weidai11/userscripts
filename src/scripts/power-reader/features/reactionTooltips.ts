@@ -53,7 +53,11 @@ const showTooltip = (target: HTMLElement): void => {
     }
     
     if (users) {
-        const userList = users.split('\n').filter(Boolean).map(u => `<div>• ${format(u)}</div>`).join('');
+        const userList = users
+            .split('\n')
+            .filter(Boolean)
+            .map((u) => `<div>- ${format(u)}</div>`)
+            .join('');
         if (userList) {
             content += `<div style="margin-top: 8px; border-top: 1px solid #444; padding-top: 4px; font-size: 0.95em;">${userList}</div>`;
         }

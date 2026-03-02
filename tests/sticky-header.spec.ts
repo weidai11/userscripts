@@ -141,6 +141,7 @@ test.describe('Sticky Header Feature', () => {
         await setupDefault(page, 20);
 
         const stickyHeader = page.locator('#pr-sticky-header');
+        await expect(page.locator('.pr-post-header').first()).toBeVisible();
 
         await page.evaluate(() => {
             const header = document.querySelector('.pr-post-header') as HTMLElement;

@@ -100,4 +100,103 @@ test.describe('Power Reader Inline Reactions', () => {
         await expect(highlight).toBeVisible();
         await expect(highlight).toHaveText('quote-able');
     });
+
+    test('[PR-REACT-06][PR-REACT-08] quoted reactions expose rich tooltip data and render unknown reaction chips', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [{
+                _id: 'comment-unknown-react',
+                postId: 'post-1',
+                pageUrl: 'https://example.com/c-unknown',
+                htmlBody: '<p id="quoted">This line contains an unknown reaction quote.</p>',
+                postedAt: new Date().toISOString(),
+                baseScore: 10,
+                extendedScore: {
+                    reacts: {
+                        mystery_react: [{
+                            userId: 'u2',
+                            userName: 'QuotedUser',
+                            reactType: 'created',
+                            quotes: [{ quote: 'unknown reaction quote' }],
+                        }],
+                    },
+                },
+                currentUserExtendedVote: { reacts: [] },
+                parentCommentId: null,
+                user: { _id: 'u2', slug: 'user-2', username: 'OtherUser' },
+                post: { _id: 'p1', title: 'Test Post', slug: 'test-post' },
+                parentComment: null
+            }],
+            scrapedReactions: [
+                { name: 'agree', label: 'Agreed', svg: '' },
+                { name: 'insightful', label: 'Insightful', svg: '' }
+            ]
+        });
+
+        const comment = page.locator('.pr-comment[data-id="comment-unknown-react"]');
+
+        const chip = comment.locator('.pr-reaction-chip[data-reaction-name="mystery_react"]');
+        await expect(chip).toBeVisible();
+        await expect(chip.locator('.pr-reaction-count')).toHaveText('1');
+
+        const highlight = comment.locator('.pr-highlight.pr-tooltip-target').first();
+        await expect(highlight).toBeVisible();
+        await highlight.hover();
+
+        const tooltip = page.locator('.pr-tooltip-global');
+        await expect(tooltip).toBeVisible();
+        await expect(tooltip).toContainText('Mystery React');
+        await expect(tooltip).toContainText('QuotedUser');
+    });
+
+    test('[PR-REACT-08] opposed reactions still render chip/icon with net zero and disclose opposition in tooltip', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [{
+                _id: 'comment-net-zero',
+                postId: 'post-1',
+                pageUrl: 'https://example.com/c-net-zero',
+                htmlBody: '<p>This quote should not render as reacted content.</p>',
+                postedAt: new Date().toISOString(),
+                baseScore: 10,
+                extendedScore: {
+                    reacts: {
+                        addc: [
+                            {
+                                userId: 'u2',
+                                userName: 'UserA',
+                                reactType: 'created',
+                                quotes: [{ quote: 'quote should not render' }],
+                            },
+                            {
+                                userId: 'u3',
+                                userName: 'UserB',
+                                reactType: 'disagreed',
+                                quotes: [{ quote: 'quote should not render' }],
+                            },
+                        ],
+                    },
+                },
+                currentUserExtendedVote: { reacts: [] },
+                parentCommentId: null,
+                user: { _id: 'u2', slug: 'user-2', username: 'OtherUser' },
+                post: { _id: 'p1', title: 'Test Post', slug: 'test-post' },
+                parentComment: null
+            }]
+        });
+
+        const comment = page.locator('.pr-comment[data-id="comment-net-zero"]');
+        const chip = comment.locator('.pr-reaction-chip[data-reaction-name="addc"]');
+        await expect(chip).toBeVisible();
+        await expect(chip.locator('.pr-reaction-count')).toHaveText('0');
+
+        const highlight = comment.locator('.pr-highlight.pr-tooltip-target').first();
+        await expect(highlight).toBeVisible();
+        await highlight.hover();
+
+        const tooltip = page.locator('.pr-tooltip-global');
+        await expect(tooltip).toContainText('UserA');
+        await expect(tooltip).toContainText('UserB');
+        await expect(tooltip).toContainText('opposed');
+    });
 });

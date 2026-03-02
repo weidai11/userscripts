@@ -11,6 +11,7 @@ import { isRead, getReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
 import { getCommentContextType, isForceVisible, isJustRevealed } from '../types/uiCommentFlags';
+import { toPostedAtEpochMs } from '../utils/dom';
 import { renderMetadata } from './components/metadata';
 import { renderBody, highlightQuotes } from './components/body';
 export { highlightQuotes };
@@ -21,12 +22,14 @@ const getContextType = (comment: Comment): string | undefined =>
 const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = '', state?: ReaderState): string => {
   const postId = comment.postId || '';
   const readClass = state?.isArchiveMode ? '' : 'read';
+  const postedAtMs = toPostedAtEpochMs(comment.postedAt);
 
   return `
     <div class="pr-comment pr-item ${readClass} pr-missing-parent"
          data-id="${comment._id}"
          data-post-id="${postId}"
          data-parent-id=""
+         data-posted-at-ms="${postedAtMs}"
          data-placeholder="1">${repliesHtml}</div>
   `;
 };
@@ -267,6 +270,7 @@ const getUnreadDescendantCount = (commentId: string, state: ReaderState, readSta
 const renderContextPlaceholder = (
   comment: Comment, state: ReaderState, repliesHtml: string = ''
 ): string => {
+  const postedAtMs = toPostedAtEpochMs(comment.postedAt);
   const metadataHtml = renderMetadata(comment, {
     state,
     style: 'font-size: 80%;',
@@ -276,7 +280,8 @@ const renderContextPlaceholder = (
     <div class="pr-comment pr-item context pr-context-placeholder"
          data-id="${comment._id}"
          data-parent-id="${comment.parentCommentId || ''}"
-         data-post-id="${comment.postId}">
+         data-post-id="${comment.postId}"
+         data-posted-at-ms="${postedAtMs}">
       ${metadataHtml}
       ${repliesHtml}
     </div>
@@ -307,12 +312,14 @@ export const renderComment = (
   const showAsPlaceholder = isLocallyRead && unreadDescendantCount < 2 && !isForceVisible(comment);
 
   if (showAsPlaceholder) {
+    const postedAtMs = toPostedAtEpochMs(comment.postedAt);
     // Render blank stub
     return `
       <div class="pr-comment pr-item read pr-comment-placeholder" 
            data-id="${comment._id}" 
            data-parent-id="${comment.parentCommentId || ''}"
-           data-post-id="${comment.postId}">
+           data-post-id="${comment.postId}"
+           data-posted-at-ms="${postedAtMs}">
         <div class="pr-placeholder-bar" title="Ancestor Context (Click to expand)" data-action="expand-placeholder"></div>
         <div class="pr-replies-placeholder"></div> 
         ${repliesHtml}
@@ -322,6 +329,7 @@ export const renderComment = (
 
   const authorHandle = comment.user?.username || (comment as any).author || 'Unknown Author';
   const postedAt = comment.postedAt || new Date().toISOString();
+  const postedAtMs = toPostedAtEpochMs(postedAt);
   const ageHours = getAgeInHours(postedAt);
   const score = comment.baseScore || 0;
   const authorKarma = comment.user?.karma || 0;
@@ -404,6 +412,7 @@ export const renderComment = (
          data-author="${escapeHtml(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ''}"
          data-post-id="${comment.postId}"
+         data-posted-at-ms="${postedAtMs}"
          style="${bodyStyle}">
       ${metadataHtml}
       <div class="pr-comment-body">

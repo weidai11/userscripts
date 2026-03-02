@@ -204,9 +204,12 @@ test.describe('Persistence Sync Contracts', () => {
     expect(preview).toContain("!trigger.isConnected || !trigger.matches(':hover') || !isIntentionalHover()");
   });
 
-  test('[PR-PERSIST-93] expiresAt anchor clamps stale server times and ignores remote lastPushedAt fallback', async () => {
+  test('[PR-PERSIST-93] expiresAt prefers server anchor and permission-denied path retries with conservative ttl', async () => {
     const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('Math.max(anchorMs, nowMs()) + SYNC_TTL_MS');
+    expect(sync).toContain('if (options.preferAnchorOnly) {');
+    expect(sync).toContain('computeExpiresAt(serverAnchorIso || now, { preferAnchorOnly: true })');
+    expect(sync).toContain('const PUSH_PERMISSION_RETRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;');
+    expect(sync).toContain("Logger.warn('sync push permission denied; retrying with conservative expiresAt');");
     expect(sync).toContain('runtime.lastServerAnchorIso = result.updateTime || runtime.lastServerAnchorIso;');
   });
 
@@ -219,6 +222,24 @@ test.describe('Persistence Sync Contracts', () => {
     expect(sync).toContain("if (showReadOverflowNotice) return 'Sync: on (read overflow cleared)';");
   });
 
+  test('[PR-PERSIST-13] push-disabled diagnostics include reason in status/debug output', async () => {
+    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    expect(sync).toContain('function setPushDisabled(reason: string, context: string, error?: unknown): void');
+    expect(sync).toContain('return `Sync: push-disabled (${runtime.pushDisabledReason})`;');
+    expect(sync).toContain('pushDisabledReason: runtime.pushDisabledReason,');
+    expect(sync).toContain('pushDisabledMeta: runtime.pushDisabledMeta,');
+    expect(sync).toContain('lastPushAttempt: runtime.lastPushAttemptDebug,');
+    expect(sync).toContain('backendTarget,');
+  });
+
+  test('[PR-PERSIST-13] merge build sanitizes legacy writer labels before re-write', async () => {
+    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    expect(sync).toContain('function normalizeWriterLabel(label: string | undefined, fallback: string): string');
+    expect(sync).toContain('const remoteReadUpdatedBy = normalizeWriterLabel(remote.fields.read.updatedBy, writerId);');
+    expect(sync).toContain('const remoteLoadFromUpdatedBy = normalizeWriterLabel(remote.fields.loadFrom.updatedBy, writerId);');
+    expect(sync).toContain('const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);');
+  });
+
   test('[PR-STATUS-06] main status line refreshes sync status label after render', async () => {
     const render = readRepoFile('src/scripts/power-reader/render/index.ts');
     expect(render).toContain('id="pr-sync-status-label"');
@@ -227,5 +248,47 @@ test.describe('Persistence Sync Contracts', () => {
     expect(render).toContain('const isDocumentHidden = (): boolean =>');
     expect(render).toContain('stopSyncStatusRefreshTimer();');
     expect(render).toContain("document.addEventListener('visibilitychange'");
+  });
+
+  test('[PR-PERSIST-95][PR-PERSIST-98] storage keeps applied-event channel separate and supports external cache-write apply helpers', async () => {
+    const storage = readRepoFile('src/scripts/power-reader/utils/storage.ts');
+    expect(storage).toContain('export const onSyncFieldApplied');
+    expect(storage).toContain('const notifySyncFieldApplied =');
+    expect(storage).toContain('const state = { ...getReadState() };');
+    expect(storage).toContain('const prefs = { ...getAuthorPreferences() };');
+    expect(storage).toContain('let cachedAuthorPrefs: AuthorPreferences | null = null;');
+    expect(storage).toContain('lastAuthorPrefsFetch');
+    expect(storage).toContain("notifySyncFieldApplied('read', options.source ?? 'local');");
+    expect(storage).toContain('export function applyExternalReadState');
+    expect(storage).toContain('export function applyExternalLoadFrom');
+    expect(storage).toContain('export function applyExternalAuthorPrefs');
+  });
+
+  test('[PR-PERSIST-96][PR-PERSIST-99] persistence listeners use apply-only cross-tab watchers and resume pull via existing pull path', async () => {
+    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    const vite = readRepoFile('vite.config.ts');
+    expect(sync).toContain('function installCrossTabFieldWatchers(): (() => void)');
+    expect(sync).toContain('if (remote === false) return;');
+    expect(sync).toContain("applyExternalStorageField(entry.field, newValue, 'cross-tab');");
+    expect(sync).toContain("applyExternalStorageField(entry.field, nextRaw, 'polling');");
+    expect(sync).toContain('const requestPullViaExistingPath = (): void => {');
+    expect(sync).toContain("window.addEventListener('mousemove', activityListener");
+    expect(sync).toContain('requestPullViaExistingPath();');
+    expect(vite).toContain("'GM_removeValueChangeListener'");
+  });
+
+  test('[PR-PERSIST-97][PR-PERSIST-100] UI consistency layer uses bounded hot-patch queues and timestamp data contracts', async () => {
+    const uiConsistency = readRepoFile('src/scripts/power-reader/features/syncUiConsistency.ts');
+    const comments = readRepoFile('src/scripts/power-reader/render/comment.ts');
+    const posts = readRepoFile('src/scripts/power-reader/render/post.ts');
+    const metadata = readRepoFile('src/scripts/power-reader/render/components/metadata.ts');
+    expect(uiConsistency).toContain('const MAX_PATCH_NODES_PER_FRAME = 50;');
+    expect(uiConsistency).toContain('const pendingReadEntryOffsetById = new Map<string, number>();');
+    expect(uiConsistency).toContain('node instanceof Element || node instanceof DocumentFragment');
+    expect(uiConsistency).toContain('window.requestAnimationFrame(flushPatchQueues)');
+    expect(uiConsistency).toContain('onSyncFieldApplied(handleAppliedSyncField)');
+    expect(comments).toContain('data-posted-at-ms');
+    expect(posts).toContain('data-posted-at-ms');
+    expect(metadata).toContain('<time datetime=');
   });
 });

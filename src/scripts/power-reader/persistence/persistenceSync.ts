@@ -3,10 +3,15 @@ import { GET_CURRENT_USER, UPDATE_SYNC_SECRET } from '../../../shared/graphql/qu
 import { Logger } from '../utils/logger';
 import { isEAForumHost } from '../utils/forum';
 import {
+  applyExternalAuthorPrefs,
+  applyExternalLoadFrom,
+  applyExternalReadState,
   getAuthorPreferences,
   getDeviceId,
+  getKey,
   getLoadFrom,
   getReadState,
+  STORAGE_KEY_NAMES,
   getSyncEnabled,
   getSyncMeta,
   getSyncQuotaMeta,
@@ -47,9 +52,14 @@ import type {
   SyncSite,
 } from './firestoreSyncBackend';
 
+declare const GM_addValueChangeListener:
+  ((key: string, callback: (key: string, oldValue: unknown, newValue: unknown, remote: boolean) => void) => number)
+  | undefined;
+declare const GM_removeValueChangeListener: ((listenerId: number) => void) | undefined;
+declare const GM_getValue: ((key: string, defaultValue: string) => string) | undefined;
+
 const SYNC_SECRET_KEY = 'pr_sync_secret_v1';
 const SYNC_META_VERSION = 1;
-const SYNC_TTL_MS = 181 * 24 * 60 * 60 * 1000;
 const SYNC_TTL_FALLBACK_MS = 170 * 24 * 60 * 60 * 1000;
 const SYNC_DEBOUNCE_MS = 8_000;
 const PULL_THROTTLE_MS = 45_000;
@@ -63,6 +73,7 @@ const SYNC_STARTUP_TIMEOUT_MS = 5_000;
 const READ_CAP = 10_000;
 const AUTHOR_PREF_CAP = 1_000;
 const CAS_RETRY_LIMIT = 3;
+const PUSH_PERMISSION_RETRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LATE_SYNC_NOTICE_MS = 15_000;
 const READ_OVERFLOW_NOTICE_MS = 30_000;
 const LOCAL_PUSH_SOFT_LIMIT = 300;
@@ -71,6 +82,8 @@ const LOCAL_PUSH_COOLDOWN_MS = 60 * 60_000;
 const QUOTA_COOLDOWN_LADDER_MIN = [5, 15, 60, 360, 360];
 const QUOTA_COOLDOWN_JITTER_MS = 60_000;
 const MAX_SYNC_COUNTER = 1_000_000_000;
+const CROSS_TAB_POLL_DEFAULT_MS = 750;
+const CROSS_TAB_POLL_MIN_MS = 250;
 
 export interface PersistenceSyncInitOptions {
   isResetRoute: boolean;
@@ -143,6 +156,15 @@ interface RuntimeState {
   pendingFlush: boolean;
   readOnly: boolean;
   pushDisabled: boolean;
+  pushDisabledReason: string | null;
+  pushDisabledMeta: {
+    context: string;
+    code?: string;
+    status?: number;
+    message?: string;
+    atIso: string;
+  } | null;
+  lastPushAttemptDebug: Record<string, unknown> | null;
   quotaDisabledUntilMs: number;
   startupDone: boolean;
   startupTimedOut: boolean;
@@ -178,6 +200,9 @@ const runtime: RuntimeState = {
   pendingFlush: false,
   readOnly: false,
   pushDisabled: false,
+  pushDisabledReason: null,
+  pushDisabledMeta: null,
+  lastPushAttemptDebug: null,
   quotaDisabledUntilMs: 0,
   startupDone: false,
   startupTimedOut: false,
@@ -215,6 +240,45 @@ const stableCloneSorted = (value: unknown): unknown => {
 };
 
 const stableJson = (value: unknown): string => JSON.stringify(stableCloneSorted(value));
+
+function normalizeWriterLabel(label: string | undefined, fallback: string): string {
+  const normalized = typeof label === 'string' ? label.trim() : '';
+  if (normalized.length > 0 && normalized.length <= 128) return normalized;
+  return fallback;
+}
+
+function clearPushDisabled(): void {
+  runtime.pushDisabled = false;
+  runtime.pushDisabledReason = null;
+  runtime.pushDisabledMeta = null;
+}
+
+function setPushDisabled(reason: string, context: string, error?: unknown): void {
+  runtime.pushDisabled = true;
+  runtime.pushDisabledReason = reason;
+  if (error instanceof FirestoreBackendError) {
+    runtime.pushDisabledMeta = {
+      context,
+      code: error.code,
+      status: error.status,
+      message: error.message,
+      atIso: nowIso(),
+    };
+    return;
+  }
+  if (error instanceof Error) {
+    runtime.pushDisabledMeta = {
+      context,
+      message: error.message,
+      atIso: nowIso(),
+    };
+    return;
+  }
+  runtime.pushDisabledMeta = {
+    context,
+    atIso: nowIso(),
+  };
+}
 
 function safeRandomUuid(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -403,14 +467,23 @@ function dynamicAuthorKeyOk(key: string): boolean {
   return /^[A-Za-z0-9 ._,'/:;-]{1,128}$/.test(key);
 }
 
-function computeExpiresAt(anchorIso?: string): string {
+function computeExpiresAt(
+  anchorIso?: string,
+  options: {
+    preferAnchorOnly?: boolean;
+    fallbackTtlMs?: number;
+  } = {}
+): string {
   const anchorMs = anchorIso ? Date.parse(anchorIso) : NaN;
+  const ttlMs = options.fallbackTtlMs ?? SYNC_TTL_FALLBACK_MS;
   if (Number.isFinite(anchorMs)) {
-    // Never derive TTL from a stale anchor; clamp to at least local "now".
-    return new Date(Math.max(anchorMs, nowMs()) + SYNC_TTL_MS).toISOString();
+    if (options.preferAnchorOnly) {
+      return new Date(anchorMs + ttlMs).toISOString();
+    }
+    return new Date(Math.max(anchorMs, nowMs()) + ttlMs).toISOString();
   }
   // Keep margin below the 181d rules cap when no server anchor exists yet.
-  return new Date(nowMs() + SYNC_TTL_FALLBACK_MS).toISOString();
+  return new Date(nowMs() + ttlMs).toISOString();
 }
 
 function classifyAndSetQuota(error: unknown): void {
@@ -495,6 +568,158 @@ function readCrossTabMs(key: string): number {
 
 function writeCrossTabMs(key: string, value: number): void {
   writeLocalStorageSafe(key, String(value));
+}
+
+function getSyncFieldStorageKey(field: SyncableField): string {
+  if (field === 'read') return getKey(STORAGE_KEY_NAMES.READ);
+  if (field === 'loadFrom') return getKey(STORAGE_KEY_NAMES.READ_FROM);
+  return getKey(STORAGE_KEY_NAMES.AUTHOR_PREFS);
+}
+
+function parseExternalReadStateRaw(raw: unknown): Record<string, 1> {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: Record<string, 1> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (value !== 1) continue;
+    if (!dynamicReadKeyOk(key)) continue;
+    out[key] = 1;
+  }
+  return out;
+}
+
+function parseExternalLoadFromRaw(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const normalized = normalizeLoadFromValue(raw);
+  return normalized || '';
+}
+
+function parseExternalAuthorPrefsRaw(raw: unknown): AuthorPreferences {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const out: AuthorPreferences = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!dynamicAuthorKeyOk(key)) continue;
+    if (value === -1 || value === 0 || value === 1) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function applyExternalStorageField(field: SyncableField, raw: unknown, source: 'cross-tab' | 'polling'): void {
+  if (field === 'read') {
+    applyExternalReadState(parseExternalReadStateRaw(raw), source);
+    return;
+  }
+  if (field === 'loadFrom') {
+    applyExternalLoadFrom(parseExternalLoadFromRaw(raw), source);
+    return;
+  }
+  applyExternalAuthorPrefs(parseExternalAuthorPrefsRaw(raw), source);
+}
+
+function getCrossTabPollIntervalMs(): number {
+  const testOverride = Number((window as any).PR_SYNC_TEST_POLL_MS);
+  if (Number.isFinite(testOverride) && testOverride >= CROSS_TAB_POLL_MIN_MS) {
+    return Math.floor(testOverride);
+  }
+  return CROSS_TAB_POLL_DEFAULT_MS;
+}
+
+function installCrossTabFieldWatchers(): (() => void) {
+  const fieldEntries: Array<{ field: SyncableField; key: string }> = [
+    { field: 'read', key: getSyncFieldStorageKey('read') },
+    { field: 'loadFrom', key: getSyncFieldStorageKey('loadFrom') },
+    { field: 'authorPrefs', key: getSyncFieldStorageKey('authorPrefs') },
+  ];
+
+  if (
+    typeof GM_addValueChangeListener === 'function' &&
+    typeof GM_removeValueChangeListener === 'function'
+  ) {
+    const listenerIds: number[] = [];
+    try {
+      for (const entry of fieldEntries) {
+        const listenerId = GM_addValueChangeListener(
+          entry.key,
+          (_key, oldValue, newValue, remote) => {
+            if (!runtime.active) return;
+            if (remote === false) return;
+            if (newValue === oldValue) return;
+            applyExternalStorageField(entry.field, newValue, 'cross-tab');
+          }
+        );
+        listenerIds.push(listenerId);
+      }
+      return () => {
+        for (const listenerId of listenerIds) {
+          try {
+            GM_removeValueChangeListener(listenerId);
+          } catch {
+            // Ignore manager-specific teardown failures.
+          }
+        }
+      };
+    } catch (error) {
+      Logger.warn('sync cross-tab listener install failed; falling back to polling', error);
+      for (const listenerId of listenerIds) {
+        try {
+          GM_removeValueChangeListener(listenerId);
+        } catch {
+          // Ignore manager-specific teardown failures.
+        }
+      }
+    }
+  }
+
+  if (typeof GM_getValue !== 'function') {
+    return () => {};
+  }
+
+  const lastRawByKey = new Map<string, string>();
+  for (const entry of fieldEntries) {
+    lastRawByKey.set(entry.key, GM_getValue(entry.key, entry.field === 'loadFrom' ? '' : '{}'));
+  }
+
+  const intervalMs = getCrossTabPollIntervalMs();
+  const timer = window.setInterval(() => {
+    if (!runtime.active) return;
+    for (const entry of fieldEntries) {
+      const fallback = entry.field === 'loadFrom' ? '' : '{}';
+      const nextRaw = GM_getValue(entry.key, fallback);
+      const previousRaw = lastRawByKey.get(entry.key);
+      if (nextRaw === previousRaw) continue;
+      lastRawByKey.set(entry.key, nextRaw);
+      applyExternalStorageField(entry.field, nextRaw, 'polling');
+    }
+  }, intervalMs) as unknown as number;
+
+  return () => {
+    window.clearInterval(timer);
+  };
+}
+
+function getResumeIdleGapMs(): number {
+  const testOverride = Number((window as any).PR_TEST_IDLE_MS);
+  if (Number.isFinite(testOverride) && testOverride >= 0) {
+    return Math.floor(testOverride);
+  }
+  return PULL_THROTTLE_MS;
 }
 
 function setDirty(field: SyncableField): void {
@@ -832,13 +1057,13 @@ function applyLocalStateFromMerged(
   let changed = false;
   const currentRead = getReadState();
   if (stableJson(currentRead) !== stableJson(mergedRead)) {
-    setReadState(mergedRead, { silent: true });
+    setReadState(mergedRead, { silent: true, source: 'sync-merge' });
     changed = true;
   }
 
   const nextLoadFrom = mergedLoadFrom || '';
   if (getLoadFrom() !== nextLoadFrom) {
-    setLoadFrom(nextLoadFrom, { silent: true });
+    setLoadFrom(nextLoadFrom, { silent: true, source: 'sync-merge' });
     changed = true;
   }
 
@@ -848,7 +1073,7 @@ function applyLocalStateFromMerged(
   }
   const currentPrefs = getAuthorPreferences();
   if (stableJson(currentPrefs) !== stableJson(nextPrefs)) {
-    setAuthorPreferences(nextPrefs, { silent: true });
+    setAuthorPreferences(nextPrefs, { silent: true, source: 'sync-merge' });
     changed = true;
   }
 
@@ -982,8 +1207,12 @@ function buildEnvelopeFromMerged(
   now: string,
   writerId: string,
   site: SyncSite,
-  serverAnchorIso: string | null
+  serverAnchorIso: string | null,
+  expiresAtOverride?: string
 ): PRSyncEnvelopeV1 {
+  const remoteReadUpdatedBy = normalizeWriterLabel(remote.fields.read.updatedBy, writerId);
+  const remoteLoadFromUpdatedBy = normalizeWriterLabel(remote.fields.loadFrom.updatedBy, writerId);
+  const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);
   const remoteLoadFrom = normalizeLoadFromValue(remote.fields.loadFrom.value);
   const mergedLoadFrom = normalizeLoadFromValue(merged.loadFromValue);
   const loadFromChanged = mergedLoadFrom !== remoteLoadFrom ||
@@ -999,24 +1228,24 @@ function buildEnvelopeFromMerged(
     site,
     lastPushedBy: writerId,
     lastPushedAt: serverAnchorIso || now,
-    expiresAt: computeExpiresAt(serverAnchorIso || now),
+    expiresAt: expiresAtOverride || computeExpiresAt(serverAnchorIso || now, { preferAnchorOnly: true }),
     fields: {
       read: {
         updatedAt: readChanged ? now : remote.fields.read.updatedAt,
-        updatedBy: readChanged ? writerId : remote.fields.read.updatedBy,
+        updatedBy: readChanged ? writerId : remoteReadUpdatedBy,
         clearEpoch: merged.read.clearEpoch,
         value: merged.read.value,
       },
       loadFrom: {
         updatedAt: loadFromChanged ? now : remote.fields.loadFrom.updatedAt,
-        updatedBy: loadFromChanged ? writerId : remote.fields.loadFrom.updatedBy,
+        updatedBy: loadFromChanged ? writerId : remoteLoadFromUpdatedBy,
         version: merged.loadFromVersion,
         clearEpoch: merged.loadFromClearEpoch,
         ...(mergedLoadFrom ? { value: mergedLoadFrom } : {}),
       },
       authorPrefs: {
         updatedAt: authorChanged ? now : remote.fields.authorPrefs.updatedAt,
-        updatedBy: authorChanged ? writerId : remote.fields.authorPrefs.updatedBy,
+        updatedBy: authorChanged ? writerId : remoteAuthorUpdatedBy,
         clearEpoch: merged.authorPrefs.clearEpoch,
         value: merged.authorPrefs.value,
       },
@@ -1112,6 +1341,7 @@ async function writeWithCas(
   if (expectedResetGeneration !== undefined && runtime.resetGeneration !== expectedResetGeneration) return false;
 
   let readResult = remoteResult;
+  let permissionRetryWithConservativeTtl = false;
   for (let attempt = 0; attempt <= CAS_RETRY_LIMIT; attempt++) {
     const remoteEnvelope = loadRemoteOrDefault(readResult);
     if (remoteEnvelope.schemaVersion !== 1) {
@@ -1121,6 +1351,12 @@ async function writeWithCas(
     }
 
     const merged = buildMergedState(remoteEnvelope);
+    const expiresAtStrategy = permissionRetryWithConservativeTtl
+      ? 'conservative-now-retry'
+      : 'server-anchor';
+    const expiresAtOverride = permissionRetryWithConservativeTtl
+      ? computeExpiresAt(undefined, { fallbackTtlMs: PUSH_PERMISSION_RETRY_TTL_MS })
+      : undefined;
     const envelopeToWrite = buildEnvelopeFromMerged(
       remoteEnvelope,
       {
@@ -1136,7 +1372,8 @@ async function writeWithCas(
       nowIso(),
       runtime.writerId,
       runtime.site,
-      runtime.lastServerAnchorIso
+      runtime.lastServerAnchorIso,
+      expiresAtOverride
     );
     if (expectedResetGeneration !== undefined && runtime.resetGeneration !== expectedResetGeneration) {
       return false;
@@ -1157,6 +1394,20 @@ async function writeWithCas(
     const commitOptions = readResult.kind === 'missing'
       ? { createIfMissing: true as const }
       : { expectedUpdateTime: readResult.updateTime as string };
+    runtime.lastPushAttemptDebug = {
+      atIso: nowIso(),
+      attempt,
+      site: runtime.site,
+      syncNodeSuffix: runtime.syncNode.slice(-8),
+      projectId: runtime.config.projectId,
+      host: runtime.config.host || 'firestore.googleapis.com',
+      documentPath: buildFirestorePath(runtime.site, runtime.syncNode),
+      expiresAtStrategy,
+      commitOptions: readResult.kind === 'missing'
+        ? { mode: 'create-if-missing' }
+        : { mode: 'cas-update', expectedUpdateTime: readResult.updateTime as string },
+      envelope: envelopeToWrite,
+    };
 
     try {
       const commitResult = await commitEnvelope(
@@ -1222,7 +1473,17 @@ async function writeWithCas(
         }
       }
       if (isPermissionDenied(error)) {
-        runtime.pushDisabled = true;
+        if (!permissionRetryWithConservativeTtl) {
+          permissionRetryWithConservativeTtl = true;
+          Logger.warn('sync push permission denied; retrying with conservative expiresAt');
+          try {
+            readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+          } catch (readError) {
+            logBackendError('sync push permission-denied retry read failed', readError);
+          }
+          continue;
+        }
+        setPushDisabled('push permission denied', 'push', error);
         logBackendError('sync push permission denied', error);
         return false;
       }
@@ -1324,10 +1585,10 @@ async function performPullAndMerge(): Promise<boolean> {
     classifyAndSetQuota(error);
     runtime.connectivityBlocked = isConnectivityBlocked(error);
     if (error instanceof FirestoreBackendError && error.code === 'INVALID_ENVELOPE') {
-      runtime.pushDisabled = true;
+      setPushDisabled('pull failed: invalid remote envelope', 'pull', error);
     }
     if (isPermissionDenied(error)) {
-      runtime.pushDisabled = true;
+      setPushDisabled('pull failed: permission denied', 'pull', error);
       runtime.readOnly = true;
     }
     logBackendError('sync pull failed', error);
@@ -1370,7 +1631,7 @@ async function flushIfNeeded(force: boolean): Promise<void> {
   } catch (error) {
     runtime.connectivityBlocked = isConnectivityBlocked(error);
     if (error instanceof FirestoreBackendError && error.code === 'INVALID_ENVELOPE') {
-      runtime.pushDisabled = true;
+      setPushDisabled('flush read failed: invalid remote envelope', 'flush', error);
     }
     if (!isMissingDocumentError(error)) {
       logBackendError('sync flush read failed', error);
@@ -1413,6 +1674,16 @@ function installListeners(): void {
   const disposeFieldListener = onSyncFieldChanged((field) => {
     void onLocalFieldChanged(field);
   });
+  const disposeCrossTabWatchers = installCrossTabFieldWatchers();
+
+  const requestPullViaExistingPath = (): void => {
+    if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
+    const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
+    const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_THROTTLE_MS;
+    if (gate > nowMs()) return;
+    void performPullAndMerge().then(() => void flushIfNeeded(false));
+  };
+
   const runPeriodicPull = async (): Promise<void> => {
     if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
     if (typeof document !== 'undefined' && document.hidden) return;
@@ -1437,11 +1708,17 @@ function installListeners(): void {
     }, delayMs) as unknown as number;
   };
   const focusListener = () => {
-    if (!runtime.active || !runtime.userId || !runtime.syncNode) return;
-    const crossTabLastPull = readCrossTabMs(getCrossTabPullKey(runtime.site, runtime.userId));
-    const gate = Math.max(runtime.lastPullAtMs, crossTabLastPull) + PULL_THROTTLE_MS;
-    if (gate > nowMs()) return;
-    void performPullAndMerge().then(() => void flushIfNeeded(false));
+    requestPullViaExistingPath();
+  };
+  const idleGapMs = getResumeIdleGapMs();
+  let lastUserActivityAtMs = nowMs();
+  const activityListener = () => {
+    const stamp = nowMs();
+    const wasIdle = (stamp - lastUserActivityAtMs) >= idleGapMs;
+    lastUserActivityAtMs = stamp;
+    if (!wasIdle) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    requestPullViaExistingPath();
   };
   const visibilityListener = () => {
     if (!runtime.active) return;
@@ -1449,14 +1726,22 @@ function installListeners(): void {
       void flushIfNeeded(true);
       return;
     }
-    void performPullAndMerge().then(() => void flushIfNeeded(false));
+    lastUserActivityAtMs = nowMs();
+    requestPullViaExistingPath();
   };
   window.addEventListener('focus', focusListener, { passive: true });
+  window.addEventListener('mousemove', activityListener, { passive: true });
+  window.addEventListener('keydown', activityListener, { passive: true });
+  window.addEventListener('touchstart', activityListener, { passive: true });
   window.addEventListener('visibilitychange', visibilityListener, { passive: true });
   schedulePeriodicPull();
   runtime.listenerDisposer = () => {
     disposeFieldListener();
+    disposeCrossTabWatchers();
     window.removeEventListener('focus', focusListener);
+    window.removeEventListener('mousemove', activityListener);
+    window.removeEventListener('keydown', activityListener);
+    window.removeEventListener('touchstart', activityListener);
     window.removeEventListener('visibilitychange', visibilityListener);
     if (runtime.periodicPullTimer !== null) {
       window.clearTimeout(runtime.periodicPullTimer);
@@ -1477,9 +1762,9 @@ function normalizeDirtyAfterRecovery(): void {
 }
 
 function clearLocalSyncableFieldsForUserSwitch(): void {
-  setReadState({}, { silent: true });
-  setLoadFrom('', { silent: true });
-  setAuthorPreferences({}, { silent: true });
+  setReadState({}, { silent: true, source: 'reset' });
+  setLoadFrom('', { silent: true, source: 'reset' });
+  setAuthorPreferences({}, { silent: true, source: 'reset' });
   clearFallbackAndResetPointers();
   runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false };
   runtime.firstDirtyAtMs = null;
@@ -1525,9 +1810,9 @@ function applyResetLocallyToTargets(targets: {
   loadFromVersion: number;
   authorPrefsClearEpoch: number;
 }): void {
-  setReadState({}, { silent: true });
-  setLoadFrom('', { silent: true });
-  setAuthorPreferences({}, { silent: true });
+  setReadState({}, { silent: true, source: 'reset' });
+  setLoadFrom('', { silent: true, source: 'reset' });
+  setAuthorPreferences({}, { silent: true, source: 'reset' });
   runtime.meta.readClearEpoch = clampSyncCounter(targets.readClearEpoch, runtime.meta.readClearEpoch);
   runtime.meta.loadFrom.clearEpoch = clampSyncCounter(targets.loadFromClearEpoch, runtime.meta.loadFrom.clearEpoch);
   runtime.meta.loadFrom.version = clampSyncCounter(targets.loadFromVersion, runtime.meta.loadFrom.version);
@@ -1670,6 +1955,7 @@ export async function initPersistenceSync(
     runtime.secretUnavailable = false;
     runtime.identityPermissionDenied = false;
     runtime.connectivityBlocked = false;
+    clearPushDisabled();
     runtime.localBudgetMeta = createDefaultQuotaMeta();
     runtime.resetGeneration = 0;
     runtime.startupDone = false;
@@ -1689,7 +1975,7 @@ export async function initPersistenceSync(
   runtime.config = getFirestoreBackendConfig();
   runtime.active = false;
   runtime.readOnly = false;
-  runtime.pushDisabled = false;
+  clearPushDisabled();
   runtime.syncNode = null;
   runtime.secret = null;
   runtime.secretUnavailable = false;
@@ -1862,7 +2148,12 @@ export function getSyncStatusLineText(): string {
   }
   if (runtime.lateSyncAppliedUntilMs > nowMs()) return 'Sync: synced state applied';
   if (runtime.readOnly) return 'Sync: read-only';
-  if (runtime.pushDisabled) return 'Sync: push-disabled';
+  if (runtime.pushDisabled) {
+    if (runtime.pushDisabledReason) {
+      return `Sync: push-disabled (${runtime.pushDisabledReason})`;
+    }
+    return 'Sync: push-disabled';
+  }
   if (!runtime.active) return 'Sync: local-only';
   if (hasAnyDirty()) {
     const waitingForPushWindow = computePushFloorWaitMs() > 0;
@@ -1912,6 +2203,13 @@ export function setPersistedSyncToggle(enabled: boolean): void {
 }
 
 export function getSyncDebugSnapshot(): Record<string, unknown> {
+  const backendTarget = runtime.config
+    ? {
+      projectId: runtime.config.projectId,
+      host: runtime.config.host || 'firestore.googleapis.com',
+      documentPath: runtime.syncNode ? buildFirestorePath(runtime.site, runtime.syncNode) : null,
+    }
+    : null;
   return {
     active: runtime.active,
     site: runtime.site,
@@ -1919,6 +2217,9 @@ export function getSyncDebugSnapshot(): Record<string, unknown> {
     syncNodeSuffix: runtime.syncNode?.slice(-8),
     readOnly: runtime.readOnly,
     pushDisabled: runtime.pushDisabled,
+    pushDisabledReason: runtime.pushDisabledReason,
+    pushDisabledMeta: runtime.pushDisabledMeta,
+    lastPushAttempt: runtime.lastPushAttemptDebug,
     pendingRemoteReset: runtime.meta.pendingRemoteReset,
     pendingRemoteResetTargets: runtime.meta.pendingRemoteResetTargets,
     dirty: runtime.meta.dirty,
@@ -1930,6 +2231,7 @@ export function getSyncDebugSnapshot(): Record<string, unknown> {
     startupTimedOut: runtime.startupTimedOut,
     readOverflowNoticeUntilMs: runtime.readOverflowNoticeUntilMs,
     localBudget: runtime.localBudgetMeta,
+    backendTarget,
   };
 }
 
