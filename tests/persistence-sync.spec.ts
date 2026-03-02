@@ -283,7 +283,14 @@ test.describe('Persistence Sync Contracts', () => {
     const posts = readRepoFile('src/scripts/power-reader/render/post.ts');
     const metadata = readRepoFile('src/scripts/power-reader/render/components/metadata.ts');
     expect(uiConsistency).toContain('const MAX_PATCH_NODES_PER_FRAME = 50;');
+    expect(uiConsistency).toMatch(/const\s+PRUNE_INTERVAL_MS\s*=\s*1_?500;/);
     expect(uiConsistency).toContain('const pendingReadEntryOffsetById = new Map<string, number>();');
+    expect(uiConsistency).toContain('for (const [id, entries] of itemIndexById.entries()) {');
+    expect(uiConsistency).toMatch(/Date\.now\(\)\s*-\s*lastPruneAtMs\s*>=\s*PRUNE_INTERVAL_MS/);
+    expect(uiConsistency).toMatch(/getElementById\('power-reader-root'\)/);
+    expect(uiConsistency).toMatch(/root\.querySelectorAll\('\.pr-item:not\(\.read\):not\(\.context\)'\)/);
+    expect(uiConsistency).toContain('const ensureRootObserver = (): void => {');
+    expect(uiConsistency).toContain('attachDomIndexingToRoot(root);');
     expect(uiConsistency).toContain('node instanceof Element || node instanceof DocumentFragment');
     expect(uiConsistency).toContain('window.requestAnimationFrame(flushPatchQueues)');
     expect(uiConsistency).toContain('onSyncFieldApplied(handleAppliedSyncField)');

@@ -13,6 +13,7 @@ const ITEM_SELECTOR = '.pr-item[data-id]';
 const AUTHOR_CONTROL_SELECTOR = '[data-action="author-up"][data-author], [data-action="author-down"][data-author]';
 const PARSED_POSTED_AT_ATTR = 'prParsedPostedAtMs';
 const MAX_PATCH_NODES_PER_FRAME = 50;
+const PRUNE_INTERVAL_MS = 1_500;
 
 interface IndexedItemEntry {
   element: HTMLElement;
@@ -22,7 +23,11 @@ interface IndexedItemEntry {
 let installedState: ReaderState | null = null;
 let disposeAppliedListener: (() => void) | null = null;
 let domObserver: MutationObserver | null = null;
+let rootObserver: MutationObserver | null = null;
 let pendingAnimationFrame: number | null = null;
+let pendingRootCheckFrame: number | null = null;
+let observedRoot: HTMLElement | null = null;
+let lastPruneAtMs = 0;
 
 const itemIndexById = new Map<string, Set<IndexedItemEntry>>();
 let itemEntryByElement = new WeakMap<HTMLElement, IndexedItemEntry>();
@@ -67,7 +72,7 @@ const resolvePostedAtMs = (element: HTMLElement): number | null => {
   if (!timeEl) return null;
   const parsed = Date.parse(timeEl.getAttribute('datetime') || '');
   if (!Number.isFinite(parsed)) return null;
-  const epoch = Math.floor(parsed);
+  const epoch = parsed;
   element.dataset[PARSED_POSTED_AT_ATTR] = String(epoch);
   return epoch;
 };
@@ -138,14 +143,35 @@ const collectMatchingElements = (node: Node, selector: string): HTMLElement[] =>
   return matches;
 };
 
-const indexNode = (node: Node): void => {
+const indexNode = (node: Node, queuePatches = false): void => {
+  let queuedReadPatch = false;
   const itemEls = collectMatchingElements(node, ITEM_SELECTOR);
   for (const itemEl of itemEls) {
     addItemEntry(itemEl);
+    if (queuePatches) {
+      const id = itemEl.dataset.id;
+      if (id) {
+        pendingReadItemIds.add(id);
+        queuedReadPatch = true;
+      }
+    }
   }
+
+  let queuedAuthorPatch = false;
   const authorControls = collectMatchingElements(node, AUTHOR_CONTROL_SELECTOR);
   for (const control of authorControls) {
     addAuthorControl(control);
+    if (queuePatches) {
+      pendingAuthorControls.add(control);
+      queuedAuthorPatch = true;
+    }
+  }
+
+  if (queuePatches && (queuedReadPatch || queuedAuthorPatch)) {
+    if (queuedReadPatch) {
+      pendingUnreadCounterRefresh = true;
+    }
+    schedulePatchFrame();
   }
 };
 
@@ -165,6 +191,7 @@ const pruneDetachedEntries = (): void => {
     for (const entry of Array.from(bucket)) {
       if (!entry.element.isConnected) {
         bucket.delete(entry);
+        itemEntryByElement.delete(entry.element);
       }
     }
     if (bucket.size === 0) {
@@ -175,6 +202,8 @@ const pruneDetachedEntries = (): void => {
     for (const element of Array.from(bucket)) {
       if (!element.isConnected) {
         bucket.delete(element);
+        authorNameByControl.delete(element);
+        pendingAuthorControls.delete(element);
       }
     }
     if (bucket.size === 0) {
@@ -183,16 +212,17 @@ const pruneDetachedEntries = (): void => {
   }
 };
 
-const queueAllKnownItemIds = (): void => {
+const queueIndexedItemIds = (): void => {
   for (const id of itemIndexById.keys()) {
     pendingReadItemIds.add(id);
   }
-  if (!installedState) return;
-  for (const comment of installedState.comments) {
-    pendingReadItemIds.add(comment._id);
-  }
-  for (const post of installedState.posts) {
-    pendingReadItemIds.add(post._id);
+};
+
+const queueAllAuthorControls = (): void => {
+  for (const controls of authorControlsByName.values()) {
+    for (const control of controls) {
+      pendingAuthorControls.add(control);
+    }
   }
 };
 
@@ -220,26 +250,29 @@ const queueLoadFromDelta = (): void => {
 
   if (prevMs === nextMs) return;
 
-  if (prevMs === null || nextMs === null || !installedState) {
-    queueAllKnownItemIds();
+  if (prevMs === null || nextMs === null) {
+    queueIndexedItemIds();
     pendingUnreadCounterRefresh = true;
     return;
   }
 
   const lower = Math.min(prevMs, nextMs);
   const upper = Math.max(prevMs, nextMs);
-  for (const comment of installedState.comments) {
-    const postedAtMs = Date.parse(comment.postedAt || '');
-    if (!Number.isFinite(postedAtMs)) continue;
-    if (postedAtMs >= lower && postedAtMs <= upper) {
-      pendingReadItemIds.add(comment._id);
+  for (const [id, entries] of itemIndexById.entries()) {
+    let inRange = false;
+    for (const entry of entries) {
+      if (entry.postedAtMs === null && entry.element.isConnected) {
+        entry.postedAtMs = resolvePostedAtMs(entry.element);
+      }
+      const postedAtMs = entry.postedAtMs;
+      if (postedAtMs === null) continue;
+      if (postedAtMs >= lower && postedAtMs <= upper) {
+        inRange = true;
+        break;
+      }
     }
-  }
-  for (const post of installedState.posts) {
-    const postedAtMs = Date.parse(post.postedAt || '');
-    if (!Number.isFinite(postedAtMs)) continue;
-    if (postedAtMs >= lower && postedAtMs <= upper) {
-      pendingReadItemIds.add(post._id);
+    if (inRange) {
+      pendingReadItemIds.add(id);
     }
   }
   pendingUnreadCounterRefresh = true;
@@ -267,8 +300,9 @@ const queueAuthorPrefsDelta = (): void => {
 
 const refreshUnreadCounter = (): void => {
   const unreadEl = document.getElementById('pr-unread-count');
-  if (!unreadEl) return;
-  const unreadCount = document.querySelectorAll('.pr-item:not(.read):not(.context)').length;
+  const root = document.getElementById('power-reader-root');
+  if (!unreadEl || !root) return;
+  const unreadCount = root.querySelectorAll('.pr-item:not(.read):not(.context)').length;
   if (unreadEl.textContent !== String(unreadCount)) {
     unreadEl.textContent = String(unreadCount);
   }
@@ -287,7 +321,7 @@ const applyReadClassPatch = (
     entry.postedAtMs = resolvePostedAtMs(element);
   }
 
-  if (element.classList.contains('context')) {
+  if (element.classList.contains('context') || element.dataset.placeholder === '1') {
     element.classList.add('read');
     return;
   }
@@ -393,7 +427,10 @@ const processPendingAuthorPatches = (budget: number): number => {
 
 const flushPatchQueues = (): void => {
   pendingAnimationFrame = null;
-  pruneDetachedEntries();
+  if (Date.now() - lastPruneAtMs >= PRUNE_INTERVAL_MS) {
+    pruneDetachedEntries();
+    lastPruneAtMs = Date.now();
+  }
 
   let budget = MAX_PATCH_NODES_PER_FRAME;
   budget = processPendingReadItems(budget);
@@ -432,17 +469,15 @@ const handleAppliedSyncField = (event: SyncFieldAppliedEvent): void => {
   schedulePatchFrame();
 };
 
-const startDomIndexing = (): void => {
-  const root = document.getElementById('power-reader-root');
-  if (!root) return;
-
-  itemIndexById.clear();
-  pendingReadEntryOffsetById.clear();
-  itemEntryByElement = new WeakMap<HTMLElement, IndexedItemEntry>();
-  authorControlsByName.clear();
-  authorNameByControl = new WeakMap<HTMLElement, string>();
+const attachDomIndexingToRoot = (root: HTMLElement): void => {
+  observedRoot = root;
+  resetIndexedDomState();
 
   indexNode(root);
+  queueIndexedItemIds();
+  queueAllAuthorControls();
+  pendingUnreadCounterRefresh = true;
+  schedulePatchFrame();
 
   if (domObserver) {
     domObserver.disconnect();
@@ -450,7 +485,7 @@ const startDomIndexing = (): void => {
   domObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       for (const added of mutation.addedNodes) {
-        indexNode(added);
+        indexNode(added, true);
       }
       for (const removed of mutation.removedNodes) {
         deindexNode(removed);
@@ -458,6 +493,81 @@ const startDomIndexing = (): void => {
     }
   });
   domObserver.observe(root, { childList: true, subtree: true });
+};
+
+const resetIndexedDomState = (): void => {
+  itemIndexById.clear();
+  pendingReadItemIds.clear();
+  pendingReadEntryOffsetById.clear();
+  itemEntryByElement = new WeakMap<HTMLElement, IndexedItemEntry>();
+  authorControlsByName.clear();
+  pendingAuthorControls.clear();
+  authorNameByControl = new WeakMap<HTMLElement, string>();
+  pendingUnreadCounterRefresh = false;
+  if (pendingRootCheckFrame !== null) {
+    window.cancelAnimationFrame(pendingRootCheckFrame);
+    pendingRootCheckFrame = null;
+  }
+  if (pendingAnimationFrame !== null) {
+    window.cancelAnimationFrame(pendingAnimationFrame);
+    pendingAnimationFrame = null;
+  }
+};
+
+const scheduleRootAttachCheck = (): void => {
+  if (pendingRootCheckFrame !== null) return;
+  pendingRootCheckFrame = window.requestAnimationFrame(() => {
+    pendingRootCheckFrame = null;
+    const root = document.getElementById('power-reader-root');
+    if (root === observedRoot) return;
+    if (!root) {
+      observedRoot = null;
+      if (domObserver) {
+        domObserver.disconnect();
+        domObserver = null;
+      }
+      resetIndexedDomState();
+      return;
+    }
+    attachDomIndexingToRoot(root);
+  });
+};
+
+const nodeAddsPowerReaderRoot = (node: Node): boolean =>
+  node instanceof Element &&
+  (node.id === 'power-reader-root' || node.querySelector('#power-reader-root') !== null);
+
+const mutationAddsPowerReaderRoot = (mutation: MutationRecord): boolean =>
+  Array.from(mutation.addedNodes).some(nodeAddsPowerReaderRoot);
+
+const mutationRemovesObservedRoot = (mutation: MutationRecord): boolean => {
+  if (!observedRoot) return false;
+  return Array.from(mutation.removedNodes).some(
+    (node) => node === observedRoot || (node instanceof Element && node.contains(observedRoot))
+  );
+};
+
+const ensureRootObserver = (): void => {
+  if (rootObserver) return;
+  rootObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (observedRoot && mutation.target instanceof Node && observedRoot.contains(mutation.target)) {
+        continue;
+      }
+      if ((observedRoot && !observedRoot.isConnected) || mutationRemovesObservedRoot(mutation) || mutationAddsPowerReaderRoot(mutation)) {
+        scheduleRootAttachCheck();
+        return;
+      }
+    }
+  });
+  rootObserver.observe(document.documentElement, { childList: true, subtree: true });
+};
+
+const startDomIndexing = (): void => {
+  ensureRootObserver();
+  const root = document.getElementById('power-reader-root');
+  if (!root) return;
+  attachDomIndexingToRoot(root);
 };
 
 export const setupSyncUiConsistencyLayer = (state: ReaderState): void => {
@@ -473,6 +583,7 @@ export const setupSyncUiConsistencyLayer = (state: ReaderState): void => {
   lastAppliedSequenceByField.read = 0;
   lastAppliedSequenceByField.loadFrom = 0;
   lastAppliedSequenceByField.authorPrefs = 0;
+  lastPruneAtMs = Date.now();
 
   startDomIndexing();
   disposeAppliedListener = onSyncFieldApplied(handleAppliedSyncField);
@@ -487,17 +598,20 @@ export const teardownSyncUiConsistencyLayer = (): void => {
     domObserver.disconnect();
     domObserver = null;
   }
+  if (rootObserver) {
+    rootObserver.disconnect();
+    rootObserver = null;
+  }
+  if (pendingRootCheckFrame !== null) {
+    window.cancelAnimationFrame(pendingRootCheckFrame);
+    pendingRootCheckFrame = null;
+  }
   if (pendingAnimationFrame !== null) {
     window.cancelAnimationFrame(pendingAnimationFrame);
     pendingAnimationFrame = null;
   }
-  pendingReadItemIds.clear();
-  pendingReadEntryOffsetById.clear();
-  pendingAuthorControls.clear();
-  pendingUnreadCounterRefresh = false;
-  itemIndexById.clear();
-  itemEntryByElement = new WeakMap<HTMLElement, IndexedItemEntry>();
-  authorControlsByName.clear();
-  authorNameByControl = new WeakMap<HTMLElement, string>();
+  resetIndexedDomState();
+  observedRoot = null;
+  lastPruneAtMs = 0;
   installedState = null;
 };

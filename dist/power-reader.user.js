@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.700
+// @version    1.2.701
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -2240,7 +2240,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.700"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.701"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -8981,7 +8981,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9162,7 +9162,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -15657,7 +15657,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17137,10 +17137,15 @@ sortCanonicalItems() {
   const AUTHOR_CONTROL_SELECTOR = '[data-action="author-up"][data-author], [data-action="author-down"][data-author]';
   const PARSED_POSTED_AT_ATTR = "prParsedPostedAtMs";
   const MAX_PATCH_NODES_PER_FRAME = 50;
+  const PRUNE_INTERVAL_MS = 1500;
   let installedState = null;
   let disposeAppliedListener = null;
   let domObserver = null;
+  let rootObserver = null;
   let pendingAnimationFrame = null;
+  let pendingRootCheckFrame = null;
+  let observedRoot = null;
+  let lastPruneAtMs = 0;
   const itemIndexById = new Map();
   let itemEntryByElement = new WeakMap();
   const authorControlsByName = new Map();
@@ -17176,7 +17181,7 @@ sortCanonicalItems() {
     if (!timeEl) return null;
     const parsed = Date.parse(timeEl.getAttribute("datetime") || "");
     if (!Number.isFinite(parsed)) return null;
-    const epoch = Math.floor(parsed);
+    const epoch = parsed;
     element.dataset[PARSED_POSTED_AT_ATTR] = String(epoch);
     return epoch;
   };
@@ -17237,14 +17242,33 @@ sortCanonicalItems() {
     }
     return matches;
   };
-  const indexNode = (node) => {
+  const indexNode = (node, queuePatches = false) => {
+    let queuedReadPatch = false;
     const itemEls = collectMatchingElements(node, ITEM_SELECTOR);
     for (const itemEl of itemEls) {
       addItemEntry(itemEl);
+      if (queuePatches) {
+        const id = itemEl.dataset.id;
+        if (id) {
+          pendingReadItemIds.add(id);
+          queuedReadPatch = true;
+        }
+      }
     }
+    let queuedAuthorPatch = false;
     const authorControls = collectMatchingElements(node, AUTHOR_CONTROL_SELECTOR);
     for (const control of authorControls) {
       addAuthorControl(control);
+      if (queuePatches) {
+        pendingAuthorControls.add(control);
+        queuedAuthorPatch = true;
+      }
+    }
+    if (queuePatches && (queuedReadPatch || queuedAuthorPatch)) {
+      if (queuedReadPatch) {
+        pendingUnreadCounterRefresh = true;
+      }
+      schedulePatchFrame();
     }
   };
   const deindexNode = (node) => {
@@ -17262,6 +17286,7 @@ sortCanonicalItems() {
       for (const entry of Array.from(bucket)) {
         if (!entry.element.isConnected) {
           bucket.delete(entry);
+          itemEntryByElement.delete(entry.element);
         }
       }
       if (bucket.size === 0) {
@@ -17272,6 +17297,8 @@ sortCanonicalItems() {
       for (const element of Array.from(bucket)) {
         if (!element.isConnected) {
           bucket.delete(element);
+          authorNameByControl.delete(element);
+          pendingAuthorControls.delete(element);
         }
       }
       if (bucket.size === 0) {
@@ -17279,16 +17306,16 @@ sortCanonicalItems() {
       }
     }
   };
-  const queueAllKnownItemIds = () => {
+  const queueIndexedItemIds = () => {
     for (const id of itemIndexById.keys()) {
       pendingReadItemIds.add(id);
     }
-    if (!installedState) return;
-    for (const comment of installedState.comments) {
-      pendingReadItemIds.add(comment._id);
-    }
-    for (const post of installedState.posts) {
-      pendingReadItemIds.add(post._id);
+  };
+  const queueAllAuthorControls = () => {
+    for (const controls of authorControlsByName.values()) {
+      for (const control of controls) {
+        pendingAuthorControls.add(control);
+      }
     }
   };
   const queueReadDelta = () => {
@@ -17312,25 +17339,28 @@ sortCanonicalItems() {
     const nextMs = parseLoadFromMs(nextLoadFrom);
     lastLoadFromSnapshot = nextLoadFrom;
     if (prevMs === nextMs) return;
-    if (prevMs === null || nextMs === null || !installedState) {
-      queueAllKnownItemIds();
+    if (prevMs === null || nextMs === null) {
+      queueIndexedItemIds();
       pendingUnreadCounterRefresh = true;
       return;
     }
     const lower = Math.min(prevMs, nextMs);
     const upper = Math.max(prevMs, nextMs);
-    for (const comment of installedState.comments) {
-      const postedAtMs = Date.parse(comment.postedAt || "");
-      if (!Number.isFinite(postedAtMs)) continue;
-      if (postedAtMs >= lower && postedAtMs <= upper) {
-        pendingReadItemIds.add(comment._id);
+    for (const [id, entries] of itemIndexById.entries()) {
+      let inRange = false;
+      for (const entry of entries) {
+        if (entry.postedAtMs === null && entry.element.isConnected) {
+          entry.postedAtMs = resolvePostedAtMs(entry.element);
+        }
+        const postedAtMs = entry.postedAtMs;
+        if (postedAtMs === null) continue;
+        if (postedAtMs >= lower && postedAtMs <= upper) {
+          inRange = true;
+          break;
+        }
       }
-    }
-    for (const post of installedState.posts) {
-      const postedAtMs = Date.parse(post.postedAt || "");
-      if (!Number.isFinite(postedAtMs)) continue;
-      if (postedAtMs >= lower && postedAtMs <= upper) {
-        pendingReadItemIds.add(post._id);
+      if (inRange) {
+        pendingReadItemIds.add(id);
       }
     }
     pendingUnreadCounterRefresh = true;
@@ -17356,8 +17386,9 @@ sortCanonicalItems() {
   };
   const refreshUnreadCounter = () => {
     const unreadEl = document.getElementById("pr-unread-count");
-    if (!unreadEl) return;
-    const unreadCount = document.querySelectorAll(".pr-item:not(.read):not(.context)").length;
+    const root = document.getElementById("power-reader-root");
+    if (!unreadEl || !root) return;
+    const unreadCount = root.querySelectorAll(".pr-item:not(.read):not(.context)").length;
     if (unreadEl.textContent !== String(unreadCount)) {
       unreadEl.textContent = String(unreadCount);
     }
@@ -17368,7 +17399,7 @@ sortCanonicalItems() {
     if (entry.postedAtMs === null) {
       entry.postedAtMs = resolvePostedAtMs(element);
     }
-    if (element.classList.contains("context")) {
+    if (element.classList.contains("context") || element.dataset.placeholder === "1") {
       element.classList.add("read");
       return;
     }
@@ -17451,7 +17482,10 @@ sortCanonicalItems() {
   };
   const flushPatchQueues = () => {
     pendingAnimationFrame = null;
-    pruneDetachedEntries();
+    if (Date.now() - lastPruneAtMs >= PRUNE_INTERVAL_MS) {
+      pruneDetachedEntries();
+      lastPruneAtMs = Date.now();
+    }
     let budget = MAX_PATCH_NODES_PER_FRAME;
     budget = processPendingReadItems(budget);
     budget = processPendingAuthorPatches(budget);
@@ -17482,22 +17516,21 @@ sortCanonicalItems() {
     }
     schedulePatchFrame();
   };
-  const startDomIndexing = () => {
-    const root = document.getElementById("power-reader-root");
-    if (!root) return;
-    itemIndexById.clear();
-    pendingReadEntryOffsetById.clear();
-    itemEntryByElement = new WeakMap();
-    authorControlsByName.clear();
-    authorNameByControl = new WeakMap();
+  const attachDomIndexingToRoot = (root) => {
+    observedRoot = root;
+    resetIndexedDomState();
     indexNode(root);
+    queueIndexedItemIds();
+    queueAllAuthorControls();
+    pendingUnreadCounterRefresh = true;
+    schedulePatchFrame();
     if (domObserver) {
       domObserver.disconnect();
     }
     domObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const added of mutation.addedNodes) {
-          indexNode(added);
+          indexNode(added, true);
         }
         for (const removed of mutation.removedNodes) {
           deindexNode(removed);
@@ -17505,6 +17538,71 @@ sortCanonicalItems() {
       }
     });
     domObserver.observe(root, { childList: true, subtree: true });
+  };
+  const resetIndexedDomState = () => {
+    itemIndexById.clear();
+    pendingReadItemIds.clear();
+    pendingReadEntryOffsetById.clear();
+    itemEntryByElement = new WeakMap();
+    authorControlsByName.clear();
+    pendingAuthorControls.clear();
+    authorNameByControl = new WeakMap();
+    pendingUnreadCounterRefresh = false;
+    if (pendingRootCheckFrame !== null) {
+      window.cancelAnimationFrame(pendingRootCheckFrame);
+      pendingRootCheckFrame = null;
+    }
+    if (pendingAnimationFrame !== null) {
+      window.cancelAnimationFrame(pendingAnimationFrame);
+      pendingAnimationFrame = null;
+    }
+  };
+  const scheduleRootAttachCheck = () => {
+    if (pendingRootCheckFrame !== null) return;
+    pendingRootCheckFrame = window.requestAnimationFrame(() => {
+      pendingRootCheckFrame = null;
+      const root = document.getElementById("power-reader-root");
+      if (root === observedRoot) return;
+      if (!root) {
+        observedRoot = null;
+        if (domObserver) {
+          domObserver.disconnect();
+          domObserver = null;
+        }
+        resetIndexedDomState();
+        return;
+      }
+      attachDomIndexingToRoot(root);
+    });
+  };
+  const nodeAddsPowerReaderRoot = (node) => node instanceof Element && (node.id === "power-reader-root" || node.querySelector("#power-reader-root") !== null);
+  const mutationAddsPowerReaderRoot = (mutation) => Array.from(mutation.addedNodes).some(nodeAddsPowerReaderRoot);
+  const mutationRemovesObservedRoot = (mutation) => {
+    if (!observedRoot) return false;
+    return Array.from(mutation.removedNodes).some(
+      (node) => node === observedRoot || node instanceof Element && node.contains(observedRoot)
+    );
+  };
+  const ensureRootObserver = () => {
+    if (rootObserver) return;
+    rootObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (observedRoot && mutation.target instanceof Node && observedRoot.contains(mutation.target)) {
+          continue;
+        }
+        if (observedRoot && !observedRoot.isConnected || mutationRemovesObservedRoot(mutation) || mutationAddsPowerReaderRoot(mutation)) {
+          scheduleRootAttachCheck();
+          return;
+        }
+      }
+    });
+    rootObserver.observe(document.documentElement, { childList: true, subtree: true });
+  };
+  const startDomIndexing = () => {
+    ensureRootObserver();
+    const root = document.getElementById("power-reader-root");
+    if (!root) return;
+    attachDomIndexingToRoot(root);
   };
   const setupSyncUiConsistencyLayer = (state2) => {
     if (installedState === state2 && disposeAppliedListener) {
@@ -17518,6 +17616,7 @@ sortCanonicalItems() {
     lastAppliedSequenceByField.read = 0;
     lastAppliedSequenceByField.loadFrom = 0;
     lastAppliedSequenceByField.authorPrefs = 0;
+    lastPruneAtMs = Date.now();
     startDomIndexing();
     disposeAppliedListener = onSyncFieldApplied(handleAppliedSyncField);
   };
@@ -17530,18 +17629,21 @@ sortCanonicalItems() {
       domObserver.disconnect();
       domObserver = null;
     }
+    if (rootObserver) {
+      rootObserver.disconnect();
+      rootObserver = null;
+    }
+    if (pendingRootCheckFrame !== null) {
+      window.cancelAnimationFrame(pendingRootCheckFrame);
+      pendingRootCheckFrame = null;
+    }
     if (pendingAnimationFrame !== null) {
       window.cancelAnimationFrame(pendingAnimationFrame);
       pendingAnimationFrame = null;
     }
-    pendingReadItemIds.clear();
-    pendingReadEntryOffsetById.clear();
-    pendingAuthorControls.clear();
-    pendingUnreadCounterRefresh = false;
-    itemIndexById.clear();
-    itemEntryByElement = new WeakMap();
-    authorControlsByName.clear();
-    authorNameByControl = new WeakMap();
+    resetIndexedDomState();
+    observedRoot = null;
+    lastPruneAtMs = 0;
     installedState = null;
   };
   const initReader = async () => {
@@ -17609,7 +17711,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.700"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
