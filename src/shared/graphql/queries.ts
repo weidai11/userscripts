@@ -536,10 +536,21 @@ export type Comment = {
   latestChildren?: Comment[] | null;
 };
 
+export type ReactionUser = {
+  userId: string;
+  reactType: string;
+  userName?: string;
+  displayName?: string;
+  username?: string;
+  react?: string; // used in CurrentUserExtendedVote
+  quotes?: Array<string | { quote: string }>;
+};
+
 export type NamesAttachedReactionsScore = {
-  reacts: Record<string, Array<{ userId: string; reactType: string; quotes?: Array<{ quote: string }> }>>;
+  reacts: Record<string, ReactionUser[]>;
   agreement?: number;
   agreementVoteCount?: number;
+  approvalVoteCount?: number;
 };
 
 export type CurrentUserExtendedVote = {

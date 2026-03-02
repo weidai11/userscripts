@@ -104,6 +104,13 @@ test.describe('Persistence Sync Contracts', () => {
     expect(sync).toContain('return a[0].localeCompare(b[0]);');
   });
 
+  test('[PR-PERSIST-94] dirty local loadFrom clear is treated as explicit clear intent during merge', async () => {
+    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    expect(sync).toContain("const explicitLocalLoadClear = runtime.meta.dirty.loadFrom && canUseLocalLoad && localLoadFromRaw === '';");
+    expect(sync).toContain('mergedLoadClearEpoch = incrementSyncCounter(mergedLoadClearEpoch);');
+    expect(sync).toContain('loadFromValue = undefined;');
+  });
+
   test('[PR-PERSIST-19] read overflow clear-epoch bump marks read dirty for propagation', async () => {
     const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
     expect(sync).toContain("setDirty('read');");

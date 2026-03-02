@@ -5,6 +5,7 @@
 import { sanitizeHtml } from '../../utils/sanitize';
 import type { NamesAttachedReactionsScore } from '../../../../shared/graphql/queries';
 import { CONFIG } from '../../config';
+import { readQuoteText } from '../../utils/rendering';
 
 /**
  * Highlight quotes in the HTML body based on reactions
@@ -19,8 +20,9 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
         users.forEach(u => {
             if (u.quotes) {
                 u.quotes.forEach(q => {
-                    if (q.quote && q.quote.trim().length > 0) {
-                        quotesToHighlight.push(q.quote);
+                    const quoteText = readQuoteText(q);
+                    if (quoteText) {
+                        quotesToHighlight.push(quoteText);
                     }
                 });
             }

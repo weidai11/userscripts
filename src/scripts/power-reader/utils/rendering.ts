@@ -10,6 +10,22 @@ export const escapeHtml = (unsafe: string): string => {
     .replace(/'/g, "&#039;");
 };
 
+/**
+ * Normalize reaction quote payloads from API responses.
+ * Supports both raw string quotes and object-form quotes ({ quote: string }).
+ */
+export const readQuoteText = (quoteEntry: unknown): string | null => {
+  if (typeof quoteEntry === 'string') {
+    const trimmed = quoteEntry.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (!quoteEntry || typeof quoteEntry !== 'object') return null;
+  const candidate = (quoteEntry as { quote?: unknown }).quote;
+  if (typeof candidate !== 'string') return null;
+  const trimmed = candidate.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
 import type { Post } from '../../../shared/graphql/queries';
 import type { ReaderState } from '../state';
 import { renderVoteButtons } from '../render/components/actions';

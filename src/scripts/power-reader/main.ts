@@ -30,6 +30,7 @@ import { initPersistenceSync } from './persistence/persistenceSync';
 // Features
 import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
 import { initArenaMaxListener, setupArenaMaxKeyboard } from './features/arenaMaxPopup';
+import { initReactionTooltips } from './features/reactionTooltips';
 import { setupHeaderInjection } from './features/headerInjection';
 import { initArchive } from './archive/index';
 import { getForumMeta } from './utils/forum';
@@ -184,6 +185,7 @@ const loadAndRender = async (currentUserSnapshot?: unknown | null): Promise<void
       setupAIStudioKeyboard(state);
       initArenaMaxListener(state);
       setupArenaMaxKeyboard(state);
+      initReactionTooltips();
       attachEventListeners(state);
       root.dataset.listenersAttached = 'true';
     }

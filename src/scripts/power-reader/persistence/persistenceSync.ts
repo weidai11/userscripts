@@ -1034,7 +1034,8 @@ function buildMergedState(remoteEnvelope: PRSyncEnvelopeV1): {
   mergedAuthorEpoch: number;
 } {
   const localRead = getReadState();
-  const localLoadFrom = normalizeLoadFromValue(getLoadFrom());
+  const localLoadFromRaw = getLoadFrom();
+  const localLoadFrom = normalizeLoadFromValue(localLoadFromRaw);
   const localAuthorPrefs = getAuthorPreferences();
 
   const mergedRead = mergeReadState(
@@ -1050,17 +1051,24 @@ function buildMergedState(remoteEnvelope: PRSyncEnvelopeV1): {
     setDirty('read');
   }
 
-  const mergedLoadClearEpoch = Math.max(runtime.meta.loadFrom.clearEpoch, remoteEnvelope.fields.loadFrom.clearEpoch);
+  let mergedLoadClearEpoch = Math.max(runtime.meta.loadFrom.clearEpoch, remoteEnvelope.fields.loadFrom.clearEpoch);
   const canUseLocalLoad = runtime.meta.loadFrom.clearEpoch === mergedLoadClearEpoch;
   const canUseRemoteLoad = remoteEnvelope.fields.loadFrom.clearEpoch === mergedLoadClearEpoch;
   const remoteLoadValue = canUseRemoteLoad ? remoteEnvelope.fields.loadFrom.value : undefined;
-  const loadFromValue = resolveLoadFrom(
+  let loadFromValue = resolveLoadFrom(
     canUseLocalLoad ? localLoadFrom : undefined,
     remoteLoadValue
   );
   let loadFromVersion = Math.max(runtime.meta.loadFrom.version, remoteEnvelope.fields.loadFrom.version);
   const normalizedRemoteLoad = normalizeLoadFromValue(remoteEnvelope.fields.loadFrom.value);
-  if (runtime.meta.dirty.loadFrom && loadFromValue !== normalizedRemoteLoad) {
+  const explicitLocalLoadClear = runtime.meta.dirty.loadFrom && canUseLocalLoad && localLoadFromRaw === '';
+  if (explicitLocalLoadClear) {
+    // Preserve explicit local clear intent across merge/write boundaries so stale remote
+    // values cannot get resurrected after a reload.
+    mergedLoadClearEpoch = incrementSyncCounter(mergedLoadClearEpoch);
+    loadFromValue = undefined;
+  }
+  if (runtime.meta.dirty.loadFrom && (explicitLocalLoadClear || loadFromValue !== normalizedRemoteLoad)) {
     loadFromVersion = incrementSyncCounter(loadFromVersion);
   }
 

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.698] - 2026-03-01
+
+### Added
+- **Rich Reaction Tooltips ([PR-REACT-06])**: Implemented detailed, viewport-aware tooltips for reaction chips in post and comment headers.
+    - **Detailed Info**: Tooltips now display the reaction icon, label, description, and a list of users who reacted.
+    - **Inline Quotes**: For "inline reactions" (reactions to specific quotes), the tooltip also displays the associated quote next to the user's name.
+    - **Global Feature**: Added a global `reactionTooltips` feature to handle hover events across all reaction chips in the reader.
+    - **Styling**: Uses the `.pr-tooltip-global` shared style with improved layout for multi-user lists.
+- **Rich Voting Score Tooltips ([PR-VOTE-07])**: Added detailed tooltips for karma and agreement scores, showing total vote counts and net agreement details, with a breakdown of users who agreed or disagreed.
+
+### Changed
+- **Reaction Rendering**: Updated `renderReactions` to use `data-tooltip-*` attributes instead of native `title` tooltips, enabling the rich tooltip feature while preserving semantic metadata in the DOM.
+
 ## [1.2.697] - 2026-03-01
 
 ### Changed

@@ -116,6 +116,7 @@ export const renderMetadata = (
   const afExtendedScore = item.afExtendedScore as UserWithOptionalAfAgreement | null | undefined;
   const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
   const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
+  const voteCount = item.extendedScore?.approvalVoteCount ?? item.voteCount ?? 0;
 
   const reactionsHtml = renderReactions(
     item._id,
@@ -129,11 +130,12 @@ export const renderMetadata = (
     item.currentUserVote ?? null,
     item.currentUserExtendedVote ?? null,
     agreementScore,
-    isPost ? (item as Post).voteCount || 0 : 0,
+    voteCount,
     agreementVoteCount,
     showAgreement,
     isFullPost, // showButtons
-    reactionsHtml
+    reactionsHtml,
+    item.extendedScore as NamesAttachedReactionsScore
   );
 
   // Author preferences

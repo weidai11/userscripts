@@ -380,16 +380,26 @@ export function updateVoteUI(
   if (!doc || targets.length === 0) return;
 
   targets.forEach(target => {
-    // Update karma score
-    const scoreEl = target.querySelector('.pr-karma-score');
-    if (scoreEl) {
+    // Update karma score and tooltip
+    const scoreEl = target.querySelector<HTMLElement>('.pr-karma-score');
+    if (scoreEl && doc.baseScore !== undefined) {
       scoreEl.textContent = String(doc.baseScore);
+      scoreEl.setAttribute('data-tooltip-label', `Karma: ${doc.baseScore}`);
+      if (doc.voteCount !== undefined) {
+        scoreEl.setAttribute('data-tooltip-description', `Total votes: ${doc.voteCount}`);
+      }
     }
 
-    // Update agreement score
-    const agreeScoreEl = target.querySelector('.pr-agreement-score');
-    if (agreeScoreEl && doc.afExtendedScore?.agreement !== undefined) {
-      agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
+    // Update agreement score and tooltip
+    const agreeScoreEl = target.querySelector<HTMLElement>('.pr-agreement-score');
+    const agreement = doc.extendedScore?.agreement ?? (doc as any).afExtendedScore?.agreement;
+    if (agreeScoreEl && agreement !== undefined) {
+      agreeScoreEl.textContent = String(agreement);
+      agreeScoreEl.setAttribute('data-tooltip-label', `Agreement Score: ${agreement}`);
+      const agreeVotes = doc.extendedScore?.agreementVoteCount;
+      if (agreeVotes !== undefined) {
+        agreeScoreEl.setAttribute('data-tooltip-description', `Net agreement from ${agreeVotes} votes.`);
+      }
     }
 
     // Update karma button states

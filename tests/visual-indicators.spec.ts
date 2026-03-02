@@ -98,10 +98,9 @@ test.describe('Power Reader Visual Indicators', () => {
             user: { username: 'A' }, post: { _id: 'p1', title: 'Post 1' }
         }];
         await setupWithComments(page, comments);
-        await page.evaluate(() => {
-            const el = document.querySelector('.pr-comment');
-            el?.classList.add('read');
-        });
+        const comment = page.locator('.pr-comment').first();
+        await expect(comment).toBeVisible();
+        await comment.evaluate(el => el.classList.add('read'));
         const body = page.locator('.pr-comment.read .pr-comment-body').first();
         await expect(body).toHaveCSS('color', 'rgb(112, 112, 112)');
     });

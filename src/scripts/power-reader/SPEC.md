@@ -144,6 +144,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - [PR-PERSIST-91]: reset clear-all path removes sync metadata/settings keys in addition to reader field storage
 - [PR-PERSIST-92]: preview open timers must re-check hover intent and visibility before rendering the preview
 - [PR-PERSIST-93]: TTL anchor computation clamps stale server anchors and does not fall back to remote diagnostic timestamps
+- [PR-PERSIST-94]: dirty local `loadFrom` clears (empty-string intent) MUST advance `loadFrom.clearEpoch` so stale remote values cannot be resurrected on merge/reload
 
 ---
 
@@ -582,19 +583,28 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-VOTE-02]** **Karma voting**: `[â–²]` `[â–¼]` buttons.
 - **[PR-VOTE-03]** **Agreement voting**: `[âœ“]` `[âœ—]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
-- **[PR-VOTE-05]** If not logged in: Open login page in new tab.
-- **[PR-VOTE-06]** On EA Forum host, `agree` and `disagree` reaction chips must remain visible even when their counts are `0`.
+- [PR-VOTE-05] If not logged in: Open login page in new tab.
+- [PR-VOTE-06] On EA Forum host, `agree` and `disagree` reaction chips must remain visible even when their counts are `0`.
+- [PR-VOTE-07] **Rich Tooltips**: Karma and agreement scores show rich tooltips on hover, including:
+    - Score label and value.
+    - Description (e.g., "Total votes" or "Net agreement").
+    - List of users who voted (for agreement score, including "Agree"/"Disagree" labels and quotes).
 
 ---
 
 ### 19. Reaction System
+
 
 - **[PR-REACT-01]** Scrapes reaction definitions from site webpack bundle.
 - **[PR-REACT-02]** Caches definitions for 7 days.
 - **[PR-REACT-03]** categorized reaction picker panel.
 - **[PR-REACT-04]** **View Toggle**: Grid View vs List View.
 - **[PR-REACT-05]** **Search**: Filter reactions by name/label.
-- **[PR-REACT-06]** **Reaction Picker Tooltips**: Viewport-aware tooltips for icons within the reaction picker panel; native `title` tooltips for reaction chips in post/comment headers.
+- **[PR-REACT-06]** **Reaction Tooltips**: Viewport-aware, rich tooltips for all reaction icons. Tooltips for reaction chips in post/comment headers MUST show:
+    - Reaction label and icon.
+    - Reaction description (if available).
+    - List of users who reacted (usernames).
+    - Attached quotes for inline reactions.
 - **[PR-REACT-07]** **Inline Reactions**: Select text to react with a quote.
 - **[PR-REACT-08]** **Display**: Reactions shown as chips in header with net scoring.
 - **[PR-REACT-09]** **Single Reaction Control**: Each post/comment metadata row MUST render exactly one reactions container and one add-reaction button; rerenders (including vote updates) MUST replace reaction contents in-place without duplicating controls.

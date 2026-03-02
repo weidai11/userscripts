@@ -2,10 +2,18 @@
  * Shared action components (Votes, Reactions)
  */
 
-import { escapeHtml } from '../../utils/rendering';
+import { escapeHtml, readQuoteText } from '../../utils/rendering';
 import { getReactions, DEFAULT_FILTER } from '../../utils/reactions';
 import { isEAForumHost } from '../../utils/forum';
-import type { NamesAttachedReactionsScore, CurrentUserExtendedVote } from '../../../../shared/graphql/queries';
+import type { NamesAttachedReactionsScore, CurrentUserExtendedVote, ReactionUser } from '../../../../shared/graphql/queries';
+
+const formatQuotesForTooltip = (quotes: unknown): string => {
+    if (!Array.isArray(quotes)) return '';
+    const normalized = quotes
+        .map(readQuoteText)
+        .filter((q): q is string => !!q);
+    return normalized.map(q => `"${q}"`).join('; ');
+};
 
 /**
  * Render vote buttons HTML
@@ -20,7 +28,8 @@ export function renderVoteButtons(
     agreementVoteCount: number = 0,
     showAgreement: boolean = true,
     showButtons: boolean = true,
-    reactionsHtml: string = ''
+    reactionsHtml: string = '',
+    extendedScore: NamesAttachedReactionsScore | null = null
 ): string {
     const isUpvoted = currentKarmaVote === 'smallUpvote' || currentKarmaVote === 'bigUpvote' || currentKarmaVote === 1;
     const isDownvoted = currentKarmaVote === 'smallDownvote' || currentKarmaVote === 'bigDownvote' || currentKarmaVote === -1;
@@ -30,6 +39,22 @@ export function renderVoteButtons(
     const isAgreed = agreeVote === 'smallUpvote' || agreeVote === 'bigUpvote' || agreeVote === 'agree';
     const isDisagreed = agreeVote === 'smallDownvote' || agreeVote === 'bigDownvote' || agreeVote === 'disagree';
 
+    // Tooltip data for agreement
+    let agreementUsers = '';
+    if (extendedScore?.reacts) {
+        const agreeList = extendedScore.reacts['agree'] || [];
+        const disagreeList = extendedScore.reacts['disagree'] || [];
+        
+        const formatUser = (u: ReactionUser) => {
+            const name = u.displayName || u.userName || u.username || u.userId;
+            const quotesStr = formatQuotesForTooltip(u.quotes);
+            const type = u.reactType === 'disagreed' || u.react === 'disagree' ? ' [Disagree]' : ' [Agree]';
+            return name + type + (quotesStr ? ` (${quotesStr})` : '');
+        };
+
+        agreementUsers = [...agreeList, ...disagreeList].map(formatUser).join('\n');
+    }
+
     const agreementHtml = showAgreement ? `
     <span class="pr-vote-controls">
       ${showButtons ? `
@@ -38,7 +63,10 @@ export function renderVoteButtons(
             data-id="${itemId}"
             title="Disagree">✗</span>
       ` : ''}
-      <span class="pr-agreement-score" title="Agreement votes: ${agreementVoteCount}">${agreementScore}</span>
+      <span class="pr-agreement-score pr-tooltip-target" 
+            data-tooltip-label="Agreement Score: ${agreementScore}"
+            data-tooltip-description="Net agreement from ${agreementVoteCount} votes."
+            ${agreementUsers ? `data-tooltip-users="${escapeHtml(agreementUsers)}"` : ''}>${agreementScore}</span>
       ${showButtons ? `
       <span class="pr-vote-btn ${isAgreed ? 'agree-active' : ''} ${agreeVote === 'bigUpvote' ? 'strong-vote' : ''}" 
             data-action="agree" 
@@ -55,7 +83,9 @@ export function renderVoteButtons(
             data-id="${itemId}"
             title="Downvote">▼</span>
       ` : ''}
-      <span class="pr-karma-score" title="Total votes: ${voteCount}">${karmaScore}</span>
+      <span class="pr-karma-score pr-tooltip-target" 
+            data-tooltip-label="Karma: ${karmaScore}"
+            data-tooltip-description="Total votes: ${voteCount}">${karmaScore}</span>
       ${showButtons ? `
       <span class="pr-vote-btn ${isUpvoted ? 'active-up' : ''} ${currentKarmaVote === 'bigUpvote' ? 'strong-vote' : ''}" 
             data-action="karma-up" 
@@ -136,7 +166,17 @@ export const renderReactions = (
         padding: ${padding}px;
       `;
 
-            const title = `${reaction.label}${reaction.description ? '\\n' + reaction.description : ''}`;
+            const labelAttr = `data-tooltip-label="${escapeHtml(reaction.label)}"`;
+            const descAttr = `data-tooltip-description="${escapeHtml(reaction.description || '')}"`;
+            
+            // Format users and quotes for tooltip
+            const reactionEntries = (reacts[reaction.name] || []) as ReactionUser[];
+            const userList = reactionEntries.map(u => {
+                const name = u.displayName || u.userName || u.username || u.userId;
+                const quotesStr = formatQuotesForTooltip(u.quotes);
+                return name + (quotesStr ? ` (${quotesStr})` : '');
+            }).join('\n');
+            const usersAttr = userList ? `data-tooltip-users="${escapeHtml(userList)}"` : '';
 
             const countText = count > 0 || isAlwaysVisible ? String(count) : '';
 
@@ -145,7 +185,7 @@ export const renderReactions = (
               data-action="reaction-vote" 
               data-id="${itemId}" 
               data-reaction-name="${reaction.name}"
-              title="${escapeHtml(title)}">
+              ${labelAttr} ${descAttr} ${usersAttr}>
           <span class="pr-reaction-icon" style="overflow:visible">
              <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
           </span>
@@ -164,3 +204,4 @@ export const renderReactions = (
     html += '</span>';
     return html;
 };
+

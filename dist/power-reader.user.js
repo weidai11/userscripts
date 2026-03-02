@@ -4582,12 +4582,29 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       reactionsCache = isEA ? EA_FORUM_BOOTSTRAP_REACTIONS : BOOTSTRAP_REACTIONS;
     }
   }
-  function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true, reactionsHtml = "") {
+  const formatQuotesForTooltip = (quotes) => {
+    if (!Array.isArray(quotes)) return "";
+    const normalized = quotes.map(readQuoteText).filter((q) => !!q);
+    return normalized.map((q) => `"${q}"`).join("; ");
+  };
+  function renderVoteButtons(itemId, karmaScore, currentKarmaVote, currentAgreement, agreementScore = 0, voteCount = 0, agreementVoteCount = 0, showAgreement = true, showButtons = true, reactionsHtml = "", extendedScore = null) {
     const isUpvoted = currentKarmaVote === "smallUpvote" || currentKarmaVote === "bigUpvote" || currentKarmaVote === 1;
     const isDownvoted = currentKarmaVote === "smallDownvote" || currentKarmaVote === "bigDownvote" || currentKarmaVote === -1;
     const agreeVote = currentAgreement?.agreement;
     const isAgreed = agreeVote === "smallUpvote" || agreeVote === "bigUpvote" || agreeVote === "agree";
     const isDisagreed = agreeVote === "smallDownvote" || agreeVote === "bigDownvote" || agreeVote === "disagree";
+    let agreementUsers = "";
+    if (extendedScore?.reacts) {
+      const agreeList = extendedScore.reacts["agree"] || [];
+      const disagreeList = extendedScore.reacts["disagree"] || [];
+      const formatUser = (u) => {
+        const name = u.displayName || u.userName || u.username || u.userId;
+        const quotesStr = formatQuotesForTooltip(u.quotes);
+        const type = u.reactType === "disagreed" || u.react === "disagree" ? " [Disagree]" : " [Agree]";
+        return name + type + (quotesStr ? ` (${quotesStr})` : "");
+      };
+      agreementUsers = [...agreeList, ...disagreeList].map(formatUser).join("\n");
+    }
     const agreementHtml = showAgreement ? `
     <span class="pr-vote-controls">
       ${showButtons ? `
@@ -4596,7 +4613,10 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
             data-id="${itemId}"
             title="Disagree">✗</span>
       ` : ""}
-      <span class="pr-agreement-score" title="Agreement votes: ${agreementVoteCount}">${agreementScore}</span>
+      <span class="pr-agreement-score pr-tooltip-target" 
+            data-tooltip-label="Agreement Score: ${agreementScore}"
+            data-tooltip-description="Net agreement from ${agreementVoteCount} votes."
+            ${agreementUsers ? `data-tooltip-users="${escapeHtml(agreementUsers)}"` : ""}>${agreementScore}</span>
       ${showButtons ? `
       <span class="pr-vote-btn ${isAgreed ? "agree-active" : ""} ${agreeVote === "bigUpvote" ? "strong-vote" : ""}" 
             data-action="agree" 
@@ -4612,7 +4632,9 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
             data-id="${itemId}"
             title="Downvote">▼</span>
       ` : ""}
-      <span class="pr-karma-score" title="Total votes: ${voteCount}">${karmaScore}</span>
+      <span class="pr-karma-score pr-tooltip-target" 
+            data-tooltip-label="Karma: ${karmaScore}"
+            data-tooltip-description="Total votes: ${voteCount}">${karmaScore}</span>
       ${showButtons ? `
       <span class="pr-vote-btn ${isUpvoted ? "active-up" : ""} ${currentKarmaVote === "bigUpvote" ? "strong-vote" : ""}" 
             data-action="karma-up" 
@@ -4672,14 +4694,22 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         transform: scale(${scale}) translate(${tx}px, ${ty}px);
         padding: ${padding}px;
       `;
-        const title = `${reaction.label}${reaction.description ? "\\n" + reaction.description : ""}`;
+        const labelAttr = `data-tooltip-label="${escapeHtml(reaction.label)}"`;
+        const descAttr = `data-tooltip-description="${escapeHtml(reaction.description || "")}"`;
+        const reactionEntries = reacts[reaction.name] || [];
+        const userList = reactionEntries.map((u) => {
+          const name = u.displayName || u.userName || u.username || u.userId;
+          const quotesStr = formatQuotesForTooltip(u.quotes);
+          return name + (quotesStr ? ` (${quotesStr})` : "");
+        }).join("\n");
+        const usersAttr = userList ? `data-tooltip-users="${escapeHtml(userList)}"` : "";
         const countText = count > 0 || isAlwaysVisible ? String(count) : "";
         html += `
         <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
               data-action="reaction-vote" 
               data-id="${itemId}" 
               data-reaction-name="${reaction.name}"
-              title="${escapeHtml(title)}">
+              ${labelAttr} ${descAttr} ${usersAttr}>
           <span class="pr-reaction-icon" style="overflow:visible">
              <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
           </span>
@@ -4754,6 +4784,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const afExtendedScore = item.afExtendedScore;
     const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
     const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
+    const voteCount = item.extendedScore?.approvalVoteCount ?? item.voteCount ?? 0;
     const reactionsHtml = renderReactions(
       item._id,
       item.extendedScore,
@@ -4765,11 +4796,12 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       item.currentUserVote ?? null,
       item.currentUserExtendedVote ?? null,
       agreementScore,
-      isPost2 ? item.voteCount || 0 : 0,
+      voteCount,
       agreementVoteCount,
       showAgreement,
       isFullPost,
-reactionsHtml
+reactionsHtml,
+      item.extendedScore
     );
     const authorPrefs = getAuthorPreferences();
     let authorPref = authorPrefs[authorHandle];
@@ -4913,6 +4945,17 @@ reactionsHtml
   const escapeHtml = (unsafe) => {
     return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   };
+  const readQuoteText = (quoteEntry) => {
+    if (typeof quoteEntry === "string") {
+      const trimmed2 = quoteEntry.trim();
+      return trimmed2.length > 0 ? trimmed2 : null;
+    }
+    if (!quoteEntry || typeof quoteEntry !== "object") return null;
+    const candidate = quoteEntry.quote;
+    if (typeof candidate !== "string") return null;
+    const trimmed = candidate.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
   const calculatePostHeaderStyle = (post) => {
     if (!post.htmlBody) return "";
     const authorName = post.user?.username || "Unknown Author";
@@ -4978,8 +5021,9 @@ reactionsHtml
       users.forEach((u) => {
         if (u.quotes) {
           u.quotes.forEach((q) => {
-            if (q.quote && q.quote.trim().length > 0) {
-              quotesToHighlight.push(q.quote);
+            const quoteText = readQuoteText(q);
+            if (quoteText) {
+              quotesToHighlight.push(quoteText);
             }
           });
         }
@@ -7410,7 +7454,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   }
   function buildMergedState(remoteEnvelope) {
     const localRead = getReadState();
-    const localLoadFrom = normalizeLoadFromValue(getLoadFrom());
+    const localLoadFromRaw = getLoadFrom();
+    const localLoadFrom = normalizeLoadFromValue(localLoadFromRaw);
     const localAuthorPrefs = getAuthorPreferences();
     const mergedRead = mergeReadState(
       localRead,
@@ -7424,17 +7469,22 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     if (mergedRead.clearEpoch > runtime.meta.readClearEpoch && mergedRead.clearEpoch > remoteEnvelope.fields.read.clearEpoch) {
       setDirty("read");
     }
-    const mergedLoadClearEpoch = Math.max(runtime.meta.loadFrom.clearEpoch, remoteEnvelope.fields.loadFrom.clearEpoch);
+    let mergedLoadClearEpoch = Math.max(runtime.meta.loadFrom.clearEpoch, remoteEnvelope.fields.loadFrom.clearEpoch);
     const canUseLocalLoad = runtime.meta.loadFrom.clearEpoch === mergedLoadClearEpoch;
     const canUseRemoteLoad = remoteEnvelope.fields.loadFrom.clearEpoch === mergedLoadClearEpoch;
     const remoteLoadValue = canUseRemoteLoad ? remoteEnvelope.fields.loadFrom.value : void 0;
-    const loadFromValue = resolveLoadFrom(
+    let loadFromValue = resolveLoadFrom(
       canUseLocalLoad ? localLoadFrom : void 0,
       remoteLoadValue
     );
     let loadFromVersion = Math.max(runtime.meta.loadFrom.version, remoteEnvelope.fields.loadFrom.version);
     const normalizedRemoteLoad = normalizeLoadFromValue(remoteEnvelope.fields.loadFrom.value);
-    if (runtime.meta.dirty.loadFrom && loadFromValue !== normalizedRemoteLoad) {
+    const explicitLocalLoadClear = runtime.meta.dirty.loadFrom && canUseLocalLoad && localLoadFromRaw === "";
+    if (explicitLocalLoadClear) {
+      mergedLoadClearEpoch = incrementSyncCounter(mergedLoadClearEpoch);
+      loadFromValue = void 0;
+    }
+    if (runtime.meta.dirty.loadFrom && (explicitLocalLoadClear || loadFromValue !== normalizedRemoteLoad)) {
       loadFromVersion = incrementSyncCounter(loadFromVersion);
     }
     const mergedAuthor = mergeAuthorPrefs(
@@ -8899,12 +8949,22 @@ currentUserSnapshot: void 0
     if (!doc || targets.length === 0) return;
     targets.forEach((target) => {
       const scoreEl = target.querySelector(".pr-karma-score");
-      if (scoreEl) {
+      if (scoreEl && doc.baseScore !== void 0) {
         scoreEl.textContent = String(doc.baseScore);
+        scoreEl.setAttribute("data-tooltip-label", `Karma: ${doc.baseScore}`);
+        if (doc.voteCount !== void 0) {
+          scoreEl.setAttribute("data-tooltip-description", `Total votes: ${doc.voteCount}`);
+        }
       }
       const agreeScoreEl = target.querySelector(".pr-agreement-score");
-      if (agreeScoreEl && doc.afExtendedScore?.agreement !== void 0) {
-        agreeScoreEl.textContent = String(doc.afExtendedScore.agreement);
+      const agreement = doc.extendedScore?.agreement ?? doc.afExtendedScore?.agreement;
+      if (agreeScoreEl && agreement !== void 0) {
+        agreeScoreEl.textContent = String(agreement);
+        agreeScoreEl.setAttribute("data-tooltip-label", `Agreement Score: ${agreement}`);
+        const agreeVotes = doc.extendedScore?.agreementVoteCount;
+        if (agreeVotes !== void 0) {
+          agreeScoreEl.setAttribute("data-tooltip-description", `Net agreement from ${agreeVotes} votes.`);
+        }
       }
       const upBtn = target.querySelector('[data-action="karma-up"]');
       const downBtn = target.querySelector('[data-action="karma-down"]');
@@ -11752,6 +11812,76 @@ getPromptPrefix: getAIStudioPrefix,
       this.state.postById.set(post._id, post);
     }
   }
+  let tooltipElement = null;
+  const initReactionTooltips = () => {
+    document.addEventListener("mouseover", (e) => {
+      const target = e.target.closest(".pr-reaction-chip, .pr-tooltip-target");
+      if (target) {
+        showTooltip(target);
+      }
+    });
+    document.addEventListener("mouseout", (e) => {
+      const target = e.target.closest(".pr-reaction-chip, .pr-tooltip-target");
+      if (target) {
+        hideTooltip();
+      }
+    });
+  };
+  const showTooltip = (target) => {
+    if (!tooltipElement) {
+      tooltipElement = document.createElement("div");
+      tooltipElement.className = "pr-tooltip-global";
+      document.body.appendChild(tooltipElement);
+    }
+    const label = target.getAttribute("data-tooltip-label") || "";
+    const description = target.getAttribute("data-tooltip-description") || "";
+    const users = target.getAttribute("data-tooltip-users") || "";
+    if (!label && !description && !users) return;
+    const format = (text) => escapeHtml(text).replace(/\n/g, "<br/>").replace(/\\n/g, "<br/>");
+    let content = "";
+    if (label) {
+      content += `<strong>${format(label)}</strong>`;
+    }
+    if (description) {
+      content += `<div style="margin-top: ${label ? "4px" : "0"}; color: #ccc;">${format(description)}</div>`;
+    }
+    if (users) {
+      const userList = users.split("\n").filter(Boolean).map((u) => `<div>• ${format(u)}</div>`).join("");
+      if (userList) {
+        content += `<div style="margin-top: 8px; border-top: 1px solid #444; padding-top: 4px; font-size: 0.95em;">${userList}</div>`;
+      }
+    }
+    if (!content) return;
+    tooltipElement.innerHTML = content;
+    tooltipElement.style.visibility = "hidden";
+    tooltipElement.style.display = "block";
+    tooltipElement.style.opacity = "0";
+    const rect = target.getBoundingClientRect();
+    const tooltipHeight = tooltipElement.offsetHeight;
+    const tooltipWidth = tooltipElement.offsetWidth;
+    let top = rect.top - tooltipHeight - 8;
+    let left = rect.left + rect.width / 2 - tooltipWidth / 2;
+    const margin = 10;
+    const viewportWidth = window.innerWidth;
+    if (left < margin) {
+      left = margin;
+    } else if (left + tooltipWidth > viewportWidth - margin) {
+      left = viewportWidth - tooltipWidth - margin;
+    }
+    if (top < margin) {
+      top = rect.bottom + 8;
+    }
+    tooltipElement.style.top = `${top}px`;
+    tooltipElement.style.left = `${left}px`;
+    tooltipElement.style.visibility = "visible";
+    tooltipElement.style.opacity = "1";
+  };
+  const hideTooltip = () => {
+    if (tooltipElement) {
+      tooltipElement.style.visibility = "hidden";
+      tooltipElement.style.opacity = "0";
+    }
+  };
   const getUsernameFromUrl = () => {
     const path = window.location.pathname;
     if (!path.startsWith("/users/")) return null;
@@ -16647,6 +16777,7 @@ sortCanonicalItems() {
         setupAIStudioKeyboard(state2);
         initArenaMaxListener(state2);
         setupArenaMaxKeyboard(state2);
+        initReactionTooltips();
         attachEventListeners(state2);
         root.dataset.listenersAttached = "true";
       }
