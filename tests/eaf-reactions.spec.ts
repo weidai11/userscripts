@@ -4,6 +4,37 @@ import { initPowerReader } from './helpers/setup';
 test.describe('EAF-style Reactions', () => {
   const EAF_URL = 'https://forum.effectivealtruism.org/reader';
 
+  test('[PR-VOTE-03][PR-VOTE-06] renders agree/disagree reaction chips for posts on EAF host', async ({ page }) => {
+    await initPowerReader(page, {
+      testMode: true,
+      posts: [
+        {
+          _id: 'p1',
+          title: 'EAF Post',
+          votingSystem: 'eaEmojis',
+          extendedScore: {
+            agree: 4,
+            disagree: 1,
+            reacts: {}
+          },
+          user: { _id: 'u1', username: 'Author1' }
+        }
+      ],
+      comments: []
+    }, EAF_URL);
+
+    const agreeChip = page.locator('.pr-post[data-id="p1"] .pr-reaction-chip[data-reaction-name="agree"]');
+    const disagreeChip = page.locator('.pr-post[data-id="p1"] .pr-reaction-chip[data-reaction-name="disagree"]');
+
+    await expect(agreeChip).toBeVisible();
+    await expect(agreeChip.locator('.pr-reaction-count')).toHaveText('4');
+
+    await expect(disagreeChip).toBeVisible();
+    await expect(disagreeChip.locator('.pr-reaction-count')).toHaveText('1');
+
+    await expect(page.locator('.pr-post[data-id="p1"] .pr-agreement-score')).toHaveCount(0);
+  });
+
   test('renders top-level agree/disagree counts from extendedScore on EAF host', async ({ page }) => {
     await initPowerReader(page, {
       testMode: true,

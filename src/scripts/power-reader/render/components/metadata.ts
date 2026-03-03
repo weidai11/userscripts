@@ -109,9 +109,9 @@ export const renderMetadata = (
   const isEAHost = isEAForumLikeHost();
   const isEASystem = item.votingSystem === 'eaEmojis';
 
-  // EA Forum uses reactions for Agree/Disagree, while LessWrong uses a separate agreement axis.
-  // We disable the separate agreement axis for EA Forum content or when on the EAF host to avoid redundancy.
-  const showAgreement = !isEAHost && !isEASystem;
+  // Post-level agreement axis is not supported on LW. EAF uses reaction chips instead.
+  // Keep the separate agreement axis only for comments on LW-style voting systems.
+  const showAgreement = !isPost && !isEAHost && !isEASystem;
 
   const afExtendedScore = item.afExtendedScore as UserWithOptionalAfAgreement | null | undefined;
   const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;

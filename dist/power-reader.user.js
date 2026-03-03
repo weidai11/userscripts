@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.705
+// @version    1.2.706
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -841,7 +841,6 @@ reset: () => {
     padding: 15px 20px;
     background: #fff;
     border-bottom: 1px solid #eee;
-    font-family: serif;
     line-height: 1.3;
     overflow-wrap: break-word;
     position: relative;
@@ -1478,8 +1477,7 @@ reset: () => {
   }
 
   .pr-preview-overlay .pr-preview-content {
-    line-height: 1.6;
-    font-family: serif;
+    line-height: 1.3;
   }
 
   .pr-preview-overlay .pr-preview-content img {
@@ -1774,7 +1772,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.705"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.706"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -4533,7 +4531,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     const authorId = item.user?._id || "";
     const isEAHost = isEAForumLikeHost();
     const isEASystem = item.votingSystem === "eaEmojis";
-    const showAgreement = !isEAHost && !isEASystem;
+    const showAgreement = !isPost2 && !isEAHost && !isEASystem;
     const afExtendedScore = item.afExtendedScore;
     const agreementScore = item.extendedScore?.agreement ?? afExtendedScore?.agreement ?? 0;
     const agreementVoteCount = item.extendedScore?.agreementVoteCount ?? 0;
@@ -8636,7 +8634,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.705"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -8811,7 +8809,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.705"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -15220,7 +15218,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.705"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17277,7 +17275,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.705"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

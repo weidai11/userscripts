@@ -168,7 +168,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 **[PR-POST-01]** **Post Header Layout**:
 - **Author Preference Arrows**: `â†“` / `â†‘` for quick liking/disliking of authors.
 - **Metadata**: Author name (clickable link to profile), timestamp (link to original post).
-- **Vote Controls**: Karma and agreement vote buttons (posts and comments).
+- **Vote Controls**: Karma vote buttons for posts and comments. Agreement axis buttons/scores are comment-only; post-level agreement is represented via EAF reaction chips.
 - **Action Buttons**: `[e]` (expand), `[a]` (load all), `[c]` (scroll to comments), `[n]` (next post).
 - **Structural Toggles**: `[âˆ’]` (collapse), `[+]` (expand).
 
@@ -230,7 +230,7 @@ Items are organized post-centrically:
 **Post Display:**
 - **[PR-POST-02]** **Unified Metadata**: Posts now use the same one-line metadata layout as comments (Author, Score, Reactions, Timestamp).
 - **[PR-POST-03]** **Header-Only Definition**: Header-only posts are created when a comment carries a post reference **outside the current post load window**; they exist only to anchor comments.
-- **[PR-POST-06]** **Conditional Controls**: Voting buttons are hidden for header-only posts or collapsed views to prevent voting before content is loaded, but the **karma score and agreement score MUST remain visible**.
+- **[PR-POST-06]** **Conditional Controls**: Voting buttons are hidden for header-only posts or collapsed views to prevent voting before content is loaded. The **karma score MUST remain visible**; agreement score visibility applies only where an agreement axis exists (comment metadata).
 - **[PR-POST-07]** **Inline Loading**: Clicking the title of a header-only post (`data-action="load-post"`) fetches the content via GraphQL and replaces the header with a full post render inside the current feed.
 - **[PR-POST-04]** **Truncation**: Posts taller than `50vh` are truncated with a "Read More" button and gradient overlay.
 - **[PR-POST-05]** **Expansion**: "Read More" expands the post to full height in-place.
@@ -586,13 +586,17 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 
 ### 18. Voting Buttons
 
-- **[PR-VOTE-01]** Two-axis voting (karma + agreement) for posts and comments.
+- **[PR-VOTE-01]** Karma voting is supported for posts and comments. Separate agreement-axis voting is supported for comments (LW-style/two-axis systems), not posts.
 - **[PR-VOTE-02]** **Karma voting**: `[â–²]` `[â–¼]` buttons.
-- **[PR-VOTE-03]** **Agreement voting**: `[âœ“]` `[âœ—]` buttons. (Available for Posts on EA Forum only; available for Comments on all sites).
+- **[PR-VOTE-03]** **Agreement voting/display split by forum**:
+    - **LW posts**: agreement controls and agreement score display MUST NOT render.
+    - **LW comments**: agreement axis `[âœ“]` `[âœ—]` buttons and agreement score are supported.
+    - **EAF posts/comments**: agreement is supported via `agree`/`disagree` reaction chips (no separate agreement axis buttons/score).
+    - **Rationale**: Native EA Forum presents Agree/Disagree as separate reactions rather than an LW-style agreement axis, so Power Reader mirrors that model on EAF.
 - **[PR-VOTE-04]** If logged in: Execute mutation, update UI optimistically.
 - [PR-VOTE-05] If not logged in: Open login page in new tab.
-- [PR-VOTE-06] On EA Forum host, `agree` and `disagree` reaction chips must remain visible even when their counts are `0`.
-- [PR-VOTE-07] **Rich Tooltips**: Karma and agreement scores show rich tooltips on hover, including:
+- [PR-VOTE-06] On EA Forum host, `agree` and `disagree` reaction chips must remain visible for posts and comments even when their counts are `0`.
+- [PR-VOTE-07] **Rich Tooltips**: Karma scores (and comment agreement scores where the agreement axis is rendered) show rich tooltips on hover, including:
     - Score label and value.
     - Description (e.g., "Total votes" or "Net agreement").
     - List of users who voted (for agreement score, including "Agree"/"Disagree" labels and quotes).

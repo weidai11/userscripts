@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.706] - 2026-03-03
+
+### Changed
+- **Agreement rendering parity clarified ([PR-VOTE-01], [PR-VOTE-03], [PR-VOTE-06], [PR-POST-06])**: LW posts no longer render agreement controls/scores; LW comments keep the LW-style agreement axis; EAF uses `agree`/`disagree` reaction chips (including post headers).
+- **Spec and README clarification**: Documented the rationale that EA Forum models Agree/Disagree as separate reactions, not an LW-style agreement axis.
+
+### Added
+- **Voting coverage for forum-specific post behavior**:
+  - Added a test asserting LW post headers do not render agreement controls/scores.
+  - Added a test asserting EAF post headers render `agree`/`disagree` reaction chips.
+
 ## [1.2.704] - 2026-03-03
 
 ### Changed

@@ -125,6 +125,38 @@ test.describe('Power Reader Voting UI', () => {
         await expect(neutralComment.locator('.pr-karma-score')).toContainText('1');
     });
 
+    test('[PR-VOTE-03] LW posts do not render agreement controls or agreement score', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            posts: [
+                {
+                    _id: 'p1',
+                    title: 'LW Post Without Agreement Axis',
+                    baseScore: 42,
+                    voteCount: 7,
+                    votingSystem: 'twoAxis',
+                    extendedScore: {
+                        agreement: 9,
+                        agreementVoteCount: 4,
+                        approvalVoteCount: 7,
+                        reacts: {}
+                    },
+                    currentUserExtendedVote: { agreement: 'smallUpvote' },
+                    user: { _id: 'u1', slug: 'author-1', username: 'Author1', karma: 100 }
+                }
+            ],
+            comments: []
+        });
+
+        const post = page.locator('.pr-post[data-id="p1"]');
+        await expect(post).toBeVisible();
+
+        await expect(post.locator('.pr-karma-score')).toHaveText('42');
+        await expect(post.locator('[data-action="agree"]')).toHaveCount(0);
+        await expect(post.locator('[data-action="disagree"]')).toHaveCount(0);
+        await expect(post.locator('.pr-agreement-score')).toHaveCount(0);
+    });
+
     test('[PR-VOTE-04] clicking vote button updates UI after successful mutation', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,

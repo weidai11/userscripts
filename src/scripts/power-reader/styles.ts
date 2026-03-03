@@ -352,7 +352,6 @@ export const STYLES = `
     padding: 15px 20px;
     background: #fff;
     border-bottom: 1px solid #eee;
-    font-family: serif;
     line-height: 1.3;
     overflow-wrap: break-word;
     position: relative;
@@ -989,8 +988,7 @@ export const STYLES = `
   }
 
   .pr-preview-overlay .pr-preview-content {
-    line-height: 1.6;
-    font-family: serif;
+    line-height: 1.3;
   }
 
   .pr-preview-overlay .pr-preview-content img {
