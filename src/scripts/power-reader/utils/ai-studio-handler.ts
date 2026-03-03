@@ -1,98 +1,51 @@
 import { Logger } from './logger';
-import { sanitizeHtml } from './sanitize';
+import { consumeAIPayloadKey, getPayloadStorageKeyFromHash } from './aiPayloadStorage';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
-declare const GM_setValue: (key: string, value: any) => void;
 declare const GM_deleteValue: (key: string) => void;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const AI_STUDIO_FALLBACK_PAYLOAD_KEY = 'ai_studio_prompt_payload';
 
 /**
  * Main handler for AI Studio automation.
  */
 export async function handleAIStudio() {
-    const payload = GM_getValue('ai_studio_prompt_payload');
+    const payloadStorageKey = getPayloadStorageKeyFromHash();
+    const storageKey = payloadStorageKey || AI_STUDIO_FALLBACK_PAYLOAD_KEY;
+    const payload = GM_getValue(storageKey);
     if (!payload) {
-        Logger.debug('AI Studio: No payload found in GM storage, skipping automation.');
+        if (payloadStorageKey) {
+            Logger.warn(`AI Studio: Missing payload for key "${payloadStorageKey}".`);
+        }
         return;
     }
 
     Logger.info('AI Studio: Automation triggered.');
 
     try {
-        // 1. Initial selection: Flash 3 for fast response
-        GM_setValue('ai_studio_status', 'Selecting Flash 3...');
-        await selectModel('gemini-3-flash-preview', 'Flash 3');
-
-        // 2. Disable Grounding (Search) but enable URL context
+        // 1. Disable Grounding (Search) but enable URL context
         await automateDisableSearch();
         await automateEnableUrlContext();
 
-        // 3. Inject Prompt
-        GM_setValue('ai_studio_status', 'Injecting metadata thread...');
-        const requestId = GM_getValue('ai_studio_request_id');
+        // 2. Inject Prompt
         await injectPrompt(payload);
 
-        // 4. Auto-Run
+        // 3. Auto-Run
         await sleep(1000);
-        GM_setValue('ai_studio_status', 'Submitting prompt...');
         await automateRun();
 
-        // 5. Wait for Response to complete
-        const responseText = await waitForResponse();
-
-        // 6. Switch to 3.1 Pro for subsequent user chat
-        GM_setValue('ai_studio_status', 'Switching to 3.1 Pro...');
-        await selectModel('gemini-3.1-pro-preview', '3.1 Pro Preview');
-
-        // 7. Return Payload
-        GM_setValue('ai_studio_status', 'Response received!');
-        GM_setValue('ai_studio_response_payload', {
-            text: responseText,
-            requestId: requestId,
-            includeDescendants: GM_getValue('ai_studio_include_descendants', false),
-            timestamp: Date.now()
-        });
-
-        GM_deleteValue('ai_studio_prompt_payload');
-        GM_deleteValue('ai_studio_request_id');
-        GM_deleteValue('ai_studio_include_descendants');
-        GM_deleteValue('ai_studio_status');
-
-        Logger.info('AI Studio: Response sent. Tab will close in 5m if no interaction.');
-
-        let hasInteracted = false;
-        const markInteracted = () => {
-            if (!hasInteracted) {
-                hasInteracted = true;
-                Logger.info('AI Studio: User returned to tab. Auto-close canceled.');
-            }
-        };
-
-        // Activity detection only starts after the user has switched away (blurred) the tab.
-        // This prevents mouse/keyboard activity during the active automation phase 
-        // from accidentally keeping the tab open.
-        window.addEventListener('blur', () => {
-            window.addEventListener('mousedown', markInteracted, { once: true, capture: true });
-            window.addEventListener('keydown', markInteracted, { once: true, capture: true });
-            window.addEventListener('mousemove', markInteracted, { once: true, capture: true });
-        }, { once: true });
-
-        const checkClose = () => {
-            // Only close if no return interaction AND it's not currently the active tab
-            if (!hasInteracted && document.visibilityState !== 'visible') {
-                Logger.info('AI Studio: Idle and backgrounded. Closing tab.');
-                window.close();
-            } else if (!hasInteracted) {
-                Logger.info('AI Studio: 5m reached but tab is currently visible. Postponing close.');
-                setTimeout(checkClose, 60 * 1000);
-            }
-        };
-        setTimeout(checkClose, 5 * 60 * 1000);
+        Logger.info('AI Studio: Prompt submitted. Continue in this tab.');
 
     } catch (error) {
         Logger.error('AI Studio: Automation failed', error);
-        GM_setValue('ai_studio_status', `Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+        if (typeof GM_deleteValue === 'function') {
+            GM_deleteValue(storageKey);
+        }
+        if (payloadStorageKey) {
+            consumeAIPayloadKey(payloadStorageKey);
+        }
     }
 }
 
@@ -127,23 +80,9 @@ async function waitForElement(selector: string, timeout: number = 30000): Promis
     });
 }
 
-async function selectModel(idPart: string, namePart: string) {
-    const modelCard = await waitForElement('button.model-selector-card');
-    const currentModel = modelCard.innerText;
-    const loweredModel = currentModel.toLowerCase();
-    const loweredName = namePart.toLowerCase();
-    const isFlash3 = namePart === 'Flash 3' && (loweredModel.includes('flash 3') || loweredModel.includes('gemini 3 flash'));
-    if (loweredModel.includes(loweredName) || isFlash3) {
-        return;
-    }
-    modelCard.click();
-    const targetModelBtn = await waitForElement(`button[id*="${idPart}"]`);
-    targetModelBtn.click();
-    await sleep(500);
-}
-
 async function automateDisableSearch() {
-    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
+    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']").catch(() => null);
+    if (!searchToggle) return;
     if (searchToggle.classList.contains('mdc-switch--checked')) {
         searchToggle.click();
     }
@@ -170,8 +109,14 @@ async function automateEnableUrlContext() {
 
 async function injectPrompt(payload: string) {
     const textarea = await waitForElement("textarea[aria-label='Enter a prompt']") as HTMLTextAreaElement;
-    textarea.value = payload;
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+    if (nativeSetter) {
+        nativeSetter.call(textarea, payload);
+    } else {
+        textarea.value = payload;
+    }
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
     textarea.focus();
     textarea.setSelectionRange(0, 0);
 }
@@ -180,65 +125,4 @@ async function automateRun() {
     const runBtn = await waitForElement('ms-run-button button');
     runBtn.focus();
     runBtn.click();
-}
-
-async function waitForResponse(timeoutMs: number = 180000): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const startTime = Date.now();
-        let generationStarted = false;
-        let hasRetried = false;
-
-        const checkCompletion = () => {
-            const elapsed = Date.now() - startTime;
-            if (elapsed > timeoutMs) return reject(new Error('Timeout'));
-
-            const stopBtn = document.querySelector('button[aria-label="Stop generation"], .ms-button-spinner, mat-icon[data-icon-name="stop"], mat-icon[data-icon-name="progress_activity"]');
-            const runBtn = document.querySelector('ms-run-button button') as HTMLElement | undefined;
-            const hasResponseNodes = document.querySelector('ms-cmark-node') !== null;
-            const hasError = document.querySelector('.model-error') !== null;
-
-            if (stopBtn || hasResponseNodes || hasError) {
-                if (!generationStarted) {
-                    generationStarted = true;
-                    GM_setValue('ai_studio_status', 'AI is thinking...');
-                }
-            }
-
-            if (generationStarted && !stopBtn && runBtn && runBtn.textContent?.includes('Run')) {
-                const turnList = document.querySelectorAll('ms-chat-turn');
-                const lastTurn = turnList[turnList.length - 1];
-                if (!lastTurn) return setTimeout(checkCompletion, 1000);
-
-                const errorEl = lastTurn.querySelector('.model-error');
-                if (errorEl) {
-                    if (!hasRetried) {
-                        const rerunBtn = document.querySelector('button[name="rerun-button"], .rerun-button') as HTMLElement;
-                        if (rerunBtn) {
-                            GM_setValue('ai_studio_status', 'Retrying...');
-                            hasRetried = true;
-                            generationStarted = false;
-                            rerunBtn.click();
-                            return setTimeout(checkCompletion, 2000);
-                        }
-                    }
-                    return resolve(`<div class="pr-ai-error">Error: ${errorEl.textContent}</div>`);
-                }
-
-                const editIcon = Array.from(lastTurn.querySelectorAll('.material-symbols-outlined'))
-                    .find(el => el.textContent?.trim() === 'edit');
-                if (!editIcon) return setTimeout(checkCompletion, 1000);
-
-                const container = lastTurn.querySelector('div.model-response-content, .message-content, .turn-content') || lastTurn;
-                const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ''));
-                const parsed = new DOMParser().parseFromString(cleanHtml, 'text/html');
-                const cleanText = (parsed.body.textContent || '').replace(/\s+/g, ' ').trim();
-
-                if (cleanText.length > 10) {
-                    return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
-                }
-            }
-            setTimeout(checkCompletion, 1000);
-        };
-        checkCompletion();
-    });
 }

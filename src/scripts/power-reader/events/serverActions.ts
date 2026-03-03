@@ -38,7 +38,7 @@ import {
     VIEWPORT_CORRECTION_EPSILON_PX
 } from '../utils/navigationConstants';
 import { withOverflowAnchorDisabled } from '../utils/viewTransition';
-import { markCommentRevealed, setJustRevealed } from '../types/uiCommentFlags';
+import { isForceVisible, markCommentRevealed, setForceVisible, setJustRevealed } from '../types/uiCommentFlags';
 import { fetchAllPostCommentsWithCache } from '../services/postDescendantsCache';
 import {
     promptLargeDescendantConfirmation,
@@ -83,6 +83,45 @@ const findHighestKnownAncestorId = (commentId: string, state: ReaderState): stri
 const waitForNextPaint = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => resolve()));
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const hasDirectCommentBody = (commentEl: HTMLElement): boolean =>
+    Array.from(commentEl.children).some(
+        (child) => child instanceof HTMLElement && child.classList.contains('pr-comment-body')
+    );
+
+const isBodyRenderedCommentNode = (commentEl: HTMLElement): boolean => {
+    if (commentEl.classList.contains('pr-comment-placeholder')) return false;
+    if (commentEl.classList.contains('pr-missing-parent')) return false;
+    if (commentEl.dataset.placeholder === '1') return false;
+    return hasDirectCommentBody(commentEl);
+};
+
+const preserveVisibleCommentsForPostRerender = (postId: string, state: ReaderState): string[] => {
+    const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`) as HTMLElement | null;
+    if (!postContainer) return [];
+
+    const temporarilyForcedCommentIds: string[] = [];
+    const commentEls = Array.from(postContainer.querySelectorAll<HTMLElement>('.pr-comment[data-id]'));
+    for (const commentEl of commentEls) {
+        if (!isBodyRenderedCommentNode(commentEl)) continue;
+        const id = commentEl.dataset.id;
+        if (!id) continue;
+        const inState = state.commentById.get(id);
+        if (!inState) continue;
+        if (isForceVisible(inState)) continue;
+        setForceVisible(inState, true);
+        temporarilyForcedCommentIds.push(id);
+    }
+    return temporarilyForcedCommentIds;
+};
+
+const restoreTemporarilyForcedComments = (commentIds: string[], state: ReaderState): void => {
+    for (const id of commentIds) {
+        const inState = state.commentById.get(id);
+        if (!inState || !isForceVisible(inState)) continue;
+        setForceVisible(inState, false);
+    }
+};
 
 const isCommentFullyVisibleForNavigation = (commentEl: HTMLElement, viewportTarget: HTMLElement): boolean => {
     if (commentEl.classList.contains('pr-missing-parent') || commentEl.dataset.placeholder === '1' || commentEl.classList.contains('pr-comment-placeholder')) {
@@ -657,17 +696,24 @@ export const handleAuthorDown = (target: HTMLElement, _state: ReaderState): void
  */
 const fetchAndRenderPost = async (
     postId: string,
-    _state: ReaderState
+    state: ReaderState
 ): Promise<Post | null> => {
-    const res = await queryGraphQL<GetPostQuery, GetPostQueryVariables>(
-        GET_POST_BY_ID, { id: postId }
-    );
-    const post = res?.post?.result as unknown as Post;
-    if (!post) return null;
+    const temporarilyForcedCommentIds = preserveVisibleCommentsForPostRerender(postId, state);
 
-    getUIHost().upsertPost(post);
-    getUIHost().rerenderPostGroup(postId);
-    return post;
+    try {
+        const res = await queryGraphQL<GetPostQuery, GetPostQueryVariables>(
+            GET_POST_BY_ID, { id: postId }
+        );
+        const post = res?.post?.result as unknown as Post;
+        if (!post) return null;
+
+        getUIHost().upsertPost(post);
+        getUIHost().rerenderPostGroup(postId);
+
+        return post;
+    } finally {
+        restoreTemporarilyForcedComments(temporarilyForcedCommentIds, state);
+    }
 };
 
 

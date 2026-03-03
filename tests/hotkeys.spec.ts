@@ -243,56 +243,46 @@ test.describe('Power Reader Hotkeys', () => {
         await expect(post).toHaveClass(/being-summarized/);
     });
 
-    test('[PR-AI-01][PR-CMTBTN-03] Pressing [g] while hovering AI box or focal item closes it', async ({ page }) => {
+    test('[PR-AI-01][PR-AI-03] Pressing [g] sends again and does not open an in-reader popup', async ({ page }) => {
         await initPowerReader(page, {
             testMode: true,
-            comments: [{ _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(), user: { username: 'U1' }, post: { title: 'T' } }]
+            comments: [{ _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(), user: { username: 'U1' }, post: { title: 'T' } }],
+            onInit: `
+                window.GM_openInTab = (url) => {
+                    window.__LAST_TAB_URL = url;
+                    window.__OPEN_COUNT = (window.__OPEN_COUNT || 0) + 1;
+                };
+            `
         });
 
-        // 1. Open AI box
         await page.locator('.pr-comment[data-id="c1"]').hover();
         await page.keyboard.press('g');
-
-        // Manually trigger response to show popup (since we didn't mock GM_addValueChangeListener perfectly for this flow)
-        await page.evaluate(() => {
-            (window as any).renderUI((window as any).getState()); // Just to ensure state is there
-            const state = (window as any).getState();
-            (window as any).manualPreview('<p>AI Summary</p>', state);
-            // Wait, manualPreview is for link previews.
-            // Let's use the actual function if exported or just create the DOM.
-            const popup = document.createElement('div');
-            popup.className = 'pr-ai-popup';
-            popup.innerHTML = '<div class="pr-ai-popup-content">Summary</div>';
-            document.body.appendChild(popup);
-            state.activeAIPopup = popup;
-        });
-
-        const popup = page.locator('.pr-ai-popup');
-        await expect(popup).toBeVisible();
-
-        // 2. Hover popup and press g
-        await popup.hover();
         await page.keyboard.press('g');
 
-        // 3. Verify closed
-        await expect(popup).not.toBeAttached();
+        await expect.poll(async () => await page.evaluate(() => (window as any).__OPEN_COUNT || 0)).toBe(2);
+        await expect(page.locator('.pr-ai-popup')).toHaveCount(0);
+        await expect.poll(async () => await page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+        await expect(page.locator('.pr-comment[data-id="c1"]')).toHaveClass(/being-summarized/);
+    });
 
-        // 4. Open again
-        await page.evaluate(() => {
-            const popup = document.createElement('div');
-            popup.className = 'pr-ai-popup';
-            document.body.appendChild(popup);
-            (window as any).getState().activeAIPopup = popup;
-            document.querySelector('.pr-comment[data-id="c1"]')?.classList.add('being-summarized');
+    test('[PR-AI-08][PR-AI-03] Pressing [m] sends again and does not open an in-reader popup', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [{ _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(), user: { username: 'U1' }, post: { title: 'T' } }],
+            onInit: `
+                window.GM_openInTab = (url) => {
+                    window.__LAST_ARENA_TAB_URL = url;
+                    window.__ARENA_OPEN_COUNT = (window.__ARENA_OPEN_COUNT || 0) + 1;
+                };
+            `
         });
 
-        await expect(popup).toBeVisible();
-
-        // 5. Hover focal item and press g
         await page.locator('.pr-comment[data-id="c1"]').hover();
-        await page.keyboard.press('g');
+        await page.keyboard.press('m');
+        await page.keyboard.press('m');
 
-        // 6. Verify closed
-        await expect(popup).not.toBeAttached();
+        await expect.poll(async () => await page.evaluate(() => (window as any).__ARENA_OPEN_COUNT || 0)).toBe(2);
+        await expect(page.locator('.pr-ai-popup')).toHaveCount(0);
+        await expect.poll(async () => await page.evaluate(() => (window as any).__LAST_ARENA_TAB_URL)).toContain('arena.ai/max');
     });
 });

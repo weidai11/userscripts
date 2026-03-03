@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.701
+// @version    1.2.703
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -22,8 +22,6 @@
 // @grant      GM_removeValueChangeListener
 // @grant      GM_setValue
 // @grant      GM_xmlhttpRequest
-// @grant      window.close
-// @grant      window.focus
 // @run-at     document-start
 // ==/UserScript==
 
@@ -47,190 +45,115 @@ reset: () => {
       console.error(`${PREFIX} ❌ ${msg}`, ...args);
     }
   };
-  const BLOCKED_TAGS = new Set([
-    "SCRIPT",
-    "STYLE",
-    "IFRAME",
-    "OBJECT",
-    "EMBED",
-    "FORM",
-    "INPUT",
-    "BUTTON",
-    "TEXTAREA",
-    "SELECT",
-    "META",
-    "LINK"
-  ]);
-  const UNSAFE_STYLE_PATTERNS = [
-    /expression\s*\(/i,
-    /@import/i,
-    /-moz-binding/i,
-    /behavior\s*:/i,
-    /url\s*\(\s*(['"]?)\s*(javascript:|vbscript:|data:(?!image\/))/i
-  ];
-  const BLOCKED_STYLE_PROPERTIES = new Set([
-    "position",
-    "z-index",
-    "top",
-    "left",
-    "right",
-    "bottom",
-    "inset"
-  ]);
-  const isSafeStyleDeclaration = (property, value) => {
-    const normalizedProperty = property.trim().toLowerCase();
-    if (!normalizedProperty) return false;
-    const isCssVariable = normalizedProperty.startsWith("--");
-    if (!isCssVariable && !/^[a-z-]+$/.test(normalizedProperty)) {
-      return false;
-    }
-    if (!isCssVariable && BLOCKED_STYLE_PROPERTIES.has(normalizedProperty)) {
-      return false;
-    }
-    const normalizedValue = value.trim();
-    if (!normalizedValue) return false;
-    return !UNSAFE_STYLE_PATTERNS.some((pattern) => pattern.test(normalizedValue));
+  const AI_PAYLOAD_INDEX_KEY = "power-reader-ai-payload-index-v1";
+  const canRead = () => typeof GM_getValue === "function";
+  const canWrite = () => typeof GM_setValue === "function";
+  const canDelete = () => typeof GM_deleteValue === "function";
+  const getPayloadStorageKeyFromHash = () => {
+    const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : window.location.hash;
+    if (!hash) return null;
+    const params = new URLSearchParams(hash);
+    return params.get("pr_payload_key");
   };
-  const sanitizeInlineStyle = (styleValue) => {
-    const declarations = styleValue.split(";");
-    const safeDeclarations = [];
-    for (const declaration of declarations) {
-      const separatorIndex = declaration.indexOf(":");
-      if (separatorIndex <= 0) continue;
-      const property = declaration.slice(0, separatorIndex).trim();
-      const value = declaration.slice(separatorIndex + 1).trim();
-      if (!isSafeStyleDeclaration(property, value)) continue;
-      safeDeclarations.push(`${property}: ${value}`);
-    }
-    return safeDeclarations.join("; ");
-  };
-  const isSafeUrl = (value) => {
-    const trimmed = value.trim();
-    if (!trimmed) return false;
-    const lowered = trimmed.toLowerCase();
-    if (lowered.startsWith("#") || lowered.startsWith("/") || lowered.startsWith("./") || lowered.startsWith("../")) {
-      return true;
-    }
-    if (lowered.startsWith("data:image/")) return true;
-    try {
-      const url = new URL(trimmed, window.location.origin);
-      return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" || url.protocol === "tel:";
-    } catch {
-      return false;
-    }
-  };
-  const isSafeSrcset = (value) => {
-    const candidates = value.split(",");
-    for (const candidate of candidates) {
-      const part = candidate.trim();
-      if (!part) return false;
-      const urlPart = part.split(/\s+/)[0];
-      if (!isSafeUrl(urlPart)) return false;
-    }
-    return true;
-  };
-  const sanitizeHtml = (html) => {
-    const domPurify = globalThis.DOMPurify;
-    if (!domPurify || typeof domPurify.sanitize !== "function") {
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      const elements = Array.from(template.content.querySelectorAll("*"));
-      for (const element of elements) {
-        if (BLOCKED_TAGS.has(element.tagName)) {
-          element.remove();
-          continue;
-        }
-        const attrs = Array.from(element.attributes);
-        for (const attr of attrs) {
-          const name = attr.name.toLowerCase();
-          const value = attr.value;
-          if (name.startsWith("on") || name === "srcdoc") {
-            element.removeAttribute(attr.name);
-            continue;
-          }
-          if (name === "style") {
-            const safeStyle = sanitizeInlineStyle(value);
-            if (safeStyle) {
-              element.setAttribute("style", safeStyle);
-            } else {
-              element.removeAttribute(attr.name);
-            }
-            continue;
-          }
-          if ((name === "href" || name === "src" || name === "xlink:href") && !isSafeUrl(value)) {
-            element.removeAttribute(attr.name);
-            continue;
-          }
-          if (name === "srcset" && !isSafeSrcset(value)) {
-            element.removeAttribute(attr.name);
-          }
-        }
+  const readPayloadIndex = () => {
+    if (!canRead()) return {};
+    const raw = GM_getValue(AI_PAYLOAD_INDEX_KEY, "");
+    if (!raw) return {};
+    let parsed = raw;
+    if (typeof raw === "string") {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return {};
       }
-      return template.innerHTML;
     }
-    return domPurify.sanitize(html, {
-      USE_PROFILES: { html: true }
-    });
+    if (!parsed || typeof parsed !== "object") return {};
+    const normalized = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        normalized[key] = value;
+      }
+    }
+    return normalized;
+  };
+  const writePayloadIndex = (index) => {
+    if (!canWrite()) return;
+    const keys = Object.keys(index);
+    if (keys.length === 0) {
+      if (canDelete()) GM_deleteValue(AI_PAYLOAD_INDEX_KEY);
+      return;
+    }
+    GM_setValue(AI_PAYLOAD_INDEX_KEY, JSON.stringify(index));
+  };
+  const registerAIPayloadKey = (payloadKey, createdAtMs = Date.now()) => {
+    if (!payloadKey || !canWrite()) return;
+    const index = readPayloadIndex();
+    index[payloadKey] = createdAtMs;
+    writePayloadIndex(index);
+  };
+  const consumeAIPayloadKey = (payloadKey) => {
+    if (!payloadKey || !canRead()) return;
+    const index = readPayloadIndex();
+    if (!(payloadKey in index)) return;
+    delete index[payloadKey];
+    writePayloadIndex(index);
+  };
+  const cleanupStaleAIPayloadKeys = (nowMs2 = Date.now(), maxAgeMs = 60 * 60 * 1e3) => {
+    if (!canRead()) return 0;
+    const cutoff = nowMs2 - maxAgeMs;
+    const index = readPayloadIndex();
+    let removed = 0;
+    for (const [payloadKey, createdAtMs] of Object.entries(index)) {
+      if (createdAtMs >= cutoff) continue;
+      if (canDelete()) GM_deleteValue(payloadKey);
+      delete index[payloadKey];
+      removed += 1;
+    }
+    if (removed > 0) {
+      writePayloadIndex(index);
+    }
+    return removed;
+  };
+  const clearAllAIPayloadKeys = () => {
+    if (!canRead()) return 0;
+    const index = readPayloadIndex();
+    let removed = 0;
+    for (const payloadKey of Object.keys(index)) {
+      if (canDelete()) GM_deleteValue(payloadKey);
+      removed += 1;
+    }
+    writePayloadIndex({});
+    return removed;
   };
   const sleep$2 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const AI_STUDIO_FALLBACK_PAYLOAD_KEY = "ai_studio_prompt_payload";
   async function handleAIStudio() {
-    const payload = GM_getValue("ai_studio_prompt_payload");
+    const payloadStorageKey = getPayloadStorageKeyFromHash();
+    const storageKey = payloadStorageKey || AI_STUDIO_FALLBACK_PAYLOAD_KEY;
+    const payload = GM_getValue(storageKey);
     if (!payload) {
-      Logger.debug("AI Studio: No payload found in GM storage, skipping automation.");
+      if (payloadStorageKey) {
+        Logger.warn(`AI Studio: Missing payload for key "${payloadStorageKey}".`);
+      }
       return;
     }
     Logger.info("AI Studio: Automation triggered.");
     try {
-      GM_setValue("ai_studio_status", "Selecting Flash 3...");
-      await selectModel("gemini-3-flash-preview", "Flash 3");
       await automateDisableSearch();
       await automateEnableUrlContext();
-      GM_setValue("ai_studio_status", "Injecting metadata thread...");
-      const requestId = GM_getValue("ai_studio_request_id");
       await injectPrompt$1(payload);
       await sleep$2(1e3);
-      GM_setValue("ai_studio_status", "Submitting prompt...");
       await automateRun$1();
-      const responseText = await waitForResponse$1();
-      GM_setValue("ai_studio_status", "Switching to 3.1 Pro...");
-      await selectModel("gemini-3.1-pro-preview", "3.1 Pro Preview");
-      GM_setValue("ai_studio_status", "Response received!");
-      GM_setValue("ai_studio_response_payload", {
-        text: responseText,
-        requestId,
-        includeDescendants: GM_getValue("ai_studio_include_descendants", false),
-        timestamp: Date.now()
-      });
-      GM_deleteValue("ai_studio_prompt_payload");
-      GM_deleteValue("ai_studio_request_id");
-      GM_deleteValue("ai_studio_include_descendants");
-      GM_deleteValue("ai_studio_status");
-      Logger.info("AI Studio: Response sent. Tab will close in 5m if no interaction.");
-      let hasInteracted = false;
-      const markInteracted = () => {
-        if (!hasInteracted) {
-          hasInteracted = true;
-          Logger.info("AI Studio: User returned to tab. Auto-close canceled.");
-        }
-      };
-      window.addEventListener("blur", () => {
-        window.addEventListener("mousedown", markInteracted, { once: true, capture: true });
-        window.addEventListener("keydown", markInteracted, { once: true, capture: true });
-        window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
-      }, { once: true });
-      const checkClose = () => {
-        if (!hasInteracted && document.visibilityState !== "visible") {
-          Logger.info("AI Studio: Idle and backgrounded. Closing tab.");
-          window.close();
-        } else if (!hasInteracted) {
-          Logger.info("AI Studio: 5m reached but tab is currently visible. Postponing close.");
-          setTimeout(checkClose, 60 * 1e3);
-        }
-      };
-      setTimeout(checkClose, 5 * 60 * 1e3);
+      Logger.info("AI Studio: Prompt submitted. Continue in this tab.");
     } catch (error) {
       Logger.error("AI Studio: Automation failed", error);
-      GM_setValue("ai_studio_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (typeof GM_deleteValue === "function") {
+        GM_deleteValue(storageKey);
+      }
+      if (payloadStorageKey) {
+        consumeAIPayloadKey(payloadStorageKey);
+      }
     }
   }
   async function waitForElement(selector, timeout = 3e4) {
@@ -259,22 +182,9 @@ reset: () => {
       }, timeout);
     });
   }
-  async function selectModel(idPart, namePart) {
-    const modelCard = await waitForElement("button.model-selector-card");
-    const currentModel = modelCard.innerText;
-    const loweredModel = currentModel.toLowerCase();
-    const loweredName = namePart.toLowerCase();
-    const isFlash3 = namePart === "Flash 3" && (loweredModel.includes("flash 3") || loweredModel.includes("gemini 3 flash"));
-    if (loweredModel.includes(loweredName) || isFlash3) {
-      return;
-    }
-    modelCard.click();
-    const targetModelBtn = await waitForElement(`button[id*="${idPart}"]`);
-    targetModelBtn.click();
-    await sleep$2(500);
-  }
   async function automateDisableSearch() {
-    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']");
+    const searchToggle = await waitForElement("button[aria-label='Grounding with Google Search']").catch(() => null);
+    if (!searchToggle) return;
     if (searchToggle.classList.contains("mdc-switch--checked")) {
       searchToggle.click();
     }
@@ -298,8 +208,14 @@ reset: () => {
   }
   async function injectPrompt$1(payload) {
     const textarea = await waitForElement("textarea[aria-label='Enter a prompt']");
-    textarea.value = payload;
+    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (nativeSetter) {
+      nativeSetter.call(textarea, payload);
+    } else {
+      textarea.value = payload;
+    }
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
     textarea.focus();
     textarea.setSelectionRange(0, 0);
   }
@@ -308,66 +224,13 @@ reset: () => {
     runBtn.focus();
     runBtn.click();
   }
-  async function waitForResponse$1(timeoutMs = 18e4) {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      let generationStarted = false;
-      let hasRetried = false;
-      const checkCompletion = () => {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > timeoutMs) return reject(new Error("Timeout"));
-        const stopBtn = document.querySelector('button[aria-label="Stop generation"], .ms-button-spinner, mat-icon[data-icon-name="stop"], mat-icon[data-icon-name="progress_activity"]');
-        const runBtn = document.querySelector("ms-run-button button");
-        const hasResponseNodes = document.querySelector("ms-cmark-node") !== null;
-        const hasError = document.querySelector(".model-error") !== null;
-        if (stopBtn || hasResponseNodes || hasError) {
-          if (!generationStarted) {
-            generationStarted = true;
-            GM_setValue("ai_studio_status", "AI is thinking...");
-          }
-        }
-        if (generationStarted && !stopBtn && runBtn && runBtn.textContent?.includes("Run")) {
-          const turnList = document.querySelectorAll("ms-chat-turn");
-          const lastTurn = turnList[turnList.length - 1];
-          if (!lastTurn) return setTimeout(checkCompletion, 1e3);
-          const errorEl = lastTurn.querySelector(".model-error");
-          if (errorEl) {
-            if (!hasRetried) {
-              const rerunBtn = document.querySelector('button[name="rerun-button"], .rerun-button');
-              if (rerunBtn) {
-                GM_setValue("ai_studio_status", "Retrying...");
-                hasRetried = true;
-                generationStarted = false;
-                rerunBtn.click();
-                return setTimeout(checkCompletion, 2e3);
-              }
-            }
-            return resolve(`<div class="pr-ai-error">Error: ${errorEl.textContent}</div>`);
-          }
-          const editIcon = Array.from(lastTurn.querySelectorAll(".material-symbols-outlined")).find((el) => el.textContent?.trim() === "edit");
-          if (!editIcon) return setTimeout(checkCompletion, 1e3);
-          const container = lastTurn.querySelector("div.model-response-content, .message-content, .turn-content") || lastTurn;
-          const cleanHtml = sanitizeHtml(container.innerHTML.replace(/<button[^>]*>.*?<\/button>/g, ""));
-          const parsed = new DOMParser().parseFromString(cleanHtml, "text/html");
-          const cleanText = (parsed.body.textContent || "").replace(/\s+/g, " ").trim();
-          if (cleanText.length > 10) {
-            return resolve(`<div class="pr-ai-text">${cleanHtml}</div>`);
-          }
-        }
-        setTimeout(checkCompletion, 1e3);
-      };
-      checkCompletion();
-    });
-  }
   const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const ARENA_AUTO_CLOSE_INITIAL_DELAY_MS = 5 * 60 * 1e3;
-  const ARENA_AUTO_CLOSE_RETRY_DELAY_MS = 60 * 1e3;
   const ARENA_PROMPT_REINJECT_TIMEOUT_MS = 45e3;
   const ARENA_PROMPT_SETTLE_DELAY_MS = 120;
   const ARENA_PROMPT_RECHECK_DELAY_MS = 200;
   const ARENA_SEND_ATTEMPTS = 3;
   const ARENA_SEND_ATTEMPT_TIMEOUT_MS = 12e3;
-  const ARENA_LIKE_RESPONSE_BUTTON_SELECTOR = "button[aria-label='Like this response']";
+  const ARENA_FALLBACK_PAYLOAD_KEY = "arena_max_prompt_payload";
   const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
     "textarea[name='message']",
     "textarea[placeholder='Ask anything...']",
@@ -378,33 +241,7 @@ reset: () => {
     "textarea[class*='bg-surface-secondary'][class*='resize-none']",
     "textarea[class*='box-border'][class*='resize-none']"
   ].join(", ");
-  const ARENA_RESPONSE_SELECTORS = [
-    ".prose",
-    ".markdown",
-    '[data-message-author-role="assistant"]',
-    '[data-testid*="assistant"]'
-  ].join(", ");
   const normalizeText = (value) => value.replace(/\s+/g, " ").trim();
-  const sharedPrefixLength = (a, b) => {
-    const max = Math.min(a.length, b.length);
-    let i = 0;
-    while (i < max && a[i] === b[i]) i++;
-    return i;
-  };
-  function isLikelyPromptEchoText(cleanText, submittedPrompt) {
-    if (!cleanText || !submittedPrompt) return false;
-    if (cleanText === submittedPrompt) return true;
-    const promptProbe = submittedPrompt.slice(0, 220);
-    const textProbe = cleanText.slice(0, 220);
-    if (promptProbe.length >= 60 && cleanText.includes(promptProbe)) return true;
-    if (textProbe.length >= 60 && submittedPrompt.includes(textProbe)) return true;
-    return sharedPrefixLength(cleanText, submittedPrompt) >= 80;
-  }
-  const isLikelyUserMessage = (message) => {
-    if (!message) return false;
-    if (message.matches('[data-message-author-role="user"], [data-testid*="user"]')) return true;
-    return !!message.closest('[data-message-author-role="user"], [data-testid*="user"]');
-  };
   function isArenaSendButton(btn) {
     return btn.type === "submit" || (btn.getAttribute("aria-label") || "").toLowerCase().includes("send") || !!btn.querySelector("svg.lucide-arrow-up, svg.lucide-send");
   }
@@ -578,157 +415,30 @@ reset: () => {
     }
     throw new Error(`Failed to submit prompt (${lastIssue})`);
   }
-  function getLatestArenaResponseCandidate() {
-    const assistantMessages = Array.from(
-      document.querySelectorAll('[data-message-author-role="assistant"], [data-testid*="assistant"]')
-    );
-    if (assistantMessages.length > 0) return assistantMessages[assistantMessages.length - 1];
-    const richMessages = Array.from(document.querySelectorAll(".markdown, .prose"));
-    if (richMessages.length > 0) return richMessages[richMessages.length - 1];
-    return void 0;
-  }
-  function getAllLikeResponseButtons() {
-    return Array.from(document.querySelectorAll(ARENA_LIKE_RESPONSE_BUTTON_SELECTOR));
-  }
-  function getLatestLikeResponseButton() {
-    const buttons = getAllLikeResponseButtons();
-    if (buttons.length === 0) return void 0;
-    buttons.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-    return buttons[0];
-  }
-  function scoreResponseCandidatesAboveLikeButton(button) {
-    const buttonRect = button.getBoundingClientRect();
-    const allCandidates = Array.from(document.querySelectorAll(ARENA_RESPONSE_SELECTORS));
-    const uniqueCandidates = Array.from(new Set(allCandidates));
-    const scored = [];
-    for (const candidate of uniqueCandidates) {
-      if (!isVisibleElement(candidate)) continue;
-      if (candidate.contains(button) || button.contains(candidate)) continue;
-      const rect = candidate.getBoundingClientRect();
-      const verticalGap = buttonRect.top - rect.bottom;
-      if (verticalGap < -8) continue;
-      const horizontalOverlap = Math.max(
-        0,
-        Math.min(buttonRect.right, rect.right) - Math.max(buttonRect.left, rect.left)
-      );
-      const cleanTextLength = normalizeText(candidate.textContent || "").length;
-      if (cleanTextLength === 0) continue;
-      const isUser = isLikelyUserMessage(candidate);
-      const score = -Math.abs(verticalGap) + horizontalOverlap + Math.min(cleanTextLength, 500) + (isUser ? -1e3 : 0);
-      scored.push({ el: candidate, score, verticalGap, horizontalOverlap, cleanTextLength, isUser });
-    }
-    scored.sort((a, b) => b.score - a.score);
-    return scored;
-  }
-  async function waitForResponse(timeoutMs = 18e4) {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      let generationStarted = false;
-      let sawCandidateResponseNode = false;
-      let observedResponseChange = false;
-      const submittedPrompt = normalizeText(String(GM_getValue("arena_max_prompt_payload") || ""));
-      const getMessageSignature = (message) => message ? `${message.childElementCount}:${normalizeText(message.textContent || "")}` : "";
-      const initialMessages = document.querySelectorAll(ARENA_RESPONSE_SELECTORS);
-      const initialMessageCount = initialMessages.length;
-      const initialLastSignature = getMessageSignature(getLatestArenaResponseCandidate());
-      const initialLikeButtonCount = getAllLikeResponseButtons().length;
-      const initialLatestLikeButton = getLatestLikeResponseButton();
-      const checkCompletion = () => {
-        const elapsed = Date.now() - startTime;
-        if (elapsed > timeoutMs) {
-          const hint = sawCandidateResponseNode ? "response controls never appeared" : `no response nodes found for selectors: ${ARENA_RESPONSE_SELECTORS}`;
-          return reject(new Error(`Timeout (${hint})`));
-        }
-        const hasStopIcon = document.querySelector("svg.lucide-square") !== null;
-        const latestLikeButton = getLatestLikeResponseButton();
-        const likeButtonCount = getAllLikeResponseButtons().length;
-        if (latestLikeButton) {
-          sawCandidateResponseNode = true;
-        }
-        const messages = document.querySelectorAll(ARENA_RESPONSE_SELECTORS);
-        const lastMessage = getLatestArenaResponseCandidate();
-        if (lastMessage) {
-          sawCandidateResponseNode = true;
-        }
-        const currentLastSignature = getMessageSignature(lastMessage);
-        if (messages.length !== initialMessageCount || currentLastSignature !== initialLastSignature) {
-          observedResponseChange = true;
-        }
-        if (hasStopIcon && !generationStarted) {
-          generationStarted = true;
-          GM_setValue("arena_max_status", "AI is thinking...");
-        }
-        const likeButtonChanged = likeButtonCount > initialLikeButtonCount || latestLikeButton && latestLikeButton !== initialLatestLikeButton;
-        if ((generationStarted || observedResponseChange || likeButtonChanged) && latestLikeButton) {
-          const anchoredCandidate = scoreResponseCandidatesAboveLikeButton(latestLikeButton)[0]?.el;
-          if (anchoredCandidate) {
-            const cleanText = normalizeText(anchoredCandidate.textContent || "");
-            const isPromptEcho = submittedPrompt.length > 0 && isLikelyPromptEchoText(cleanText, submittedPrompt);
-            if (cleanText.length > 0 && !isLikelyUserMessage(anchoredCandidate) && !isPromptEcho) {
-              const contentNode = anchoredCandidate.querySelector(".markdown, .prose") || anchoredCandidate;
-              return resolve(`<div class="pr-ai-text">${contentNode.innerHTML}</div>`);
-            }
-          }
-        }
-        setTimeout(checkCompletion, 250);
-      };
-      checkCompletion();
-    });
-  }
   async function handleArenaMax() {
-    const payload = GM_getValue("arena_max_prompt_payload");
+    const payloadStorageKey = getPayloadStorageKeyFromHash();
+    const storageKey = payloadStorageKey || ARENA_FALLBACK_PAYLOAD_KEY;
+    const payload = GM_getValue(storageKey);
     if (!payload) {
-      Logger.debug("Arena Max: No payload found in GM storage, skipping automation.");
+      if (payloadStorageKey) {
+        Logger.warn(`Arena Max: Missing payload for key "${payloadStorageKey}".`);
+      }
       return;
     }
     Logger.info("Arena Max: Automation triggered.");
     try {
-      GM_setValue("arena_max_status", "Waiting for input field...");
-      GM_setValue("arena_max_status", "Injecting metadata thread...");
-      const requestId = GM_getValue("arena_max_request_id");
       await injectPrompt(payload);
-      await sleep$1(1e3);
-      GM_setValue("arena_max_status", "Submitting prompt...");
       await automateRun(payload);
-      GM_setValue("arena_max_status", "Waiting for response (or Cloudflare challenge)...");
-      const responseText = await waitForResponse();
-      GM_setValue("arena_max_status", "Response received!");
-      GM_setValue("arena_max_response_payload", {
-        text: responseText,
-        requestId,
-        includeDescendants: GM_getValue("arena_max_include_descendants", false),
-        timestamp: Date.now()
-      });
-      GM_deleteValue("arena_max_prompt_payload");
-      GM_deleteValue("arena_max_request_id");
-      GM_deleteValue("arena_max_include_descendants");
-      GM_deleteValue("arena_max_status");
-      Logger.info("Arena Max: Response sent. Tab will close in 5m if no interaction.");
-      let hasInteracted = false;
-      const markInteracted = () => {
-        if (!hasInteracted) {
-          hasInteracted = true;
-          Logger.info("Arena Max: User returned to tab. Auto-close canceled.");
-        }
-      };
-      window.addEventListener("blur", () => {
-        window.addEventListener("mousedown", markInteracted, { once: true, capture: true });
-        window.addEventListener("keydown", markInteracted, { once: true, capture: true });
-        window.addEventListener("mousemove", markInteracted, { once: true, capture: true });
-      }, { once: true });
-      const checkClose = () => {
-        if (!hasInteracted && document.visibilityState !== "visible") {
-          Logger.info("Arena Max: Idle and backgrounded. Closing tab.");
-          window.close();
-        } else if (!hasInteracted) {
-          Logger.info("Arena Max: 5m reached but tab is currently visible. Postponing close.");
-          setTimeout(checkClose, ARENA_AUTO_CLOSE_RETRY_DELAY_MS);
-        }
-      };
-      setTimeout(checkClose, ARENA_AUTO_CLOSE_INITIAL_DELAY_MS);
+      Logger.info("Arena Max: Prompt submitted. Continue in this tab.");
     } catch (error) {
       Logger.error("Arena Max: Automation failed", error);
-      GM_setValue("arena_max_status", `Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (typeof GM_deleteValue === "function") {
+        GM_deleteValue(storageKey);
+      }
+      if (payloadStorageKey) {
+        consumeAIPayloadKey(payloadStorageKey);
+      }
     }
   }
   const getRoute = () => {
@@ -875,28 +585,6 @@ reset: () => {
   .pr-status {
     color: #666;
     font-size: 0.9em;
-  }
-
-  /* Sticky AI status indicator */
-  .pr-sticky-ai-status {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: rgba(40, 167, 69, 0.9);
-    color: white;
-    padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 0.85em;
-    font-weight: bold;
-    z-index: 6000;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-    display: none; /* Hidden by default */
-    pointer-events: none;
-    transition: opacity 0.3s;
-  }
-
-  .pr-sticky-ai-status.visible {
-    display: block;
   }
 
   @keyframes parentHighlight {
@@ -1930,157 +1618,6 @@ reset: () => {
     border-style: solid;
   }
 
-
-  /* AI Studio Response Popup */
-  .pr-ai-popup {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    max-width: 100%;
-    max-height: 50vh;
-    background: white;
-    border-bottom: 2px solid #007bff;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    z-index: 5000;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .pr-ai-popup-header {
-    background: #f0f7ff;
-    padding: 6px 15px;
-    border-bottom: 1px solid #cce5ff;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .pr-ai-popup-header h3 {
-    margin: 0;
-    font-size: 0.9em;
-    color: #004085;
-  }
-
-  .pr-ai-popup-content {
-    padding: 12px 15px;
-    overflow-y: auto;
-    font-family: inherit;
-    font-size: 0.95em;
-    line-height: 1.4;
-    color: #333;
-  }
-
-  .pr-ai-popup-content p { margin-bottom: 0.5em; }
-  .pr-ai-popup-content ul, .pr-ai-popup-content ol { margin-bottom: 0.5em; padding-left: 1.5em; }
-  .pr-ai-popup-content li { margin-bottom: 0.3em; }
-  
-  .pr-ai-popup-content h1, 
-  .pr-ai-popup-content h2, 
-  .pr-ai-popup-content h3 {
-    margin-top: 0.8em;
-    margin-bottom: 0.3em;
-    font-size: 1.1em;
-    border-bottom: 1px solid #eee;
-    color: #111;
-  }
-
-  .pr-ai-popup-content code {
-    background: #f8f9fa;
-    padding: 2px 4px;
-    border-radius: 4px;
-    font-family: monospace;
-    font-size: 0.9em;
-    border: 1px solid #ddd;
-  }
-
-  .pr-ai-popup-content pre {
-    background: #f8f9fa;
-    padding: 10px;
-    border-radius: 6px;
-    overflow-x: auto;
-    border: 1px solid #ddd;
-    margin-bottom: 0.6em;
-  }
-
-  /* Math/KaTeX Support from AI Studio */
-  .pr-ai-popup-content .inline {
-    display: inline-block;
-    vertical-align: middle;
-  }
-  
-  .pr-ai-popup-content .display {
-    display: block;
-    text-align: center;
-    margin: 1em 0;
-  }
-
-  /* Reset pre styles when inside math containers or containing KaTeX to stay inline/clean */
-  .pr-ai-popup-content .inline pre,
-  .pr-ai-popup-content .display pre,
-  .pr-ai-popup-content pre:has(.katex),
-  .pr-ai-popup-content pre:has(.rendered) {
-    display: inline-flex;
-    flex-direction: column;
-    background: transparent;
-    padding: 0;
-    margin: 0;
-    border: none;
-    border-radius: 0;
-    overflow: visible;
-    vertical-align: middle;
-  }
-
-  .pr-ai-popup-content blockquote {
-    border-left: 4px solid #ddd;
-    padding-left: 15px;
-    margin: 1em 0;
-    color: #666;
-    font-style: italic;
-  }
-
-  /* Support for AI Studio's custom tags - must be inline to avoid breaking sentences */
-  ms-cmark-node { display: inline; }
-
-  .pr-ai-popup-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .pr-ai-popup-close, .pr-ai-popup-regen {
-    color: white;
-    border: none;
-    padding: 4px 12px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-    font-size: 0.85em;
-    transition: background 0.2s;
-  }
-
-  .pr-ai-popup-close {
-    background: #6c757d;
-  }
-
-  .pr-ai-popup-close:hover {
-    background: #5a6268;
-  }
-
-  .pr-ai-popup-regen {
-    background: #28a745;
-  }
-
-  .pr-ai-popup-regen:hover {
-    background: #218838;
-  }
-
-  .pr-ai-popup-content hr {
-    border: 0;
-    border-top: 1px solid #ccc;
-    margin: 10px 0;
-  }
   /* Footnote styling: force inline display */
   /* Footnote styling: force inline display */
   .footnote, .footnote-content {
@@ -2158,9 +1695,6 @@ reset: () => {
     initialBatchNewestDate: null,
     currentSelection: null,
     lastMousePos: { x: 0, y: 0 },
-    currentAIRequestId: null,
-    activeAIPopup: null,
-    sessionAICache: {},
     postDescendantsCache: new Map(),
     isArchiveMode: false,
     archiveUsername: null
@@ -2240,7 +1774,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.701"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.703"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3123,6 +2657,7 @@ reset: () => {
     GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), "");
     GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), "");
     GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), "");
+    clearAllAIPayloadKeys();
   }
   function getViewWidth() {
     const raw = GM_getValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
@@ -3755,6 +3290,131 @@ hoverDelay: 300,
       rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
     }
   }
+  const BLOCKED_TAGS = new Set([
+    "SCRIPT",
+    "STYLE",
+    "IFRAME",
+    "OBJECT",
+    "EMBED",
+    "FORM",
+    "INPUT",
+    "BUTTON",
+    "TEXTAREA",
+    "SELECT",
+    "META",
+    "LINK"
+  ]);
+  const UNSAFE_STYLE_PATTERNS = [
+    /expression\s*\(/i,
+    /@import/i,
+    /-moz-binding/i,
+    /behavior\s*:/i,
+    /url\s*\(\s*(['"]?)\s*(javascript:|vbscript:|data:(?!image\/))/i
+  ];
+  const BLOCKED_STYLE_PROPERTIES = new Set([
+    "position",
+    "z-index",
+    "top",
+    "left",
+    "right",
+    "bottom",
+    "inset"
+  ]);
+  const isSafeStyleDeclaration = (property, value) => {
+    const normalizedProperty = property.trim().toLowerCase();
+    if (!normalizedProperty) return false;
+    const isCssVariable = normalizedProperty.startsWith("--");
+    if (!isCssVariable && !/^[a-z-]+$/.test(normalizedProperty)) {
+      return false;
+    }
+    if (!isCssVariable && BLOCKED_STYLE_PROPERTIES.has(normalizedProperty)) {
+      return false;
+    }
+    const normalizedValue = value.trim();
+    if (!normalizedValue) return false;
+    return !UNSAFE_STYLE_PATTERNS.some((pattern) => pattern.test(normalizedValue));
+  };
+  const sanitizeInlineStyle = (styleValue) => {
+    const declarations = styleValue.split(";");
+    const safeDeclarations = [];
+    for (const declaration of declarations) {
+      const separatorIndex = declaration.indexOf(":");
+      if (separatorIndex <= 0) continue;
+      const property = declaration.slice(0, separatorIndex).trim();
+      const value = declaration.slice(separatorIndex + 1).trim();
+      if (!isSafeStyleDeclaration(property, value)) continue;
+      safeDeclarations.push(`${property}: ${value}`);
+    }
+    return safeDeclarations.join("; ");
+  };
+  const isSafeUrl = (value) => {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    const lowered = trimmed.toLowerCase();
+    if (lowered.startsWith("#") || lowered.startsWith("/") || lowered.startsWith("./") || lowered.startsWith("../")) {
+      return true;
+    }
+    if (lowered.startsWith("data:image/")) return true;
+    try {
+      const url = new URL(trimmed, window.location.origin);
+      return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" || url.protocol === "tel:";
+    } catch {
+      return false;
+    }
+  };
+  const isSafeSrcset = (value) => {
+    const candidates = value.split(",");
+    for (const candidate of candidates) {
+      const part = candidate.trim();
+      if (!part) return false;
+      const urlPart = part.split(/\s+/)[0];
+      if (!isSafeUrl(urlPart)) return false;
+    }
+    return true;
+  };
+  const sanitizeHtml = (html) => {
+    const domPurify = globalThis.DOMPurify;
+    if (!domPurify || typeof domPurify.sanitize !== "function") {
+      const template = document.createElement("template");
+      template.innerHTML = html;
+      const elements = Array.from(template.content.querySelectorAll("*"));
+      for (const element of elements) {
+        if (BLOCKED_TAGS.has(element.tagName)) {
+          element.remove();
+          continue;
+        }
+        const attrs = Array.from(element.attributes);
+        for (const attr of attrs) {
+          const name = attr.name.toLowerCase();
+          const value = attr.value;
+          if (name.startsWith("on") || name === "srcdoc") {
+            element.removeAttribute(attr.name);
+            continue;
+          }
+          if (name === "style") {
+            const safeStyle = sanitizeInlineStyle(value);
+            if (safeStyle) {
+              element.setAttribute("style", safeStyle);
+            } else {
+              element.removeAttribute(attr.name);
+            }
+            continue;
+          }
+          if ((name === "href" || name === "src" || name === "xlink:href") && !isSafeUrl(value)) {
+            element.removeAttribute(attr.name);
+            continue;
+          }
+          if (name === "srcset" && !isSafeSrcset(value)) {
+            element.removeAttribute(attr.name);
+          }
+        }
+      }
+      return template.innerHTML;
+    }
+    return domPurify.sanitize(html, {
+      USE_PROFILES: { html: true }
+    });
+  };
   const getStickyViewportTop = () => {
     const stickyHeader2 = document.getElementById("pr-sticky-header");
     if (!stickyHeader2) return 0;
@@ -3785,7 +3445,6 @@ hoverDelay: 300,
   let listenersAdded = false;
   function initPreviewSystem() {
     if (listenersAdded) return;
-    Logger.debug("initPreviewSystem: adding global listeners");
     document.addEventListener("mousemove", (e) => {
       trackMousePos(e);
       handleGlobalMouseMove(e);
@@ -3898,17 +3557,14 @@ hoverDelay: 300,
   }
   function cancelHoverTimeout() {
     if (state.hoverTimeout) {
-      Logger.debug("cancelHoverTimeout: clearing timeout", state.hoverTimeout);
       clearTimeout(state.hoverTimeout);
       state.hoverTimeout = null;
     }
   }
   function dismissPreview() {
-    Logger.debug("dismissPreview called");
     cancelHoverTimeout();
     lastIntentionalHoverStartTime = 0;
     if (state.activePreview) {
-      Logger.debug("dismissPreview: removing active preview");
       state.activePreview.remove();
       state.activePreview = null;
     }
@@ -3920,8 +3576,6 @@ hoverDelay: 300,
     trigger.dataset.previewAttached = "1";
     trigger.addEventListener("mouseenter", async (e) => {
       trackMousePos(e);
-      Logger.debug("Preview mouseenter: trigger=", trigger.tagName, trigger.className, "dataset=", JSON.stringify(trigger.dataset));
-      Logger.debug("setupHoverPreview: clearing pending timeout", state.hoverTimeout);
       let targets = null;
       if (options.targetGetter) {
         let leftBeforeResolve = false;
@@ -3980,7 +3634,6 @@ hoverDelay: 300,
           }
           effectiveTrigger = recoveredTrigger || trigger;
         }
-        Logger.debug("Preview timer triggered for", options.type);
         state.triggerRect = effectiveTrigger.getBoundingClientRect();
         state.currentTrigger = effectiveTrigger;
         if (options.href) {
@@ -3989,10 +3642,8 @@ hoverDelay: 300,
         try {
           const content = await fetchContent();
           if (state.currentTrigger !== effectiveTrigger) {
-            Logger.debug("Preview aborted: trigger changed during fetch");
             return;
           }
-          Logger.debug("Preview content fetched", content.length);
           showPreview(content, options.type, options.position || "auto");
         } catch (e2) {
           Logger.error("Preview fetch failed:", e2);
@@ -4000,7 +3651,6 @@ hoverDelay: 300,
       }, HOVER_DELAY);
     });
     trigger.addEventListener("mouseleave", () => {
-      Logger.debug("Preview mouseleave: trigger=", trigger.tagName, trigger.className);
       lastIntentionalHoverStartTime = 0;
       if (state.hoverTimeout) {
         clearTimeout(state.hoverTimeout);
@@ -4018,7 +3668,6 @@ hoverDelay: 300,
       if (!trigger.isConnected || !trigger.matches(":hover") || !isIntentionalHover()) {
         return;
       }
-      Logger.debug("Manual Preview triggered");
       state.triggerRect = trigger.getBoundingClientRect();
       state.currentTrigger = trigger;
       if (options.href) {
@@ -4027,10 +3676,8 @@ hoverDelay: 300,
       try {
         const content = await fetchContent();
         if (state.currentTrigger !== trigger) {
-          Logger.debug("Manual Preview aborted: trigger changed during fetch");
           return;
         }
-        Logger.debug("Manual Preview content fetched", content.length);
         showPreview(content, options.type, options.position || "auto");
       } catch (e) {
         Logger.error("Preview fetch failed:", e);
@@ -4038,7 +3685,6 @@ hoverDelay: 300,
     }, HOVER_DELAY);
   }
   function showPreview(content, type, position) {
-    Logger.debug("showPreview: start");
     const savedTriggerRect = state.triggerRect;
     const savedCurrentTrigger = state.currentTrigger;
     dismissPreview();
@@ -4051,7 +3697,6 @@ hoverDelay: 300,
     state.activePreview = preview;
     positionPreview(preview, position);
     adaptPreviewWidth(preview, position);
-    Logger.debug("showPreview: end, activePreview visible=", !!document.querySelector(".pr-preview-overlay"));
   }
   function adaptPreviewWidth(preview, position) {
     const maxWidth = window.innerWidth * 0.9;
@@ -4140,7 +3785,6 @@ hoverDelay: 300,
         finalTop = Math.max(10, Math.min(finalTop, vh - h - 10));
       }
     }
-    Logger.debug(`positionPreview: finalTop=${finalTop}, finalLeft=${finalLeft}, vw=${vw}, vh=${vh}`);
     preview.style.left = `${finalLeft}px`;
     preview.style.top = `${finalTop}px`;
   }
@@ -4212,7 +3856,6 @@ hoverDelay: 300,
     for (const p of points) {
       const found = document.elementFromPoint(p.x, p.y);
       if (!found || !(visibilityTarget === found || visibilityTarget.contains(found) || found.closest(".pr-preview-overlay"))) {
-        Logger.debug(`isElementFullyVisible: obscured at (${p.x}, ${p.y}) by`, found);
         return false;
       }
     }
@@ -5105,8 +4748,8 @@ reactionsHtml,
       ${metadataHtml}
       <h2><span class="pr-post-title" data-post-id="${post._id}"${!isFullPost ? ' data-action="load-post"' : ""}>${escapedTitle}</span></h2>
       <span class="pr-post-actions">
-        <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
-        <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
+        <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio in a new tab (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
+        <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max in a new tab (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
         <span class="pr-post-action text-btn ${""}" data-action="toggle-post-body" title="${eTooltip}">[e]</span>
         <span class="pr-post-action text-btn ${aDisabled ? "disabled" : ""}" data-action="load-all-comments" title="${aTooltip}">[a]</span>
         <span class="pr-post-action text-btn ${cDisabled ? "disabled" : ""}" data-action="scroll-to-comments" title="${cTooltip}">[c]</span>
@@ -5656,8 +5299,8 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     const tTooltip = tDisabled ? "Already at top level" : "Load parents and scroll to root (Shortkey: t)";
     const controlsHtml = `
     <span class="pr-comment-controls">
-      <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
-      <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
+      <span class="pr-comment-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio in a new tab (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
+      <span class="pr-comment-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max in a new tab (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
       <span class="pr-comment-action text-btn ${rDisabled ? "disabled" : ""}" data-action="load-descendants" title="${rTooltip}">[r]</span>
       <span class="pr-comment-action text-btn ${tDisabled ? "disabled" : ""}" data-action="load-parents-and-scroll" title="${tTooltip}">[t]</span>
       <span class="pr-find-parent text-btn" data-action="find-parent" title="Scroll to parent comment (Shortkey: p or ^)">[^]</span>
@@ -8757,8 +8400,9 @@ currentUserSnapshot: void 0
       const isLocallyRead = isRead(c._id, readState, c.postedAt);
       const implicit = isImplicitlyRead(c);
       const commentIsRead = isLocallyRead || implicit;
-      if (isContext || !commentIsRead) {
-        if (!isContext) unreadIds.add(c._id);
+      const forceVisible = isForceVisible(c);
+      if (isContext || !commentIsRead || forceVisible) {
+        if (!isContext && !commentIsRead) unreadIds.add(c._id);
         let currentId = c._id;
         const visited = new Set();
         while (currentId) {
@@ -8894,7 +8538,7 @@ currentUserSnapshot: void 0
           <ul>
             <li><strong>[e]</strong> Expand/load body · <strong>[a]</strong> Load all comments</li>
             <li><strong>[c]</strong> Scroll to comments · <strong>[n]</strong> Scroll to next post</li>
-            <li><strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[g]</strong> AI Studio (new tab) · <strong>[m]</strong> Arena.ai Max (new tab)</li>
             <li><strong>[−]/[+]</strong> Collapse/expand post + comments</li>
           </ul>
         </div>
@@ -8903,7 +8547,7 @@ currentUserSnapshot: void 0
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio (new tab) · <strong>[m]</strong> Arena.ai Max (new tab)</li>
             <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
@@ -8929,8 +8573,8 @@ currentUserSnapshot: void 0
         <div class="pr-help-section">
           <h4>↔️ Layout · AI: <strong>g</strong> / <strong>⇧G</strong></h4>
           <ul>
-            <li><strong>g</strong>: Thread to AI Studio · <strong>⇧G</strong>: + Descendants</li>
-            <li><strong>m</strong>: Thread to Arena Max · <strong>⇧M</strong>: + Descendants</li>
+            <li><strong>g</strong>: Thread to AI Studio (new tab) · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>m</strong>: Thread to Arena Max (new tab) · <strong>⇧M</strong>: + Descendants</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>
@@ -8981,7 +8625,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9023,12 +8667,6 @@ currentUserSnapshot: void 0
     </div>
   `;
     root.innerHTML = html;
-    if (!document.querySelector(".pr-sticky-ai-status")) {
-      const stickyStatus = document.createElement("div");
-      stickyStatus.className = "pr-sticky-ai-status";
-      stickyStatus.id = "pr-sticky-ai-status";
-      document.body.appendChild(stickyStatus);
-    }
     if (!document.querySelector(".pr-resize-handle")) {
       initResizeHandles();
     }
@@ -9162,7 +8800,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -10582,6 +10220,39 @@ currentCommentId = null;
   };
   const waitForNextPaint = () => new Promise((resolve) => requestAnimationFrame(() => resolve()));
   const round2$1 = (n) => Math.round(n * 100) / 100;
+  const hasDirectCommentBody = (commentEl) => Array.from(commentEl.children).some(
+    (child) => child instanceof HTMLElement && child.classList.contains("pr-comment-body")
+  );
+  const isBodyRenderedCommentNode = (commentEl) => {
+    if (commentEl.classList.contains("pr-comment-placeholder")) return false;
+    if (commentEl.classList.contains("pr-missing-parent")) return false;
+    if (commentEl.dataset.placeholder === "1") return false;
+    return hasDirectCommentBody(commentEl);
+  };
+  const preserveVisibleCommentsForPostRerender = (postId, state2) => {
+    const postContainer = document.querySelector(`.pr-post[data-id="${postId}"]`);
+    if (!postContainer) return [];
+    const temporarilyForcedCommentIds = [];
+    const commentEls = Array.from(postContainer.querySelectorAll(".pr-comment[data-id]"));
+    for (const commentEl of commentEls) {
+      if (!isBodyRenderedCommentNode(commentEl)) continue;
+      const id = commentEl.dataset.id;
+      if (!id) continue;
+      const inState = state2.commentById.get(id);
+      if (!inState) continue;
+      if (isForceVisible(inState)) continue;
+      setForceVisible(inState, true);
+      temporarilyForcedCommentIds.push(id);
+    }
+    return temporarilyForcedCommentIds;
+  };
+  const restoreTemporarilyForcedComments = (commentIds, state2) => {
+    for (const id of commentIds) {
+      const inState = state2.commentById.get(id);
+      if (!inState || !isForceVisible(inState)) continue;
+      setForceVisible(inState, false);
+    }
+  };
   const isCommentFullyVisibleForNavigation = (commentEl, viewportTarget) => {
     if (commentEl.classList.contains("pr-missing-parent") || commentEl.dataset.placeholder === "1" || commentEl.classList.contains("pr-comment-placeholder")) {
       return false;
@@ -11031,16 +10702,21 @@ currentCommentId = null;
       getUIHost().rerenderAll();
     }
   };
-  const fetchAndRenderPost = async (postId, _state) => {
-    const res = await queryGraphQL(
-      GET_POST_BY_ID,
-      { id: postId }
-    );
-    const post = res?.post?.result;
-    if (!post) return null;
-    getUIHost().upsertPost(post);
-    getUIHost().rerenderPostGroup(postId);
-    return post;
+  const fetchAndRenderPost = async (postId, state2) => {
+    const temporarilyForcedCommentIds = preserveVisibleCommentsForPostRerender(postId, state2);
+    try {
+      const res = await queryGraphQL(
+        GET_POST_BY_ID,
+        { id: postId }
+      );
+      const post = res?.post?.result;
+      if (!post) return null;
+      getUIHost().upsertPost(post);
+      getUIHost().rerenderPostGroup(postId);
+      return post;
+    } finally {
+      restoreTemporarilyForcedComments(temporarilyForcedCommentIds, state2);
+    }
   };
   const handleLoadPost = async (postId, titleLink, state2) => {
     const postContainer = titleLink.closest(".pr-post");
@@ -11500,7 +11176,6 @@ currentCommentId = null;
     }
     handleScrollToRoot(target, topLevelId);
   };
-  const popupAutoCloseScrollAttached = new WeakSet();
   const setStatusMessage = (message, color) => {
     const statusEl = document.querySelector(".pr-status");
     if (!statusEl) return;
@@ -11516,29 +11191,38 @@ currentCommentId = null;
   };
   const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-  const toXml = (items, focalId, descendants = []) => {
+  const makeIndent = (depth) => "  ".repeat(Math.max(0, depth));
+  const indentMultiline = (value, depth) => value.replace(/^/gm, makeIndent(depth));
+  const toXml = (items, focalId, descendants = [], depth = 0) => {
     if (items.length === 0) return "";
     const item = items[0];
     const remaining = items.slice(1);
+    const indent = makeIndent(depth);
+    const childIndent = makeIndent(depth + 1);
     const isFocal = item._id === focalId;
-    const type = item.title ? "post" : "comment";
+    const type = typeof item.title === "string" ? "post" : "comment";
     const author = item.user?.username || item.author || "unknown";
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
-    let xml = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}>
+    const titleAttr = type === "post" && item.title ? ` title="${escapeXmlAttr(item.title)}"` : "";
+    let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}${titleAttr}>
 `;
-    xml += `<body_markdown>
-${escapeXmlText(md)}
-</body_markdown>
+    xml += `${childIndent}<body_markdown>
+${indentMultiline(escapeXmlText(md), depth + 2)}
+${childIndent}</body_markdown>
 `;
     if (isFocal && descendants.length > 0) {
-      xml += "<descendants>\n";
-      xml += descendantsToXml(descendants, focalId).split("\n").map((line) => "  " + line).join("\n") + "\n";
-      xml += "</descendants>\n";
+      xml += `${childIndent}<descendants>
+`;
+      xml += `${descendantsToXml(descendants, focalId, depth + 2)}
+`;
+      xml += `${childIndent}</descendants>
+`;
     }
     if (remaining.length > 0) {
-      xml += toXml(remaining, focalId, descendants).split("\n").map((line) => "  " + line).join("\n") + "\n";
+      xml += `${toXml(remaining, focalId, descendants, depth + 1)}
+`;
     }
-    xml += `</${type}>`;
+    xml += `${indent}</${type}>`;
     return xml;
   };
   const buildDescendantChildrenIndex = (descendants) => {
@@ -11551,33 +11235,54 @@ ${escapeXmlText(md)}
     });
     return byParent;
   };
-  const descendantsToXmlWithIndex = (childrenByParent, parentId) => {
+  const descendantsToXmlWithIndex = (childrenByParent, parentId, depth) => {
     const children = childrenByParent.get(parentId) || [];
     if (children.length === 0) return "";
+    const indent = makeIndent(depth);
+    const childIndent = makeIndent(depth + 1);
     return children.map((child) => {
       const author = child.user?.username || child.author || "unknown";
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
-      let xml = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
+      let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
-      xml += `  <body_markdown>
-${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
-  </body_markdown>
+      xml += `${childIndent}<body_markdown>
+${indentMultiline(escapeXmlText(md), depth + 2)}
+${childIndent}</body_markdown>
 `;
-      const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id);
+      const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1);
       if (grandChildrenXml) {
-        xml += grandChildrenXml.split("\n").map((line) => "  " + line).join("\n") + "\n";
+        xml += `${grandChildrenXml}
+`;
       }
-      xml += "</comment>";
+      xml += `${indent}</comment>`;
       return xml;
     }).join("\n");
   };
-  const descendantsToXml = (descendants, parentId) => {
+  const descendantsToXml = (descendants, parentId, depth = 0) => {
     const childrenByParent = buildDescendantChildrenIndex(descendants);
-    return descendantsToXmlWithIndex(childrenByParent, parentId);
+    return descendantsToXmlWithIndex(childrenByParent, parentId, depth);
+  };
+  const buildPayloadStorageKey = (baseKey) => `${baseKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+  const toTimestamp = (value) => {
+    if (!value) return 0;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const buildProviderUrl = (baseUrl, payloadKey) => {
+    try {
+      const url = new URL(baseUrl);
+      const hashParams = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+      hashParams.set("pr_payload_key", payloadKey);
+      url.hash = hashParams.toString();
+      return url.toString();
+    } catch {
+      const separator = baseUrl.includes("#") ? "&" : "#";
+      return `${baseUrl}${separator}pr_payload_key=${encodeURIComponent(payloadKey)}`;
+    }
   };
   const fetchItemMarkdown = async (itemId, itemIsPost, state2, providerName) => {
     if (itemIsPost) {
-      const p = state2.posts.find((p2) => p2._id === itemId);
+      const p = state2.postById.get(itemId);
       if (p?.contents?.markdown) return p;
     } else {
       const c = state2.commentById.get(itemId);
@@ -11593,14 +11298,6 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
     }
   };
   const createAIProviderFeature = (config) => {
-    const getCacheKey = (id, includeDescendants = false) => `${config.cacheKeyPrefix}:${id}:${includeDescendants ? "with_descendants" : "base"}`;
-    const closePopup = (state2) => {
-      if (state2.activeAIPopup) {
-        state2.activeAIPopup.remove();
-        state2.activeAIPopup = null;
-      }
-      document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
-    };
     const handleSend = async (state2, includeDescendants = false, focalItemId) => {
       let itemEl = null;
       if (focalItemId) {
@@ -11629,18 +11326,10 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
         Logger.warn(`${config.name}: Element has no ID.`);
         return;
       }
-      const cacheKey = getCacheKey(id, includeDescendants);
-      if (state2.sessionAICache[cacheKey] && !window.PR_FORCE_AI_REGEN) {
-        Logger.info(`${config.name}: Using session-cached answer for ${id}`);
-        displayPopup(state2.sessionAICache[cacheKey], state2, includeDescendants);
-        return;
-      }
-      window.PR_FORCE_AI_REGEN = false;
       const isPost2 = itemEl.classList.contains("pr-post");
       Logger.info(`${config.name}: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
       try {
         setStatusMessage(`${config.statusTag} Building conversation thread...`, "#007bff");
-        const requestId = Math.random().toString(36).substring(2, 10);
         const lineage = [];
         let currentId = id;
         let currentIsPost = isPost2;
@@ -11720,208 +11409,71 @@ ${escapeXmlText(md).split("\n").map((l) => "    " + l).join("\n")}
           }
           if (decision === "cancel") {
             setStatusMessage(`${config.statusTag} Action canceled.`, "#dc3545");
+            itemEl.classList.remove("being-summarized");
             return;
           }
           descendants = decision === "continue_without_loading" ? baselineDescendants : fullDescendants;
-          descendants.sort((a, b) => new Date(a.postedAt || "").getTime() - new Date(b.postedAt || "").getTime());
+          descendants.sort((a, b) => toTimestamp(a.postedAt) - toTimestamp(b.postedAt));
         }
         const threadXml = lineage.length > 0 ? toXml(lineage, id, descendants) : "";
         const finalPayload = (config.getPromptPrefix() || config.defaultPromptPrefix) + threadXml;
+        const payloadStorageKey = buildPayloadStorageKey(config.promptPayloadKey);
+        const providerUrl = buildProviderUrl(config.openUrl, payloadStorageKey);
         Logger.info(`${config.name}: Opening tab with deep threaded payload...`);
-        state2.currentAIRequestId = requestId;
-        if (typeof GM_setValue === "function") {
-          GM_setValue(config.requestIdKey, requestId);
-          GM_setValue(config.promptPayloadKey, finalPayload);
-          GM_setValue(config.includeDescendantsKey, includeDescendants);
+        if (typeof GM_setValue !== "function") {
+          throw new Error("GM_setValue unavailable");
         }
-        if (typeof GM_openInTab === "function") {
-          GM_openInTab(config.openUrl, { active: true });
+        GM_setValue(payloadStorageKey, finalPayload);
+        registerAIPayloadKey(payloadStorageKey);
+        try {
+          if (typeof GM_openInTab !== "function") {
+            throw new Error("GM_openInTab unavailable");
+          }
+          GM_openInTab(providerUrl, { active: true });
+        } catch (openError) {
+          if (typeof GM_deleteValue === "function") {
+            GM_deleteValue(payloadStorageKey);
+          }
+          consumeAIPayloadKey(payloadStorageKey);
+          throw openError;
         }
         setStatusMessage(config.openingStatusText, "#28a745");
+        window.setTimeout(() => {
+          if (itemEl?.isConnected) itemEl.classList.remove("being-summarized");
+        }, 3e3);
       } catch (error) {
         Logger.error(`${config.name}: Failed to prepare threaded payload`, error);
         setStatusMessage(`[${config.name}] Failed to prepare payload. Check console.`, "#dc3545");
+        itemEl.classList.remove("being-summarized");
       }
     };
-    const displayPopup = (text, state2, includeDescendants = false) => {
-      if (state2.activeAIPopup) {
-        state2.activeAIPopup.remove();
-        state2.activeAIPopup = null;
-      }
-      const popup = document.createElement("div");
-      popup.className = `pr-ai-popup${includeDescendants ? " pr-ai-include-descendants" : ""}`;
-      popup.innerHTML = `
-    <div class="pr-ai-popup-header">
-      <h3>Summary and Potential Errors</h3>
-      <div class="pr-ai-popup-actions">
-        <button class="pr-ai-popup-regen">Regenerate</button>
-        <button class="pr-ai-popup-close">Close</button>
-      </div>
-    </div>
-    <div class="pr-ai-popup-content"></div>
-  `;
-      const popupContent = popup.querySelector(".pr-ai-popup-content");
-      if (popupContent) popupContent.innerHTML = sanitizeHtml(text);
-      document.body.appendChild(popup);
-      state2.activeAIPopup = popup;
-      popup.querySelector(".pr-ai-popup-close")?.addEventListener("click", () => closePopup(state2));
-      popup.querySelector(".pr-ai-popup-regen")?.addEventListener("click", () => {
-        window.PR_FORCE_AI_REGEN = true;
-        const isShifted = popup.classList.contains("pr-ai-include-descendants");
-        const focalId = document.querySelector(".being-summarized")?.dataset.id;
-        handleSend(state2, isShifted, focalId);
-      });
-    };
-    const initListener = (state2) => {
-      if (typeof GM_addValueChangeListener !== "function") {
-        Logger.debug(`${config.name}: GM_addValueChangeListener not available, skipping listener setup`);
-        return;
-      }
-      GM_addValueChangeListener(config.responsePayloadKey, (_key, _oldVal, newVal, remote) => {
-        if (!newVal || !remote) return;
-        const { text, requestId, includeDescendants } = newVal;
-        const includeDescendantsMode = !!includeDescendants;
-        if (requestId === state2.currentAIRequestId) {
-          Logger.info(`${config.name}: Received matching response!`);
-          const target = document.querySelector(".being-summarized");
-          if (target?.dataset.id) {
-            state2.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text;
-          }
-          displayPopup(text, state2, includeDescendantsMode);
-          setStatusMessage(`${config.name} response received.`);
-          const stickyEl = document.getElementById("pr-sticky-ai-status");
-          if (stickyEl) {
-            stickyEl.classList.remove("visible");
-            stickyEl.textContent = "";
-          }
-          window.focus();
-        } else {
-          Logger.debug(`${config.name}: Received response for different request. Ignoring.`);
-        }
-      });
-      GM_addValueChangeListener(config.statusKey, (_key, _oldVal, newVal, remote) => {
-        if (!newVal || !remote) return;
-        Logger.debug(`${config.name} Status: ${newVal}`);
-        const statusEl = document.querySelector(".pr-status");
-        if (statusEl) setStatusMessage(`${config.statusTag} ${String(newVal)}`, "#28a745");
-        const stickyEl = document.getElementById("pr-sticky-ai-status");
-        if (stickyEl) {
-          stickyEl.textContent = `AI: ${newVal}`;
-          stickyEl.classList.add("visible");
-          if (newVal === "Response received!" || newVal.startsWith("Error:")) {
-            setTimeout(() => {
-              if (stickyEl.textContent?.includes(newVal)) {
-                stickyEl.classList.remove("visible");
-              }
-            }, 5e3);
-          }
-        }
-      });
-      if (!popupAutoCloseScrollAttached.has(state2)) {
-        popupAutoCloseScrollAttached.add(state2);
-        let scrollThrottle = null;
-        window.addEventListener("scroll", () => {
-          if (scrollThrottle || !state2.activeAIPopup) return;
-          scrollThrottle = window.setTimeout(() => {
-            scrollThrottle = null;
-            if (!state2.activeAIPopup) return;
-            const target = document.querySelector(".being-summarized");
-            if (target) {
-              const rect = target.getBoundingClientRect();
-              const isVisible = rect.bottom > 0 && rect.top < window.innerHeight;
-              if (!isVisible) {
-                Logger.info("AI Popup: Target scrolled off-screen. Auto-closing popup.");
-                if (state2.activeAIPopup) {
-                  state2.activeAIPopup.remove();
-                  state2.activeAIPopup = null;
-                }
-                document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
-              }
-            }
-          }, 500);
-        }, { passive: true });
-      }
-    };
-    const setupKeyboard = (state2) => {
-      document.addEventListener("keydown", (e) => {
-        const target = e.target;
-        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-          return;
-        }
-        const key = e.key;
-        const lowerKey = key.toLowerCase();
-        if (key === "Escape") {
-          closePopup(state2);
-          return;
-        }
-        if (e.ctrlKey || e.altKey || e.metaKey) {
-          return;
-        }
-        if (lowerKey === config.hotkey) {
-          if (state2.activeAIPopup) {
-            const elementUnderMouse = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
-            const isInPopup = !!elementUnderMouse?.closest(".pr-ai-popup");
-            const isInFocalItem = !!elementUnderMouse?.closest(".being-summarized");
-            if (isInPopup || isInFocalItem) {
-              closePopup(state2);
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-            }
-          }
-        }
-      });
-    };
-    return {
-      handleSend,
-      displayPopup,
-      closePopup,
-      initListener,
-      setupKeyboard
-    };
+    return { handleSend };
   };
   const aiStudioFeature = createAIProviderFeature({
     name: "AI Studio",
     statusTag: "[AI Studio]",
     openingStatusText: "[AI Studio] Opening AI Studio tab...",
     openUrl: "https://aistudio.google.com/prompts/new_chat",
-    cacheKeyPrefix: "ai_studio",
-    hotkey: "g",
-    requestIdKey: "ai_studio_request_id",
     promptPayloadKey: "ai_studio_prompt_payload",
-    includeDescendantsKey: "ai_studio_include_descendants",
-    responsePayloadKey: "ai_studio_response_payload",
-    statusKey: "ai_studio_status",
     getPromptPrefix: getAIStudioPrefix,
     defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
   });
-  const handleSendToAIStudio = aiStudioFeature.handleSend;
-  const initAIStudioListener = aiStudioFeature.initListener;
-  const setupAIStudioKeyboard = aiStudioFeature.setupKeyboard;
   const arenaMaxFeature = createAIProviderFeature({
     name: "Arena Max",
     statusTag: "[Arena]",
     openingStatusText: "[Arena Max] Opening Arena tab...",
     openUrl: "https://arena.ai/max",
-    cacheKeyPrefix: "arena_max",
-    hotkey: "m",
-    requestIdKey: "arena_max_request_id",
     promptPayloadKey: "arena_max_prompt_payload",
-    includeDescendantsKey: "arena_max_include_descendants",
-    responsePayloadKey: "arena_max_response_payload",
-    statusKey: "arena_max_status",
 
 getPromptPrefix: getAIStudioPrefix,
     defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
   });
+  const handleSendToAIStudio = aiStudioFeature.handleSend;
   const handleSendToArenaMax = arenaMaxFeature.handleSend;
-  const initArenaMaxListener = arenaMaxFeature.initListener;
-  const setupArenaMaxKeyboard = arenaMaxFeature.setupKeyboard;
   let eventsAbort = null;
   const attachEventListeners = (state2) => {
     if (eventsAbort) {
       eventsAbort.abort();
-      Logger.debug("Aborted previous event listeners to re-attach.");
     }
     eventsAbort = new AbortController();
     const signal = eventsAbort.signal;
@@ -11931,16 +11483,13 @@ getPromptPrefix: getAIStudioPrefix,
       );
     };
     document.addEventListener("mousedown", (e) => {
-      Logger.debug(`document.mousedown: target=${e.target.tagName}.${e.target.className}`);
       const target = e.target.closest("[data-action]");
       if (!target) return;
       const action = target.dataset.action;
       if (!action) return;
       if (target.classList.contains("disabled")) {
-        Logger.debug(`action ${action} is disabled, ignoring`);
         return;
       }
-      Logger.debug(`Event: mousedown, action=${action}`);
       if (action === "karma-up" || action === "karma-down" || action === "agree" || action === "disagree") {
         handleVoteInteraction(target, action, state2);
       } else if (action === "reaction-vote") {
@@ -15657,7 +15206,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -16434,8 +15983,6 @@ sortCanonicalItems() {
       const uiHost = new ArchiveUIHost(state2, feedEl, refreshView);
       setUIHost(uiHost);
       attachEventListeners(uiHost.getReaderState());
-      initAIStudioListener(uiHost.getReaderState());
-      initArenaMaxListener(uiHost.getReaderState());
       setupExternalLinks();
       setupInlineReactions(uiHost.getReaderState());
       const syncErrorState = {
@@ -17647,6 +17194,10 @@ sortCanonicalItems() {
     installedState = null;
   };
   const initReader = async () => {
+    const cleanedPayloads = cleanupStaleAIPayloadKeys();
+    if (cleanedPayloads > 0) {
+      Logger.info(`Cleaned ${cleanedPayloads} stale AI payload entr${cleanedPayloads === 1 ? "y" : "ies"} from storage.`);
+    }
     const route = getRoute();
     if (route.type === "skip") {
       return;
@@ -17711,7 +17262,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.701"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
@@ -17748,10 +17299,6 @@ sortCanonicalItems() {
       signalReady();
       Logger.info("signalReady called");
       if (!root.dataset.listenersAttached) {
-        initAIStudioListener(state2);
-        setupAIStudioKeyboard(state2);
-        initArenaMaxListener(state2);
-        setupArenaMaxKeyboard(state2);
         initReactionTooltips();
         attachEventListeners(state2);
         root.dataset.listenersAttached = "true";

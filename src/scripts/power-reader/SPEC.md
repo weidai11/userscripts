@@ -620,10 +620,9 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-AI-01]** **Shortkeys**: 
     - Press **`g`** to send to Google AI Studio.
     - Press **`m`** to send to Arena.ai Max.
-    - **Closing Logic**: Typing the respective shortkey while the mouse is over an open AI response popup or the focal item MUST close the popup.
-- **[PR-AI-02]** **Automation**: Opens the respective AI site, selects model (if applicable), injects thread XML and prompt.
-- **[PR-AI-03]** **Display**: Responses captured and shown in formatted popup.
-- **[PR-AI-04]** **Caching**: Responses cached in-memory for session, scoped by provider and descendant mode (base vs include-descendants).
+- **[PR-AI-02]** **Automation**: Opens the respective AI site, injects thread XML and prompt, and submits it in-page.
+- **[PR-AI-03]** **Handoff-Only Output**: The reader MUST NOT render provider responses in-page. Output is viewed directly in the opened AI Studio/Arena tab.
+- **[PR-AI-04]** **Descendant Mode**: Shift-triggered AI actions (`Shift+G`, `Shift+M`, and Shift-click variants) include descendants in the payload, with the large-descendant confirmation policy applied.
 - **[PR-AI-05]** **Depth**: Recursively fetches parent comments (up to 7 levels).
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
@@ -783,4 +782,3 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @connect      forum.effectivealtruism.org
 // ==/UserScript==
 ```
-

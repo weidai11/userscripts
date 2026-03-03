@@ -1,20 +1,17 @@
 import { Logger } from './logger';
+import { consumeAIPayloadKey, getPayloadStorageKeyFromHash } from './aiPayloadStorage';
 
 declare const GM_getValue: (key: string, defaultValue?: any) => any;
-declare const GM_setValue: (key: string, value: any) => void;
 declare const GM_deleteValue: (key: string) => void;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const ARENA_AUTO_CLOSE_INITIAL_DELAY_MS = 5 * 60 * 1000;
-const ARENA_AUTO_CLOSE_RETRY_DELAY_MS = 60 * 1000;
 const ARENA_PROMPT_REINJECT_TIMEOUT_MS = 45000;
 const ARENA_PROMPT_SETTLE_DELAY_MS = 120;
 const ARENA_PROMPT_RECHECK_DELAY_MS = 200;
 const ARENA_SEND_ATTEMPTS = 3;
 const ARENA_SEND_ATTEMPT_TIMEOUT_MS = 12000;
-
-const ARENA_LIKE_RESPONSE_BUTTON_SELECTOR = "button[aria-label='Like this response']";
+const ARENA_FALLBACK_PAYLOAD_KEY = 'arena_max_prompt_payload';
 
 const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
     "textarea[name='message']",
@@ -28,40 +25,8 @@ const ARENA_TEXTAREA_CLASS_FALLBACK_SELECTORS = [
     "textarea[class*='box-border'][class*='resize-none']"
 ].join(', ');
 
-const ARENA_RESPONSE_SELECTORS = [
-    '.prose',
-    '.markdown',
-    '[data-message-author-role="assistant"]',
-    '[data-testid*="assistant"]'
-].join(', ');
-
 const normalizeText = (value: string): string =>
     value.replace(/\s+/g, ' ').trim();
-
-const sharedPrefixLength = (a: string, b: string): number => {
-    const max = Math.min(a.length, b.length);
-    let i = 0;
-    while (i < max && a[i] === b[i]) i++;
-    return i;
-};
-
-function isLikelyPromptEchoText(cleanText: string, submittedPrompt: string): boolean {
-    if (!cleanText || !submittedPrompt) return false;
-    if (cleanText === submittedPrompt) return true;
-
-    const promptProbe = submittedPrompt.slice(0, 220);
-    const textProbe = cleanText.slice(0, 220);
-    if (promptProbe.length >= 60 && cleanText.includes(promptProbe)) return true;
-    if (textProbe.length >= 60 && submittedPrompt.includes(textProbe)) return true;
-
-    return sharedPrefixLength(cleanText, submittedPrompt) >= 80;
-}
-
-const isLikelyUserMessage = (message: HTMLElement | undefined): boolean => {
-    if (!message) return false;
-    if (message.matches('[data-message-author-role="user"], [data-testid*="user"]')) return true;
-    return !!message.closest('[data-message-author-role="user"], [data-testid*="user"]');
-};
 
 function isArenaSendButton(btn: HTMLButtonElement): boolean {
     return (
@@ -274,217 +239,36 @@ async function automateRun(payload: string) {
     throw new Error(`Failed to submit prompt (${lastIssue})`);
 }
 
-function getLatestArenaResponseCandidate(): HTMLElement | undefined {
-    const assistantMessages = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"], [data-testid*="assistant"]')
-    );
-    if (assistantMessages.length > 0) return assistantMessages[assistantMessages.length - 1];
-
-    const richMessages = Array.from(document.querySelectorAll<HTMLElement>('.markdown, .prose'));
-    if (richMessages.length > 0) return richMessages[richMessages.length - 1];
-
-    return undefined;
-}
-
-function getAllLikeResponseButtons(): HTMLButtonElement[] {
-    return Array.from(document.querySelectorAll<HTMLButtonElement>(ARENA_LIKE_RESPONSE_BUTTON_SELECTOR));
-}
-
-function getLatestLikeResponseButton(): HTMLButtonElement | undefined {
-    const buttons = getAllLikeResponseButtons();
-    if (buttons.length === 0) return undefined;
-    buttons.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
-    return buttons[0];
-}
-
-type ArenaResponseCandidateScore = {
-    el: HTMLElement;
-    score: number;
-    verticalGap: number;
-    horizontalOverlap: number;
-    cleanTextLength: number;
-    isUser: boolean;
-};
-
-function scoreResponseCandidatesAboveLikeButton(button: HTMLButtonElement): ArenaResponseCandidateScore[] {
-    const buttonRect = button.getBoundingClientRect();
-    const allCandidates = Array.from(document.querySelectorAll<HTMLElement>(ARENA_RESPONSE_SELECTORS));
-    const uniqueCandidates = Array.from(new Set(allCandidates));
-
-    const scored: ArenaResponseCandidateScore[] = [];
-
-    for (const candidate of uniqueCandidates) {
-        if (!isVisibleElement(candidate)) continue;
-        if (candidate.contains(button) || button.contains(candidate)) continue;
-
-        const rect = candidate.getBoundingClientRect();
-        const verticalGap = buttonRect.top - rect.bottom;
-        if (verticalGap < -8) continue;
-
-        const horizontalOverlap = Math.max(
-            0,
-            Math.min(buttonRect.right, rect.right) - Math.max(buttonRect.left, rect.left)
-        );
-        const cleanTextLength = normalizeText(candidate.textContent || '').length;
-        if (cleanTextLength === 0) continue;
-
-        const isUser = isLikelyUserMessage(candidate);
-        const score =
-            -Math.abs(verticalGap) +
-            horizontalOverlap +
-            Math.min(cleanTextLength, 500) +
-            (isUser ? -1000 : 0);
-
-        scored.push({ el: candidate, score, verticalGap, horizontalOverlap, cleanTextLength, isUser });
-    }
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored;
-}
-
-async function waitForResponse(timeoutMs: number = 180000): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const startTime = Date.now();
-        let generationStarted = false;
-        let sawCandidateResponseNode = false;
-        let observedResponseChange = false;
-
-        const submittedPrompt = normalizeText(String(GM_getValue('arena_max_prompt_payload') || ''));
-
-        const getMessageSignature = (message: HTMLElement | undefined): string =>
-            message
-                ? `${message.childElementCount}:${normalizeText(message.textContent || '')}`
-                : '';
-
-        const initialMessages = document.querySelectorAll<HTMLElement>(ARENA_RESPONSE_SELECTORS);
-        const initialMessageCount = initialMessages.length;
-        const initialLastSignature = getMessageSignature(getLatestArenaResponseCandidate());
-        const initialLikeButtonCount = getAllLikeResponseButtons().length;
-        const initialLatestLikeButton = getLatestLikeResponseButton();
-
-        const checkCompletion = () => {
-            const elapsed = Date.now() - startTime;
-            if (elapsed > timeoutMs) {
-                const hint = sawCandidateResponseNode
-                    ? 'response controls never appeared'
-                    : `no response nodes found for selectors: ${ARENA_RESPONSE_SELECTORS}`;
-                return reject(new Error(`Timeout (${hint})`));
-            }
-
-            const hasStopIcon = document.querySelector('svg.lucide-square') !== null;
-            const latestLikeButton = getLatestLikeResponseButton();
-            const likeButtonCount = getAllLikeResponseButtons().length;
-
-            if (latestLikeButton) {
-                sawCandidateResponseNode = true;
-            }
-
-            const messages = document.querySelectorAll<HTMLElement>(ARENA_RESPONSE_SELECTORS);
-            const lastMessage = getLatestArenaResponseCandidate();
-            if (lastMessage) {
-                sawCandidateResponseNode = true;
-            }
-            const currentLastSignature = getMessageSignature(lastMessage);
-            if (messages.length !== initialMessageCount || currentLastSignature !== initialLastSignature) {
-                observedResponseChange = true;
-            }
-
-            if (hasStopIcon && !generationStarted) {
-                generationStarted = true;
-                GM_setValue('arena_max_status', 'AI is thinking...');
-            }
-
-            const likeButtonChanged =
-                likeButtonCount > initialLikeButtonCount ||
-                (latestLikeButton && latestLikeButton !== initialLatestLikeButton);
-
-            if ((generationStarted || observedResponseChange || likeButtonChanged) && latestLikeButton) {
-                const anchoredCandidate = scoreResponseCandidatesAboveLikeButton(latestLikeButton)[0]?.el;
-                if (anchoredCandidate) {
-                    const cleanText = normalizeText(anchoredCandidate.textContent || '');
-                    const isPromptEcho = submittedPrompt.length > 0 && isLikelyPromptEchoText(cleanText, submittedPrompt);
-                    if (cleanText.length > 0 && !isLikelyUserMessage(anchoredCandidate) && !isPromptEcho) {
-                        const contentNode = anchoredCandidate.querySelector<HTMLElement>('.markdown, .prose') || anchoredCandidate;
-                        return resolve(`<div class="pr-ai-text">${contentNode.innerHTML}</div>`);
-                    }
-                }
-            }
-
-            setTimeout(checkCompletion, 250);
-        };
-
-        checkCompletion();
-    });
-}
-
 /**
  * Main handler for Arena Max automation.
  */
 export async function handleArenaMax() {
-    const payload = GM_getValue('arena_max_prompt_payload');
+    const payloadStorageKey = getPayloadStorageKeyFromHash();
+    const storageKey = payloadStorageKey || ARENA_FALLBACK_PAYLOAD_KEY;
+    const payload = GM_getValue(storageKey);
     if (!payload) {
-        Logger.debug('Arena Max: No payload found in GM storage, skipping automation.');
+        if (payloadStorageKey) {
+            Logger.warn(`Arena Max: Missing payload for key "${payloadStorageKey}".`);
+        }
         return;
     }
 
     Logger.info('Arena Max: Automation triggered.');
 
     try {
-        GM_setValue('arena_max_status', 'Waiting for input field...');
-
-        GM_setValue('arena_max_status', 'Injecting metadata thread...');
-        const requestId = GM_getValue('arena_max_request_id');
         await injectPrompt(payload);
 
-        await sleep(1000);
-        GM_setValue('arena_max_status', 'Submitting prompt...');
         await automateRun(payload);
 
-        GM_setValue('arena_max_status', 'Waiting for response (or Cloudflare challenge)...');
-        const responseText = await waitForResponse();
-
-        GM_setValue('arena_max_status', 'Response received!');
-        GM_setValue('arena_max_response_payload', {
-            text: responseText,
-            requestId,
-            includeDescendants: GM_getValue('arena_max_include_descendants', false),
-            timestamp: Date.now()
-        });
-
-        GM_deleteValue('arena_max_prompt_payload');
-        GM_deleteValue('arena_max_request_id');
-        GM_deleteValue('arena_max_include_descendants');
-        GM_deleteValue('arena_max_status');
-
-        Logger.info('Arena Max: Response sent. Tab will close in 5m if no interaction.');
-
-        let hasInteracted = false;
-        const markInteracted = () => {
-            if (!hasInteracted) {
-                hasInteracted = true;
-                Logger.info('Arena Max: User returned to tab. Auto-close canceled.');
-            }
-        };
-
-        window.addEventListener('blur', () => {
-            window.addEventListener('mousedown', markInteracted, { once: true, capture: true });
-            window.addEventListener('keydown', markInteracted, { once: true, capture: true });
-            window.addEventListener('mousemove', markInteracted, { once: true, capture: true });
-        }, { once: true });
-
-        const checkClose = () => {
-            if (!hasInteracted && document.visibilityState !== 'visible') {
-                Logger.info('Arena Max: Idle and backgrounded. Closing tab.');
-                window.close();
-            } else if (!hasInteracted) {
-                Logger.info('Arena Max: 5m reached but tab is currently visible. Postponing close.');
-                setTimeout(checkClose, ARENA_AUTO_CLOSE_RETRY_DELAY_MS);
-            }
-        };
-
-        setTimeout(checkClose, ARENA_AUTO_CLOSE_INITIAL_DELAY_MS);
+        Logger.info('Arena Max: Prompt submitted. Continue in this tab.');
     } catch (error) {
         Logger.error('Arena Max: Automation failed', error);
-        GM_setValue('arena_max_status', `Error: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+        if (typeof GM_deleteValue === 'function') {
+            GM_deleteValue(storageKey);
+        }
+        if (payloadStorageKey) {
+            consumeAIPayloadKey(payloadStorageKey);
+        }
     }
 }

@@ -31,9 +31,7 @@ import {
   handleScrollToRoot,
   handleLoadParentsAndScroll,
 } from './navigation';
-import { handleSendToAIStudio } from '../features/aiStudioPopup';
-import { handleSendToArenaMax } from '../features/arenaMaxPopup';
-import { Logger } from '../utils/logger';
+import { handleSendToAIStudio, handleSendToArenaMax } from '../features/aiProviders';
 
 
 let eventsAbort: AbortController | null = null;
@@ -47,7 +45,6 @@ export const attachEventListeners = (state: ReaderState): void => {
   // Idempotency guard: Abort previous listeners
   if (eventsAbort) {
     eventsAbort.abort();
-    Logger.debug('Aborted previous event listeners to re-attach.');
   }
   eventsAbort = new AbortController();
   const signal = eventsAbort.signal;
@@ -60,7 +57,6 @@ export const attachEventListeners = (state: ReaderState): void => {
 
   // Mousedown for vote interactions (need to track hold duration)
   document.addEventListener('mousedown', (e) => {
-    Logger.debug(`document.mousedown: target=${(e.target as HTMLElement).tagName}.${(e.target as HTMLElement).className}`);
     const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement;
     if (!target) return;
 
@@ -68,11 +64,8 @@ export const attachEventListeners = (state: ReaderState): void => {
     if (!action) return;
 
     if (target.classList.contains('disabled')) {
-      Logger.debug(`action ${action} is disabled, ignoring`);
       return;
     }
-
-    Logger.debug(`Event: mousedown, action=${action}`);
 
     // Vote actions
     if (action === 'karma-up' || action === 'karma-down' || action === 'agree' || action === 'disagree') {

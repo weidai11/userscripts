@@ -1,6 +1,5 @@
 /**
- * AI Studio integration feature for Power Reader
- * Thin provider wrapper over shared AI popup/send/listener behavior
+ * AI provider send actions for Power Reader.
  */
 
 import { AI_STUDIO_PROMPT_PREFIX } from '../utils/ai-studio-prompt';
@@ -12,19 +11,22 @@ const aiStudioFeature = createAIProviderFeature({
   statusTag: '[AI Studio]',
   openingStatusText: '[AI Studio] Opening AI Studio tab...',
   openUrl: 'https://aistudio.google.com/prompts/new_chat',
-  cacheKeyPrefix: 'ai_studio',
-  hotkey: 'g',
-  requestIdKey: 'ai_studio_request_id',
   promptPayloadKey: 'ai_studio_prompt_payload',
-  includeDescendantsKey: 'ai_studio_include_descendants',
-  responsePayloadKey: 'ai_studio_response_payload',
-  statusKey: 'ai_studio_status',
+  getPromptPrefix: getAIStudioPrefix,
+  defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
+});
+
+const arenaMaxFeature = createAIProviderFeature({
+  name: 'Arena Max',
+  statusTag: '[Arena]',
+  openingStatusText: '[Arena Max] Opening Arena tab...',
+  openUrl: 'https://arena.ai/max',
+  promptPayloadKey: 'arena_max_prompt_payload',
+  // Intentional: Arena and AI Studio currently share one configurable prompt prefix.
+  // Keeps a single user-facing setting until we add provider-specific prompt controls.
   getPromptPrefix: getAIStudioPrefix,
   defaultPromptPrefix: AI_STUDIO_PROMPT_PREFIX
 });
 
 export const handleSendToAIStudio = aiStudioFeature.handleSend;
-export const displayAIPopup = aiStudioFeature.displayPopup;
-export const closeAIPopup = aiStudioFeature.closePopup;
-export const initAIStudioListener = aiStudioFeature.initListener;
-export const setupAIStudioKeyboard = aiStudioFeature.setupKeyboard;
+export const handleSendToArenaMax = arenaMaxFeature.handleSend;

@@ -3,7 +3,7 @@ import { initPowerReader } from './helpers/setup';
 
 test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
 
-    test('Shift-G over a comment includes descendants in XML payload', async ({ page }) => {
+    test('[PR-AI-04] Shift-G over a comment includes descendants in XML payload', async ({ page }) => {
         const posts = [{ _id: 'p1', title: 'Post 1', postedAt: new Date().toISOString() }];
         const comments = [
             {
@@ -29,7 +29,7 @@ test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
             comments,
             onInit: `
                 window.GM_setValue = (key, value) => {
-                    if (key === 'ai_studio_prompt_payload') {
+                    if (key.startsWith('ai_studio_prompt_payload:')) {
                         window.__LAST_PAYLOAD = value;
                     }
                 };
@@ -85,7 +85,7 @@ test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
             comments,
             onInit: `
                 window.GM_setValue = (key, value) => {
-                    if (key === 'ai_studio_prompt_payload') {
+                    if (key.startsWith('ai_studio_prompt_payload:')) {
                         window.__LAST_PAYLOAD = value;
                     }
                 };

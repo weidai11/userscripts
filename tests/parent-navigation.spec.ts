@@ -240,4 +240,78 @@ test.describe('Power Reader Parent Navigation', () => {
         await expect(parentComment).toHaveClass(/highlight-parent/);
         await expect(page.locator(`.pr-comment[data-id="${missingParentId}"][data-placeholder="1"]`)).toHaveCount(0);
     });
+
+    test('[PR-NAV-08][PR-POST-07] loaded missing parent remains visible after [e] loads post body', async ({ page }) => {
+        const childId = 'child-for-post-load';
+        const missingParentId = 'parent-for-post-load';
+
+        await initPowerReader(page, {
+            testMode: true,
+            comments: [
+                {
+                    _id: childId,
+                    postId: 'p1',
+                    pageUrl: 'https://example.com/c1',
+                    htmlBody: '<p>Child before parent load</p>',
+                    postedAt: new Date().toISOString(),
+                    baseScore: 5,
+                    parentCommentId: missingParentId,
+                    user: { _id: 'u2', username: 'ChildAuthor' },
+                    post: { _id: 'p1', title: 'Post 1' }
+                }
+            ],
+            onGraphQL: `
+                if (query.includes('query GetComment')) {
+                    return {
+                        data: {
+                            comment: {
+                                result: {
+                                    _id: '${missingParentId}',
+                                    postId: 'p1',
+                                    pageUrl: 'https://example.com/parent',
+                                    htmlBody: '<p>Loaded parent should stay visible</p>',
+                                    postedAt: new Date(Date.now() - 100000).toISOString(),
+                                    baseScore: 20,
+                                    parentCommentId: null,
+                                    user: { _id: 'u1', username: 'MissingParentAuthor' },
+                                    post: { _id: 'p1', title: 'Post 1' }
+                                }
+                            }
+                        }
+                    };
+                }
+                if (query.includes('query GetPost')) {
+                    return {
+                        data: {
+                            post: {
+                                result: {
+                                    _id: 'p1',
+                                    title: 'Post 1',
+                                    htmlBody: '<p>Loaded post body</p>',
+                                    pageUrl: 'https://example.com/post-1',
+                                    postedAt: new Date().toISOString(),
+                                    baseScore: 10,
+                                    voteCount: 0,
+                                    commentCount: 1,
+                                    wordCount: 3,
+                                    user: { _id: 'u-post', username: 'PostAuthor', karma: 42 }
+                                }
+                            }
+                        }
+                    };
+                }
+            `
+        });
+
+        await page.locator(`.pr-comment[data-id="${childId}"] [data-action="find-parent"]`).click();
+        const loadedParent = page.locator(`.pr-comment[data-id="${missingParentId}"]`);
+        await expect(loadedParent).toBeVisible();
+        await expect(loadedParent).toContainText('Loaded parent should stay visible');
+
+        await page.locator('.pr-post[data-id="p1"] [data-action="toggle-post-body"]').first().click();
+
+        await expect(page.locator('.pr-post[data-id="p1"] .pr-post-body-container')).toContainText('Loaded post body');
+        await expect(loadedParent).toBeVisible();
+        await expect(loadedParent).toContainText('Loaded parent should stay visible');
+    });
 });

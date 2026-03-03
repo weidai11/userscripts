@@ -28,13 +28,12 @@ import { PowerReaderUIHost } from './render/powerReaderHost';
 import { initPersistenceSync } from './persistence/persistenceSync';
 
 // Features
-import { initAIStudioListener, setupAIStudioKeyboard } from './features/aiStudioPopup';
-import { initArenaMaxListener, setupArenaMaxKeyboard } from './features/arenaMaxPopup';
 import { initReactionTooltips } from './features/reactionTooltips';
 import { setupHeaderInjection } from './features/headerInjection';
 import { initArchive } from './archive/index';
 import { getForumMeta } from './utils/forum';
 import { setupSyncUiConsistencyLayer } from './features/syncUiConsistency';
+import { cleanupStaleAIPayloadKeys } from './utils/aiPayloadStorage';
 
 declare const __APP_VERSION__: string;
 
@@ -42,6 +41,11 @@ declare const __APP_VERSION__: string;
  * Main initialization entry point
  */
 const initReader = async (): Promise<void> => {
+  const cleanedPayloads = cleanupStaleAIPayloadKeys();
+  if (cleanedPayloads > 0) {
+    Logger.info(`Cleaned ${cleanedPayloads} stale AI payload entr${cleanedPayloads === 1 ? 'y' : 'ies'} from storage.`);
+  }
+
   const route = getRoute();
 
   if (route.type === 'skip') {
@@ -183,10 +187,6 @@ const loadAndRender = async (currentUserSnapshot?: unknown | null): Promise<void
     Logger.info('signalReady called');
 
     if (!root.dataset.listenersAttached) {
-      initAIStudioListener(state);
-      setupAIStudioKeyboard(state);
-      initArenaMaxListener(state);
-      setupArenaMaxKeyboard(state);
       initReactionTooltips();
       attachEventListeners(state);
       root.dataset.listenersAttached = 'true';

@@ -6,6 +6,7 @@
 
 import { Logger } from './logger';
 import { isEAForumHostname } from './forum';
+import { clearAllAIPayloadKeys } from './aiPayloadStorage';
 
 declare const GM_setValue: (key: string, value: string) => void;
 declare const GM_getValue: (key: string, defaultValue: string) => string;
@@ -366,6 +367,7 @@ export function clearAllStorage(options: StorageWriteOptions = {}): void {
   GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), '');
   GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), '');
   GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), '');
+  clearAllAIPayloadKeys();
 }
 
 /**

@@ -10,8 +10,6 @@ import { renderArchiveFeed, updateRenderLimit, resetRenderLimit, renderCardItem,
 import { setUIHost } from '../render/uiHost';
 import { ArchiveUIHost } from './uiHost';
 import { attachEventListeners } from '../events/index';
-import { initAIStudioListener } from '../features/aiStudioPopup';
-import { initArenaMaxListener } from '../features/arenaMaxPopup';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupInlineReactions } from '../features/inlineReactions';
 
@@ -1562,8 +1560,6 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
     // Attach standard event listeners using the host's reader state
     attachEventListeners(uiHost.getReaderState());
-    initAIStudioListener(uiHost.getReaderState());
-    initArenaMaxListener(uiHost.getReaderState());
 
     // Sticky header currently depends on main-reader singleton state (`getState()`).
     // Do not enable it in archive mode until it is wired to archive-local ReaderState.

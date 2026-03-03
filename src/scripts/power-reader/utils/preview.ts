@@ -54,8 +54,6 @@ let listenersAdded = false;
 export function initPreviewSystem(): void {
   if (listenersAdded) return;
 
-  Logger.debug('initPreviewSystem: adding global listeners');
-
   // Global mouse move listener for "transparent overlay" logic
   document.addEventListener('mousemove', (e) => {
     trackMousePos(e);
@@ -242,7 +240,6 @@ function recoverHoveredTrigger(trigger: HTMLElement, explicitHref?: string): HTM
  */
 export function cancelHoverTimeout(): void {
   if (state.hoverTimeout) {
-    Logger.debug('cancelHoverTimeout: clearing timeout', state.hoverTimeout);
     clearTimeout(state.hoverTimeout);
     state.hoverTimeout = null;
   }
@@ -252,12 +249,10 @@ export function cancelHoverTimeout(): void {
  * Dismiss any active preview
  */
 export function dismissPreview(): void {
-  Logger.debug('dismissPreview called');
   cancelHoverTimeout();
   lastIntentionalHoverStartTime = 0;
 
   if (state.activePreview) {
-    Logger.debug('dismissPreview: removing active preview');
     state.activePreview.remove();
     state.activePreview = null;
   }
@@ -284,9 +279,6 @@ export function setupHoverPreview(
 
   trigger.addEventListener('mouseenter', async (e: MouseEvent) => {
     trackMousePos(e);
-    Logger.debug('Preview mouseenter: trigger=', trigger.tagName, trigger.className, 'dataset=', JSON.stringify(trigger.dataset));
-
-    Logger.debug('setupHoverPreview: clearing pending timeout', state.hoverTimeout);
 
     // Highlight target matches immediately (even for non-intentional hovers).
     // Intentionality is applied only to preview popup opening.
@@ -367,7 +359,6 @@ export function setupHoverPreview(
         }
         effectiveTrigger = recoveredTrigger || trigger;
       }
-      Logger.debug('Preview timer triggered for', options.type);
       state.triggerRect = effectiveTrigger.getBoundingClientRect();
       state.currentTrigger = effectiveTrigger;
 
@@ -381,11 +372,9 @@ export function setupHoverPreview(
 
         // Check if we were dismissed while fetching
         if (state.currentTrigger !== effectiveTrigger) {
-          Logger.debug('Preview aborted: trigger changed during fetch');
           return;
         }
 
-        Logger.debug('Preview content fetched', content.length);
         showPreview(content, options.type, options.position || 'auto');
       } catch (e) {
         Logger.error('Preview fetch failed:', e);
@@ -394,7 +383,6 @@ export function setupHoverPreview(
   });
 
   trigger.addEventListener('mouseleave', () => {
-    Logger.debug('Preview mouseleave: trigger=', trigger.tagName, trigger.className);
     lastIntentionalHoverStartTime = 0;
     if (state.hoverTimeout) {
       clearTimeout(state.hoverTimeout);
@@ -427,7 +415,6 @@ export function manualPreview(
     if (!trigger.isConnected || !trigger.matches(':hover') || !isIntentionalHover()) {
       return;
     }
-    Logger.debug('Manual Preview triggered');
     state.triggerRect = trigger.getBoundingClientRect();
     state.currentTrigger = trigger;
 
@@ -440,11 +427,9 @@ export function manualPreview(
 
       // Check if we were dismissed while fetching
       if (state.currentTrigger !== trigger) {
-        Logger.debug('Manual Preview aborted: trigger changed during fetch');
         return;
       }
 
-      Logger.debug('Manual Preview content fetched', content.length);
       showPreview(content, options.type, options.position || 'auto');
     } catch (e) {
       Logger.error('Preview fetch failed:', e);
@@ -456,7 +441,6 @@ export function manualPreview(
  * Show preview overlay
  */
 function showPreview(content: string, type: 'post' | 'comment' | 'wiki' | 'author', position: 'above' | 'below' | 'auto'): void {
-  Logger.debug('showPreview: start');
   // Save triggerRect and currentTrigger before dismissing, since dismissPreview clears them
   const savedTriggerRect = state.triggerRect;
   const savedCurrentTrigger = state.currentTrigger;
@@ -479,7 +463,6 @@ function showPreview(content: string, type: 'post' | 'comment' | 'wiki' | 'autho
 
   // Adaptive width: expand if content overflows
   adaptPreviewWidth(preview, position);
-  Logger.debug('showPreview: end, activePreview visible=', !!document.querySelector('.pr-preview-overlay'));
 }
 
 /**
@@ -607,7 +590,6 @@ function positionPreview(preview: HTMLElement, position: 'above' | 'below' | 'au
     }
   }
 
-  Logger.debug(`positionPreview: finalTop=${finalTop}, finalLeft=${finalLeft}, vw=${vw}, vh=${vh}`);
   preview.style.left = `${finalLeft}px`;
   preview.style.top = `${finalTop}px`;
 }
@@ -778,7 +760,6 @@ export function isElementFullyVisible(el: HTMLElement): boolean {
     // If it's obscured by something that isn't the element or its children, it's not fully visible
     // We allow .pr-preview-overlay because it might be the "Ghost of Tooltips Past"
     if (!found || !(visibilityTarget === found || visibilityTarget.contains(found) || found.closest('.pr-preview-overlay'))) {
-      Logger.debug(`isElementFullyVisible: obscured at (${p.x}, ${p.y}) by`, found);
       return false;
     }
   }

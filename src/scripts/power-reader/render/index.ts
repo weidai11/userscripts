@@ -29,7 +29,7 @@ import { setupInlineReactions } from '../features/inlineReactions';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupScrollTracking } from '../features/scrollTracking';
 import { refreshPostActionButtons } from '../utils/dom';
-import { getCommentContextType } from '../types/uiCommentFlags';
+import { getCommentContextType, isForceVisible } from '../types/uiCommentFlags';
 import { getForumMeta } from '../utils/forum';
 import {
   getPersistedSyncToggle,
@@ -155,9 +155,10 @@ export const buildPostGroups = (
     const isLocallyRead = isRead(c._id, readState, c.postedAt);
     const implicit = isImplicitlyRead(c);
     const commentIsRead = isLocallyRead || implicit;
+    const forceVisible = isForceVisible(c);
 
-    if (isContext || !commentIsRead) {
-      if (!isContext) unreadIds.add(c._id);
+    if (isContext || !commentIsRead || forceVisible) {
+      if (!isContext && !commentIsRead) unreadIds.add(c._id);
 
       // Keep entire ancestor chain for context
       let currentId: string | null = c._id;
@@ -338,7 +339,7 @@ const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
           <ul>
             <li><strong>[e]</strong> Expand/load body · <strong>[a]</strong> Load all comments</li>
             <li><strong>[c]</strong> Scroll to comments · <strong>[n]</strong> Scroll to next post</li>
-            <li><strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[g]</strong> AI Studio (new tab) · <strong>[m]</strong> Arena.ai Max (new tab)</li>
             <li><strong>[−]/[+]</strong> Collapse/expand post + comments</li>
           </ul>
         </div>
@@ -347,7 +348,7 @@ const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
           <h4>💬 Comment Buttons (Hover + Key)</h4>
           <ul>
             <li><strong>[r]</strong> Load replies · <strong>[t]</strong> Trace to root (load parents)</li>
-            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio · <strong>[m]</strong> Arena.ai Max</li>
+            <li><strong>[^]</strong> Find parent (<strong>p</strong> or <strong>^</strong>) · <strong>[g]</strong> AI Studio (new tab) · <strong>[m]</strong> Arena.ai Max (new tab)</li>
             <li><strong>[−]/[+]</strong> Collapse/expand comment</li>
             <li><strong>[↑]/[↓]</strong> Mark author as preferred/disliked</li>
             <li style="font-size: 0.9em; color: #888; margin-top: 4px;"><i>Note: Buttons show disabled with a tooltip when not applicable.</i></li>
@@ -373,8 +374,8 @@ const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
         <div class="pr-help-section">
           <h4>↔️ Layout · AI: <strong>g</strong> / <strong>⇧G</strong></h4>
           <ul>
-            <li><strong>g</strong>: Thread to AI Studio · <strong>⇧G</strong>: + Descendants</li>
-            <li><strong>m</strong>: Thread to Arena Max · <strong>⇧M</strong>: + Descendants</li>
+            <li><strong>g</strong>: Thread to AI Studio (new tab) · <strong>⇧G</strong>: + Descendants</li>
+            <li><strong>m</strong>: Thread to Arena Max (new tab) · <strong>⇧M</strong>: + Descendants</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>
@@ -485,14 +486,6 @@ export const renderUI = (state: ReaderState): void => {
   `;
 
   root.innerHTML = html;
-
-  // Create sticky AI status bar if needed
-  if (!document.querySelector('.pr-sticky-ai-status')) {
-    const stickyStatus = document.createElement('div');
-    stickyStatus.className = 'pr-sticky-ai-status';
-    stickyStatus.id = 'pr-sticky-ai-status';
-    document.body.appendChild(stickyStatus);
-  }
 
   // Initialize resize handles (only once)
   if (!document.querySelector('.pr-resize-handle')) {

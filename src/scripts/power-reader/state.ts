@@ -32,10 +32,7 @@ export interface ReaderState {
   currentSelection: { text: string; range: Range } | null;
   lastMousePos: { x: number; y: number };
 
-  // AI Studio integration
-  currentAIRequestId: string | null;
-  activeAIPopup: HTMLElement | null;
-  sessionAICache: Record<string, string>;
+  // AI integration support caches
   postDescendantsCache: Map<string, {
     comments: Comment[];
     totalCount: number;
@@ -68,9 +65,6 @@ export const createInitialState = (): ReaderState => ({
   initialBatchNewestDate: null,
   currentSelection: null,
   lastMousePos: { x: 0, y: 0 },
-  currentAIRequestId: null,
-  activeAIPopup: null,
-  sessionAICache: {},
   postDescendantsCache: new Map(),
   isArchiveMode: false,
   archiveUsername: null,

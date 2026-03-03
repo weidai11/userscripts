@@ -9,7 +9,6 @@ import type {
 } from '../../../generated/graphql';
 import type { ReaderState } from '../state';
 import { Logger } from '../utils/logger';
-import { sanitizeHtml } from '../utils/sanitize';
 import {
   fetchAllPostCommentsWithCache,
   getAvailablePostComments,
@@ -20,10 +19,11 @@ import {
   promptLargeDescendantConfirmation,
   shouldPromptForLargeDescendants
 } from '../utils/descendantConfirm';
+import { consumeAIPayloadKey, registerAIPayloadKey } from '../utils/aiPayloadStorage';
 
 declare const GM_setValue: ((key: string, value: any) => void) | undefined;
 declare const GM_openInTab: ((url: string, options?: { active?: boolean }) => void) | undefined;
-declare const GM_addValueChangeListener: ((key: string, callback: (key: string, oldValue: any, newValue: any, remote: boolean) => void) => number) | undefined;
+declare const GM_deleteValue: ((key: string) => void) | undefined;
 
 interface AIUserRef {
   username?: string | null;
@@ -50,26 +50,14 @@ interface AIProviderConfig {
   statusTag: string;
   openingStatusText: string;
   openUrl: string;
-  cacheKeyPrefix: string;
-  hotkey: string;
-  requestIdKey: string;
   promptPayloadKey: string;
-  includeDescendantsKey: string;
-  responsePayloadKey: string;
-  statusKey: string;
   getPromptPrefix: () => string;
   defaultPromptPrefix: string;
 }
 
 interface AIProviderFeature {
   handleSend: (state: ReaderState, includeDescendants?: boolean, focalItemId?: string) => Promise<void>;
-  displayPopup: (text: string, state: ReaderState, includeDescendants?: boolean) => void;
-  closePopup: (state: ReaderState) => void;
-  initListener: (state: ReaderState) => void;
-  setupKeyboard: (state: ReaderState) => void;
 }
-
-const popupAutoCloseScrollAttached = new WeakSet<ReaderState>();
 
 const setStatusMessage = (message: string, color?: string): void => {
   const statusEl = document.querySelector('.pr-status') as HTMLElement | null;
@@ -96,29 +84,42 @@ const escapeXmlText = (value: string): string =>
 const escapeXmlAttr = (value: string): string =>
   escapeXmlText(value).replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-const toXml = (items: AIThreadItem[], focalId: string, descendants: AIThreadItem[] = []): string => {
+const makeIndent = (depth: number): string => '  '.repeat(Math.max(0, depth));
+
+const indentMultiline = (value: string, depth: number): string =>
+  value.replace(/^/gm, makeIndent(depth));
+
+const toXml = (
+  items: AIThreadItem[],
+  focalId: string,
+  descendants: AIThreadItem[] = [],
+  depth: number = 0
+): string => {
   if (items.length === 0) return '';
   const item = items[0];
   const remaining = items.slice(1);
+  const indent = makeIndent(depth);
+  const childIndent = makeIndent(depth + 1);
 
   const isFocal = item._id === focalId;
-  const type: 'post' | 'comment' = (item as Post).title ? 'post' : 'comment';
+  const type: 'post' | 'comment' = typeof item.title === 'string' ? 'post' : 'comment';
   const author = item.user?.username || item.author || 'unknown';
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
+  const titleAttr = type === 'post' && item.title ? ` title="${escapeXmlAttr(item.title)}"` : '';
 
-  let xml = `<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ''}>\n`;
-  xml += `<body_markdown>\n${escapeXmlText(md)}\n</body_markdown>\n`;
+  let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ''}${titleAttr}>\n`;
+  xml += `${childIndent}<body_markdown>\n${indentMultiline(escapeXmlText(md), depth + 2)}\n${childIndent}</body_markdown>\n`;
 
   if (isFocal && descendants.length > 0) {
-    xml += '<descendants>\n';
-    xml += descendantsToXml(descendants, focalId).split('\n').map(line => '  ' + line).join('\n') + '\n';
-    xml += '</descendants>\n';
+    xml += `${childIndent}<descendants>\n`;
+    xml += `${descendantsToXml(descendants, focalId, depth + 2)}\n`;
+    xml += `${childIndent}</descendants>\n`;
   }
 
   if (remaining.length > 0) {
-    xml += toXml(remaining, focalId, descendants).split('\n').map(line => '  ' + line).join('\n') + '\n';
+    xml += `${toXml(remaining, focalId, descendants, depth + 1)}\n`;
   }
-  xml += `</${type}>`;
+  xml += `${indent}</${type}>`;
   return xml;
 };
 
@@ -135,29 +136,59 @@ const buildDescendantChildrenIndex = (descendants: AIThreadItem[]): Map<string, 
 
 const descendantsToXmlWithIndex = (
   childrenByParent: Map<string, AIThreadItem[]>,
-  parentId: string
+  parentId: string,
+  depth: number
 ): string => {
   const children = childrenByParent.get(parentId) || [];
   if (children.length === 0) return '';
 
+  const indent = makeIndent(depth);
+  const childIndent = makeIndent(depth + 1);
+
   return children.map(child => {
     const author = child.user?.username || child.author || 'unknown';
     const md = child.contents?.markdown || child.htmlBody || '(no content)';
-    let xml = `<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
-    xml += `  <body_markdown>\n${escapeXmlText(md).split('\n').map((l: string) => '    ' + l).join('\n')}\n  </body_markdown>\n`;
-    const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id);
+    let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
+    xml += `${childIndent}<body_markdown>\n${indentMultiline(escapeXmlText(md), depth + 2)}\n${childIndent}</body_markdown>\n`;
+    const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1);
     if (grandChildrenXml) {
-      xml += grandChildrenXml.split('\n').map(line => '  ' + line).join('\n') + '\n';
+      xml += `${grandChildrenXml}\n`;
     }
-    xml += '</comment>';
+    xml += `${indent}</comment>`;
     return xml;
   }).join('\n');
 };
 
-const descendantsToXml = (descendants: AIThreadItem[], parentId: string): string => {
+const descendantsToXml = (
+  descendants: AIThreadItem[],
+  parentId: string,
+  depth: number = 0
+): string => {
   // Build parent->children index once to avoid repeated full-array scans per recursion level.
   const childrenByParent = buildDescendantChildrenIndex(descendants);
-  return descendantsToXmlWithIndex(childrenByParent, parentId);
+  return descendantsToXmlWithIndex(childrenByParent, parentId, depth);
+};
+
+const buildPayloadStorageKey = (baseKey: string): string =>
+  `${baseKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+
+const toTimestamp = (value?: string | null): number => {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const buildProviderUrl = (baseUrl: string, payloadKey: string): string => {
+  try {
+    const url = new URL(baseUrl);
+    const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash);
+    hashParams.set('pr_payload_key', payloadKey);
+    url.hash = hashParams.toString();
+    return url.toString();
+  } catch {
+    const separator = baseUrl.includes('#') ? '&' : '#';
+    return `${baseUrl}${separator}pr_payload_key=${encodeURIComponent(payloadKey)}`;
+  }
 };
 
 const fetchItemMarkdown = async (
@@ -167,7 +198,7 @@ const fetchItemMarkdown = async (
   providerName: string
 ): Promise<AIThreadItem | null> => {
   if (itemIsPost) {
-    const p = state.posts.find(p => p._id === itemId);
+    const p = state.postById.get(itemId);
     if (p?.contents?.markdown) return p;
   } else {
     const c = state.commentById.get(itemId);
@@ -185,17 +216,6 @@ const fetchItemMarkdown = async (
 };
 
 export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFeature => {
-  const getCacheKey = (id: string, includeDescendants: boolean = false): string =>
-    `${config.cacheKeyPrefix}:${id}:${includeDescendants ? 'with_descendants' : 'base'}`;
-
-  const closePopup = (state: ReaderState): void => {
-    if (state.activeAIPopup) {
-      state.activeAIPopup.remove();
-      state.activeAIPopup = null;
-    }
-    document.querySelectorAll('.being-summarized').forEach(el => el.classList.remove('being-summarized'));
-  };
-
   const handleSend = async (
     state: ReaderState,
     includeDescendants: boolean = false,
@@ -233,21 +253,12 @@ export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFea
       return;
     }
 
-    const cacheKey = getCacheKey(id, includeDescendants);
-    if (state.sessionAICache[cacheKey] && !(window as any).PR_FORCE_AI_REGEN) {
-      Logger.info(`${config.name}: Using session-cached answer for ${id}`);
-      displayPopup(state.sessionAICache[cacheKey], state, includeDescendants);
-      return;
-    }
-    (window as any).PR_FORCE_AI_REGEN = false;
-
     const isPost = itemEl.classList.contains('pr-post');
     Logger.info(`${config.name}: Target identified - ${isPost ? 'Post' : 'Comment'} ${id} (Include descendants: ${includeDescendants})`);
 
     try {
       setStatusMessage(`${config.statusTag} Building conversation thread...`, '#007bff');
 
-      const requestId = Math.random().toString(36).substring(2, 10);
       const lineage: AIThreadItem[] = [];
       let currentId: string | null = id;
       let currentIsPost = isPost;
@@ -342,193 +353,50 @@ export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFea
 
         if (decision === 'cancel') {
           setStatusMessage(`${config.statusTag} Action canceled.`, '#dc3545');
+          itemEl.classList.remove('being-summarized');
           return;
         }
 
         descendants = (decision === 'continue_without_loading' ? baselineDescendants : fullDescendants) as AIThreadItem[];
-        descendants.sort((a, b) => new Date(a.postedAt || '').getTime() - new Date(b.postedAt || '').getTime());
+        descendants.sort((a, b) => toTimestamp(a.postedAt) - toTimestamp(b.postedAt));
       }
 
       const threadXml = lineage.length > 0 ? toXml(lineage, id, descendants) : '';
       const finalPayload = (config.getPromptPrefix() || config.defaultPromptPrefix) + threadXml;
+      const payloadStorageKey = buildPayloadStorageKey(config.promptPayloadKey);
+      const providerUrl = buildProviderUrl(config.openUrl, payloadStorageKey);
 
       Logger.info(`${config.name}: Opening tab with deep threaded payload...`);
-      state.currentAIRequestId = requestId;
-      if (typeof GM_setValue === 'function') {
-        GM_setValue(config.requestIdKey, requestId);
-        GM_setValue(config.promptPayloadKey, finalPayload);
-        GM_setValue(config.includeDescendantsKey, includeDescendants);
+      if (typeof GM_setValue !== 'function') {
+        throw new Error('GM_setValue unavailable');
       }
-      if (typeof GM_openInTab === 'function') {
-        GM_openInTab(config.openUrl, { active: true });
+      GM_setValue(payloadStorageKey, finalPayload);
+      registerAIPayloadKey(payloadStorageKey);
+
+      try {
+        if (typeof GM_openInTab !== 'function') {
+          throw new Error('GM_openInTab unavailable');
+        }
+        GM_openInTab(providerUrl, { active: true });
+      } catch (openError) {
+        if (typeof GM_deleteValue === 'function') {
+          GM_deleteValue(payloadStorageKey);
+        }
+        consumeAIPayloadKey(payloadStorageKey);
+        throw openError;
       }
 
       setStatusMessage(config.openingStatusText, '#28a745');
+      // Clear handoff highlight after a short delay now that completion is shown in provider tab.
+      window.setTimeout(() => {
+        if (itemEl?.isConnected) itemEl.classList.remove('being-summarized');
+      }, 3000);
     } catch (error) {
       Logger.error(`${config.name}: Failed to prepare threaded payload`, error);
       setStatusMessage(`[${config.name}] Failed to prepare payload. Check console.`, '#dc3545');
+      itemEl.classList.remove('being-summarized');
     }
   };
 
-  const displayPopup = (text: string, state: ReaderState, includeDescendants: boolean = false): void => {
-    if (state.activeAIPopup) {
-      state.activeAIPopup.remove();
-      state.activeAIPopup = null;
-    }
-
-    const popup = document.createElement('div');
-    popup.className = `pr-ai-popup${includeDescendants ? ' pr-ai-include-descendants' : ''}`;
-    popup.innerHTML = `
-    <div class="pr-ai-popup-header">
-      <h3>Summary and Potential Errors</h3>
-      <div class="pr-ai-popup-actions">
-        <button class="pr-ai-popup-regen">Regenerate</button>
-        <button class="pr-ai-popup-close">Close</button>
-      </div>
-    </div>
-    <div class="pr-ai-popup-content"></div>
-  `;
-
-    const popupContent = popup.querySelector('.pr-ai-popup-content');
-    if (popupContent) popupContent.innerHTML = sanitizeHtml(text);
-
-    document.body.appendChild(popup);
-    state.activeAIPopup = popup;
-
-    popup.querySelector('.pr-ai-popup-close')?.addEventListener('click', () => closePopup(state));
-    popup.querySelector('.pr-ai-popup-regen')?.addEventListener('click', () => {
-      (window as any).PR_FORCE_AI_REGEN = true;
-      const isShifted = popup.classList.contains('pr-ai-include-descendants');
-      const focalId = (document.querySelector('.being-summarized') as HTMLElement | null)?.dataset.id;
-      handleSend(state, isShifted, focalId);
-    });
-  };
-
-  const initListener = (state: ReaderState): void => {
-    if (typeof GM_addValueChangeListener !== 'function') {
-      Logger.debug(`${config.name}: GM_addValueChangeListener not available, skipping listener setup`);
-      return;
-    }
-
-    GM_addValueChangeListener(config.responsePayloadKey, (_key, _oldVal, newVal, remote) => {
-      if (!newVal || !remote) return;
-
-      const { text, requestId, includeDescendants } = newVal;
-      const includeDescendantsMode = !!includeDescendants;
-      if (requestId === state.currentAIRequestId) {
-        Logger.info(`${config.name}: Received matching response!`);
-
-        const target = document.querySelector('.being-summarized') as HTMLElement;
-        if (target?.dataset.id) {
-          state.sessionAICache[getCacheKey(target.dataset.id, includeDescendantsMode)] = text;
-        }
-
-        displayPopup(text, state, includeDescendantsMode);
-        setStatusMessage(`${config.name} response received.`);
-
-        const stickyEl = document.getElementById('pr-sticky-ai-status');
-        if (stickyEl) {
-          stickyEl.classList.remove('visible');
-          stickyEl.textContent = '';
-        }
-
-        window.focus();
-      } else {
-        Logger.debug(`${config.name}: Received response for different request. Ignoring.`);
-      }
-    });
-
-    GM_addValueChangeListener(config.statusKey, (_key, _oldVal, newVal, remote) => {
-      if (!newVal || !remote) return;
-      Logger.debug(`${config.name} Status: ${newVal}`);
-
-      const statusEl = document.querySelector('.pr-status');
-      if (statusEl) setStatusMessage(`${config.statusTag} ${String(newVal)}`, '#28a745');
-
-      const stickyEl = document.getElementById('pr-sticky-ai-status');
-      if (stickyEl) {
-        stickyEl.textContent = `AI: ${newVal}`;
-        stickyEl.classList.add('visible');
-
-        if (newVal === 'Response received!' || newVal.startsWith('Error:')) {
-          setTimeout(() => {
-            if (stickyEl.textContent?.includes(newVal)) {
-              stickyEl.classList.remove('visible');
-            }
-          }, 5000);
-        }
-      }
-    });
-
-    if (!popupAutoCloseScrollAttached.has(state)) {
-      popupAutoCloseScrollAttached.add(state);
-      let scrollThrottle: number | null = null;
-      window.addEventListener('scroll', () => {
-        if (scrollThrottle || !state.activeAIPopup) return;
-
-        scrollThrottle = window.setTimeout(() => {
-          scrollThrottle = null;
-          if (!state.activeAIPopup) return;
-
-          const target = document.querySelector('.being-summarized');
-          if (target) {
-            const rect = target.getBoundingClientRect();
-            const isVisible = rect.bottom > 0 && rect.top < window.innerHeight;
-            if (!isVisible) {
-              Logger.info('AI Popup: Target scrolled off-screen. Auto-closing popup.');
-              if (state.activeAIPopup) {
-                state.activeAIPopup.remove();
-                state.activeAIPopup = null;
-              }
-              document.querySelectorAll('.being-summarized').forEach(el => el.classList.remove('being-summarized'));
-            }
-          }
-        }, 500);
-      }, { passive: true });
-    }
-  };
-
-  const setupKeyboard = (state: ReaderState): void => {
-    document.addEventListener('keydown', (e) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-        return;
-      }
-
-      const key = e.key;
-      const lowerKey = key.toLowerCase();
-
-      if (key === 'Escape') {
-        closePopup(state);
-        return;
-      }
-
-      if (e.ctrlKey || e.altKey || e.metaKey) {
-        return;
-      }
-
-      if (lowerKey === config.hotkey) {
-        if (state.activeAIPopup) {
-          const elementUnderMouse = document.elementFromPoint(state.lastMousePos.x, state.lastMousePos.y);
-          const isInPopup = !!elementUnderMouse?.closest('.pr-ai-popup');
-          const isInFocalItem = !!elementUnderMouse?.closest('.being-summarized');
-
-          if (isInPopup || isInFocalItem) {
-            closePopup(state);
-            e.preventDefault();
-            e.stopPropagation();
-            e.stopImmediatePropagation();
-          }
-        }
-      }
-    });
-  };
-
-  return {
-    handleSend,
-    displayPopup,
-    closePopup,
-    initListener,
-    setupKeyboard
-  };
+  return { handleSend };
 };

@@ -3,7 +3,7 @@ import { initPowerReader } from './helpers/setup';
 
 test.describe('Power Reader AI Studio Integration', () => {
 
-    test('[PR-AI-01][PR-AI-02][PR-AI-03][PR-AI-05][PR-AI-06][PR-AI-07] Pressing "g" over a comment triggers AI Studio prompt generation', async ({ page }) => {
+    test('[PR-CMTBTN-03][PR-AI-01][PR-AI-02][PR-AI-05][PR-AI-06][PR-AI-07] Pressing "g" over a comment triggers AI Studio prompt generation', async ({ page }) => {
         const comments = [
             {
                 _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
@@ -50,7 +50,7 @@ test.describe('Power Reader AI Studio Integration', () => {
             const originalSetValue = (window as any).GM_setValue;
             (window as any).GM_setValue = (key: string, value: any) => {
                 originalSetValue(key, value);
-                if (key === 'ai_studio_prompt_payload') {
+                if (key.startsWith('ai_studio_prompt_payload:')) {
                     (window as any)._lastAiPayload = value;
                 }
             };
@@ -99,8 +99,15 @@ test.describe('Power Reader AI Studio Integration', () => {
         await page.keyboard.press('g');
 
         // Verify outcome via __GM_CALLS
-        await page.waitForFunction(() => (window as any).__GM_CALLS?.ai_studio_prompt_payload !== undefined);
-        const payload = await page.evaluate(() => (window as any).__GM_CALLS?.ai_studio_prompt_payload);
+        await page.waitForFunction(() => {
+            const calls = (window as any).__GM_CALLS || {};
+            return Object.keys(calls).some((key) => key.startsWith('ai_studio_prompt_payload:'));
+        });
+        const payload = await page.evaluate(() => {
+            const calls = (window as any).__GM_CALLS || {};
+            const payloadKey = Object.keys(calls).find((key) => key.startsWith('ai_studio_prompt_payload:'));
+            return payloadKey ? calls[payloadKey] : undefined;
+        });
         expect(payload).toContain(customPrefix);
     });
 });
