@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.704] - 2026-03-03
+
+### Changed
+- **Recent-comments partial-error tolerance expanded ([PR-DATA-03.1], [PR-DATA-03.2], [PR-LOAD-12])**: Initial reader recent-comments loads and bottom polling checks now explicitly opt into partial GraphQL data only for allowlisted missing-comment/pageUrl resolver failures; non-allowlisted errors still fail fast.
+
+### Added
+- **Resilience coverage for LW and EAF recent-comments flows**: Added tests for tolerated and non-tolerated partial-error behavior across initial load and bottom polling paths, including EAF legacy-adapter query shape coverage.
+
 ## [1.2.698] - 2026-03-01
 
 ### Added

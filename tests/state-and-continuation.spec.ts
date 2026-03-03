@@ -198,6 +198,105 @@ test.describe('Power Reader State and Continuation', () => {
         await expect(bottomMsg).toHaveClass(/has-more/);
     });
 
+    test('[PR-LOAD-09][PR-LOAD-12][PR-DATA-03.1][PR-DATA-03.2] Bottom polling tolerates allowlisted partial errors', async ({ page }) => {
+        const comments = [{
+            _id: 'c1', postId: 'p1',
+            htmlBody: '<p>Body</p>',
+            postedAt: '2024-01-01T00:00:00.000Z',
+            baseScore: 10,
+            user: { _id: 'a1', username: 'Author', karma: 100 },
+            post: { _id: 'p1', title: 'Post' }
+        }];
+
+        await initPowerReader(page, {
+            testMode: true,
+            verbose: true,
+            appDebugMode: true,
+            appVerbose: true,
+            comments,
+            posts: [{ _id: 'p1', title: 'Post' }],
+            onMutation: `
+                if (query.includes('GetAllRecentComments')) {
+                    if (!variables.after) return { data: { comments: { results: ${JSON.stringify(comments)} } } };
+                    if (variables.limit === 1) {
+                        return {
+                            data: { comments: { results: [{ _id: 'c-new', postedAt: '2024-01-02T00:00:00.000Z' }] } },
+                            errors: [{
+                                message: 'Unable to find document for comment: tolerated',
+                                path: ['comments', 'results', 0, 'pageUrl']
+                            }]
+                        };
+                    }
+                    return { data: { comments: { results: [] } } };
+                }
+            `
+        });
+
+        await page.evaluate(() => {
+            const root = document.getElementById('power-reader-root') || document.body;
+            const spacer = document.createElement('div');
+            spacer.id = 'pr-test-spacer';
+            spacer.style.height = '3000px';
+            root.appendChild(spacer);
+            window.scrollTo(0, document.body.scrollHeight);
+            window.dispatchEvent(new Event('scroll'));
+        });
+
+        const bottomMsg = page.locator('#pr-bottom-message');
+        await expect(bottomMsg).toBeVisible({ timeout: 15000 });
+        await expect(bottomMsg).toHaveText(/New comments available/);
+        await expect(bottomMsg).not.toHaveText(/Failed to check server/);
+    });
+
+    test('[PR-LOAD-09][PR-LOAD-12][PR-DATA-03.1][PR-DATA-03.2] Bottom polling rejects non-allowlisted partial errors', async ({ page }) => {
+        const comments = [{
+            _id: 'c1', postId: 'p1',
+            htmlBody: '<p>Body</p>',
+            postedAt: '2024-01-01T00:00:00.000Z',
+            baseScore: 10,
+            user: { _id: 'a1', username: 'Author', karma: 100 },
+            post: { _id: 'p1', title: 'Post' }
+        }];
+
+        await initPowerReader(page, {
+            testMode: true,
+            verbose: true,
+            appDebugMode: true,
+            appVerbose: true,
+            comments,
+            posts: [{ _id: 'p1', title: 'Post' }],
+            onMutation: `
+                if (query.includes('GetAllRecentComments')) {
+                    if (!variables.after) return { data: { comments: { results: ${JSON.stringify(comments)} } } };
+                    if (variables.limit === 1) {
+                        return {
+                            data: { comments: { results: [{ _id: 'c-new', postedAt: '2024-01-02T00:00:00.000Z' }] } },
+                            errors: [{
+                                message: 'Unexpected non-allowlisted failure',
+                                path: ['comments', 'results', 0, 'post']
+                            }]
+                        };
+                    }
+                    return { data: { comments: { results: [] } } };
+                }
+            `
+        });
+
+        await page.evaluate(() => {
+            const root = document.getElementById('power-reader-root') || document.body;
+            const spacer = document.createElement('div');
+            spacer.id = 'pr-test-spacer';
+            spacer.style.height = '3000px';
+            root.appendChild(spacer);
+            window.scrollTo(0, document.body.scrollHeight);
+            window.dispatchEvent(new Event('scroll'));
+        });
+
+        const bottomMsg = page.locator('#pr-bottom-message');
+        await expect(bottomMsg).toBeVisible({ timeout: 15000 });
+        await expect(bottomMsg).toHaveText(/Failed to check server/);
+    });
+
     test('[PR-READ-03] Session advances and increments date by 1ms when at bottom', async ({ page }) => {
         const consoleMsgs: string[] = [];
         page.on('console', msg => consoleMsgs.push(msg.text()));

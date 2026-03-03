@@ -7,9 +7,16 @@ import {
 } from '../utils/storage';
 import type { AllRecentCommentsResponse } from '../../../shared/graphql/queries';
 import { GET_ALL_RECENT_COMMENTS } from '../../../shared/graphql/queries';
-import { queryGraphQL } from '../../../shared/graphql/client';
+import { queryGraphQL, type GraphQLQueryOptions } from '../../../shared/graphql/client';
 import { Logger } from '../utils/logger';
 import { isEAForumHost } from '../utils/forum';
+
+const RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
+    allowPartialData: true,
+    // Tolerate transient LW pageUrl resolver failures on individual recent comments.
+    toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPageUrl/i],
+    operationName: 'GetAllRecentComments',
+};
 
 /**
  * Service to track read status via scrolling
@@ -302,7 +309,7 @@ export class ReadTracker {
                 const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
                     limit: 1,
                     sortBy: 'newest'
-                }) as AllRecentCommentsResponse;
+                }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS) as AllRecentCommentsResponse;
                 const newestPostedAt = res?.comments?.results?.[0]?.postedAt;
                 const newestMs = newestPostedAt ? new Date(newestPostedAt).getTime() : NaN;
                 const afterMs = new Date(afterIso).getTime();
@@ -312,7 +319,7 @@ export class ReadTracker {
                     after: afterIso,
                     limit: 1,
                     sortBy: 'oldest'
-                }) as AllRecentCommentsResponse;
+                }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS) as AllRecentCommentsResponse;
                 hasMore = (res?.comments?.results?.length || 0) > 0;
             }
 

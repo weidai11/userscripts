@@ -37,7 +37,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-DATA-02]** **Transport**: `GM_xmlhttpRequest` for cross-origin requests
 - **[PR-DATA-03]** **Strict-By-Default Errors**: The GraphQL client MUST throw on GraphQL `errors` by default, including responses that contain both `data` and `errors`. This protects mutation and interactive workflows from silent failure.
 - **[PR-DATA-03.1]** **Scoped Partial Success**: Partial-success mode is allowed only via explicit opt-in per call site. In partial mode, the client MUST return `data` only when all errors match an allowlist of tolerated patterns; otherwise it MUST throw.
-- **[PR-DATA-03.2]** **Archive-Only Tolerance**: Tolerated partial-success behavior is limited to bulk archive fetch paths. Interactive and mutation paths (votes, reactions, navigation actions) MUST remain strict.
+- **[PR-DATA-03.2]** **Bulk-Read Tolerance Only**: Tolerated partial-success behavior is limited to bulk read paths (archive fetches and recent-comments list/polling fetches). Interactive and mutation paths (votes, reactions, navigation actions) MUST remain strict.
 - **[PR-DATA-04]** **UI Fallbacks**: Rendering components MUST handle missing or null field values (like `pageUrl`) gracefully, providing sensible fallbacks (e.g., `'#'` for links) to prevent UI crashes or broken interactions when the server fails to resolve specific fields.
 - **[PR-DATA-05]** **Cross-Site Query Compatibility**: Queries are written in the modern `selector`/top-level-args syntax (for codegen type safety on LW). A runtime adapter in the GraphQL client automatically rewrites them to the legacy `input`/`terms` syntax when running on EA Forum. Every query using `selector` MUST be registered in `LEGACY_ADAPTERS` (`src/shared/graphql/legacyAdapter.ts`) so it works on EAF.
 
@@ -219,6 +219,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-LOAD-09]** When user scrolls to bottom of page, update `loadFrom` to the ISO timestamp of the **newest comment from the initial comments batch** + 1ms (excluding smart-load and user-triggered loads).
 - **[PR-LOAD-10]** Store via `GM_setValue('power-reader-read-from', isoDateString)`
 - **[PR-LOAD-11]** When `moreCommentsAvailable` is true (comments batch hit `loadMax`), show warning: "There are more comments available. Please reload after reading current comments to continue."
+- **[PR-LOAD-12]** **Recent Comments Partial-Error Resilience**: Initial recent-comments fetch and bottom "check for more comments" fetch may accept partial GraphQL data only when every error matches the tolerated missing-comment-document/pageUrl resolver patterns; otherwise they must fail fast.
 
 ### 2. Post & Comment Threading
 

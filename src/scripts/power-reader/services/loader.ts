@@ -3,7 +3,7 @@
  * Implements the phased loading strategy from SPEC.md
  */
 
-import { queryGraphQL } from '../../../shared/graphql/client';
+import { queryGraphQL, type GraphQLQueryOptions } from '../../../shared/graphql/client';
 import {
   GET_CURRENT_USER,
   GET_SUBSCRIPTIONS,
@@ -55,6 +55,15 @@ interface CurrentUserBootstrapSnapshot {
   reactPaletteStyle?: 'listView' | 'gridView' | null;
 }
 
+const RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS = (
+  operationName: string
+): GraphQLQueryOptions => ({
+  allowPartialData: true,
+  // LW occasionally serves recent comments whose pageUrl resolver fails transiently.
+  toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPageUrl/i],
+  operationName,
+});
+
 const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> => {
   const cutoffMs = new Date(afterDate).getTime();
   if (!Number.isFinite(cutoffMs)) {
@@ -76,7 +85,8 @@ const fetchRecentCommentsForEAF = async (afterDate: string): Promise<Comment[]> 
         limit: pageSize,
         offset,
         sortBy: 'newest',
-      }
+      },
+      RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS('GetAllRecentCommentsLite')
     );
     pagesFetched++;
 
@@ -140,7 +150,7 @@ export const loadInitial = async (
       after: afterDate,
       limit: CONFIG.loadMax,
       sortBy: afterDate ? 'oldest' : 'newest'
-    }).then(res => (res?.comments?.results || []) as Comment[]);
+    }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS('GetAllRecentCommentsLite')).then(res => (res?.comments?.results || []) as Comment[]);
 
   const [userRes, comments] = await Promise.all([
     userPromise,

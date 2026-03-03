@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.703
+// @version    1.2.704
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1774,7 +1774,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.703"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.704"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2772,6 +2772,11 @@ hoverDelay: 300,
       setJustRevealed(to, true);
     }
   };
+  const RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS$1 = (operationName) => ({
+    allowPartialData: true,
+toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPageUrl/i],
+    operationName
+  });
   const fetchRecentCommentsForEAF = async (afterDate) => {
     const cutoffMs = new Date(afterDate).getTime();
     if (!Number.isFinite(cutoffMs)) {
@@ -2791,7 +2796,8 @@ hoverDelay: 300,
           limit: pageSize,
           offset,
           sortBy: "newest"
-        }
+        },
+        RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS$1("GetAllRecentCommentsLite")
       );
       pagesFetched++;
       const batch = res?.comments?.results || [];
@@ -2837,7 +2843,7 @@ hoverDelay: 300,
       after: afterDate,
       limit: CONFIG.loadMax,
       sortBy: afterDate ? "oldest" : "newest"
-    }).then((res) => res?.comments?.results || []);
+    }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS$1("GetAllRecentCommentsLite")).then((res) => res?.comments?.results || []);
     const [userRes, comments] = await Promise.all([
       userPromise,
       commentsPromise
@@ -5925,6 +5931,11 @@ refresh() {
       }
     }, { capture: true, passive: true });
   };
+  const RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS = {
+    allowPartialData: true,
+toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPageUrl/i],
+    operationName: "GetAllRecentComments"
+  };
   class ReadTracker {
     static UNREAD_ITEM_SELECTOR = ".pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)";
     static BOTTOM_MARGIN_PX = 150;
@@ -6147,7 +6158,7 @@ refresh() {
           const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
             limit: 1,
             sortBy: "newest"
-          });
+          }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS);
           const newestPostedAt = res?.comments?.results?.[0]?.postedAt;
           const newestMs = newestPostedAt ? new Date(newestPostedAt).getTime() : NaN;
           const afterMs = new Date(afterIso).getTime();
@@ -6157,7 +6168,7 @@ refresh() {
             after: afterIso,
             limit: 1,
             sortBy: "oldest"
-          });
+          }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS);
           hasMore = (res?.comments?.results?.length || 0) > 0;
         }
         if (hasMore) {
@@ -8625,7 +8636,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.704"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -8800,7 +8811,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.704"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -15206,7 +15217,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.704"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17262,7 +17273,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.703"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.704"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

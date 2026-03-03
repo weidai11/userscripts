@@ -115,6 +115,129 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await expect(page.locator('.pr-item')).toHaveCount(0);
     });
 
+    test('reader initial load tolerates allowed recent-comment partial errors [PR-LOAD-12][PR-DATA-03.1][PR-DATA-03.2]', async ({ page }) => {
+        const partialComment = {
+            _id: 'c-partial',
+            postId: 'p-partial',
+            pageUrl: null,
+            htmlBody: '<p>Partial comment still renders</p>',
+            postedAt: '2026-03-03T07:06:20.286Z',
+            baseScore: 10,
+            voteCount: 1,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            author: 'PartialAuthor',
+            rejected: false,
+            topLevelCommentId: 'c-partial',
+            user: { _id: 'u-partial', username: 'PartialAuthor', displayName: 'Partial Author', slug: 'partial-author', karma: 100 },
+            post: {
+                _id: 'p-partial',
+                title: 'Partial Post',
+                slug: 'partial-post',
+                pageUrl: 'https://www.lesswrong.com/posts/p-partial/partial-post',
+                postedAt: '2026-03-03T07:00:00.000Z',
+                baseScore: 20,
+                voteCount: 2,
+                commentCount: 1,
+                wordCount: 10,
+                user: { _id: 'u-post', username: 'PostAuthor', displayName: 'Post Author', slug: 'post-author', karma: 120 },
+            },
+            parentCommentId: null,
+            parentComment: null,
+            contents: { markdown: 'Partial comment still renders' },
+            extendedScore: null,
+            afExtendedScore: null,
+            votingSystem: 'twoAxis',
+            currentUserVote: null,
+            currentUserExtendedVote: null,
+        };
+
+        await setupMockEnvironment(page, {
+            testMode: true,
+            comments: [partialComment],
+            onGraphQL: `
+                if (query.includes('GetAllRecentCommentsLite')) {
+                    return {
+                        data: { comments: { results: [${JSON.stringify(partialComment)}] } },
+                        errors: [{
+                            message: 'Unable to find document for comment: HeSnJb94XwcHXCFf2',
+                            path: ['comments', 'results', 0, 'pageUrl'],
+                            extensions: { code: 'INTERNAL_SERVER_ERROR' }
+                        }]
+                    };
+                }
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader');
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('.pr-error')).toHaveCount(0);
+        await expect(page.locator('.pr-comment[data-id="c-partial"]')).toBeVisible();
+    });
+
+    test('reader initial load rejects non-allowlisted recent-comment partial errors [PR-LOAD-12][PR-DATA-03.1][PR-DATA-03.2]', async ({ page }) => {
+        const comment = {
+            _id: 'c-strict',
+            postId: 'p-strict',
+            pageUrl: 'https://www.lesswrong.com/posts/p-strict/strict-post?commentId=c-strict',
+            htmlBody: '<p>Should not render because non-allowlisted errors must fail fast</p>',
+            postedAt: '2026-03-03T08:00:00.000Z',
+            baseScore: 1,
+            voteCount: 0,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            author: 'StrictAuthor',
+            rejected: false,
+            topLevelCommentId: 'c-strict',
+            user: { _id: 'u-strict', username: 'StrictAuthor', displayName: 'Strict Author', slug: 'strict-author', karma: 10 },
+            post: {
+                _id: 'p-strict',
+                title: 'Strict Post',
+                slug: 'strict-post',
+                pageUrl: 'https://www.lesswrong.com/posts/p-strict/strict-post',
+                postedAt: '2026-03-03T07:59:00.000Z',
+                baseScore: 2,
+                voteCount: 1,
+                commentCount: 1,
+                wordCount: 5,
+                user: { _id: 'u-post-strict', username: 'PostStrict', displayName: 'Post Strict', slug: 'post-strict', karma: 20 },
+            },
+            parentCommentId: null,
+            parentComment: null,
+            contents: { markdown: 'Should not render' },
+            extendedScore: null,
+            afExtendedScore: null,
+            votingSystem: 'twoAxis',
+            currentUserVote: null,
+            currentUserExtendedVote: null,
+        };
+
+        await setupMockEnvironment(page, {
+            testMode: true,
+            comments: [comment],
+            onGraphQL: `
+                if (query.includes('GetAllRecentCommentsLite')) {
+                    return {
+                        data: { comments: { results: [${JSON.stringify(comment)}] } },
+                        errors: [{
+                            message: 'Unexpected resolver explosion in recent comments',
+                            path: ['comments', 'results', 0, 'post']
+                        }]
+                    };
+                }
+            `
+        });
+
+        await page.goto('https://www.lesswrong.com/reader');
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        await expect(page.locator('.pr-error')).toContainText('Error loading reader');
+        await expect(page.locator('.pr-comment[data-id="c-strict"]')).toHaveCount(0);
+    });
+
     test('handles missing pageUrl gracefully in UI [PR-DATA-04]', async ({ page }) => {
         const username = 'FallbackUser';
         const userId = 'u-fallback';
