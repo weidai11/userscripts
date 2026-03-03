@@ -6,11 +6,15 @@
 import { escapeHtml } from '../utils/rendering';
 
 let tooltipElement: HTMLElement | null = null;
+let tooltipsInitialized = false;
 
 /**
  * Initialize global reaction tooltip listeners
  */
 export const initReactionTooltips = (): void => {
+    if (tooltipsInitialized) return;
+    tooltipsInitialized = true;
+
     document.addEventListener('mouseover', (e) => {
         const target = (e.target as HTMLElement).closest('.pr-reaction-chip, .pr-tooltip-target') as HTMLElement;
         if (target) {

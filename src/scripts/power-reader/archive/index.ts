@@ -12,6 +12,7 @@ import { ArchiveUIHost } from './uiHost';
 import { attachEventListeners } from '../events/index';
 import { setupExternalLinks } from '../features/externalLinks';
 import { setupInlineReactions } from '../features/inlineReactions';
+import { initReactionTooltips } from '../features/reactionTooltips';
 
 import { initPreviewSystem } from '../utils/preview';
 import { refreshPostActionButtons } from '../utils/dom';
@@ -1560,6 +1561,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
     // Attach standard event listeners using the host's reader state
     attachEventListeners(uiHost.getReaderState());
+    initReactionTooltips();
 
     // Sticky header currently depends on main-reader singleton state (`getState()`).
     // Do not enable it in archive mode until it is wired to archive-local ReaderState.
