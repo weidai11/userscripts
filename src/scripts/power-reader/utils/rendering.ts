@@ -36,6 +36,7 @@ export { renderReactions };
 
 import { getPostScoreColor } from './colors';
 import { getAgeInHours, calculateNormalizedScore, clampScore, getFontSizePercent } from './scoring';
+import { getAuthorHandle } from './author';
 
 /**
  * Calculate header style for a post
@@ -44,7 +45,7 @@ export const calculatePostHeaderStyle = (post: Post): string => {
   // If post content isn't loaded, stick to baseline styling
   if (!post.htmlBody) return '';
 
-  const authorName = post.user?.username || 'Unknown Author';
+  const authorName = getAuthorHandle(post);
   const authorKarma = post.user?.karma || 0;
   const postedAt = post.postedAt || new Date().toISOString();
   const ageHours = getAgeInHours(postedAt);

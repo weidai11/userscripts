@@ -4,6 +4,7 @@ import {
     createAuthorPreviewFetcher
 } from '../utils/preview';
 import { renderPostHeader } from '../utils/rendering';
+import { getAuthorHandle } from '../utils/author';
 import { getState } from '../state';
 
 /**
@@ -98,7 +99,7 @@ export class StickyHeader {
             state: state
         });
 
-        this.container.setAttribute('data-author', post.user?.username || '');
+        this.container.setAttribute('data-author', getAuthorHandle(post, ''));
 
         const newHeader = this.container.querySelector('.pr-post-header') as HTMLElement;
         const titleH2 = newHeader.querySelector('h2') as HTMLElement;

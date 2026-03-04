@@ -27,7 +27,6 @@ export {
   handleLoadPost,
   handleTogglePostBody,
   handleLoadAllComments,
-  handleLoadThread,
   handleLoadParents,
   handleLoadDescendants,
   handleLoadParentsAndScroll,

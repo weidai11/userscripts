@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.706
+// @version    1.2.707
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1772,7 +1772,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.706"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.707"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3435,6 +3435,13 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     if (ownMeta) return ownMeta;
     return commentEl;
   };
+  const getAuthorHandle = (item, fallback = "Unknown Author") => {
+    const username = item.user?.username;
+    if (typeof username === "string" && username.trim().length > 0) return username;
+    const author = item.author;
+    if (typeof author === "string" && author.trim().length > 0) return author;
+    return fallback;
+  };
   const HOVER_DELAY = 300;
   const state = {
     activePreview: null,
@@ -3803,7 +3810,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       <div class="pr-preview-header">
         <strong>${escapeHtml$1(post.title || "")}</strong>
         <span style="color: #666; margin-left: 10px;">
-          by ${escapeHtml$1(post.user?.username || "Unknown")} · ${post.baseScore} points
+          by ${escapeHtml$1(getAuthorHandle(post, "Unknown"))} · ${post.baseScore} points
         </span>
       </div>
       <div class="pr-preview-content">
@@ -3831,7 +3838,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     return `
     <div class="pr-preview-header">
-      <strong>${escapeHtml$1(comment.user?.username || "Unknown")}</strong>
+      <strong>${escapeHtml$1(getAuthorHandle(comment, "Unknown"))}</strong>
       <span style="color: #666; margin-left: 10px;">
         ${comment.baseScore} points · ${timeStr}
       </span>
@@ -4526,7 +4533,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
   const renderMetadata = (item, options = {}) => {
     const { state: state2, isFullPost = true, style = "", extraClass = "", children = "" } = options;
     const isPost2 = "title" in item;
-    const authorHandle = item.user?.username || ("author" in item ? item.author : void 0) || "Unknown Author";
+    const authorHandle = getAuthorHandle(item);
     const authorName = item.user?.displayName || authorHandle;
     const authorId = item.user?._id || "";
     const isEAHost = isEAForumLikeHost();
@@ -4709,7 +4716,7 @@ reactionsHtml,
   };
   const calculatePostHeaderStyle = (post) => {
     if (!post.htmlBody) return "";
-    const authorName = post.user?.username || "Unknown Author";
+    const authorName = getAuthorHandle(post);
     const authorKarma = post.user?.karma || 0;
     const postedAt = post.postedAt || ( new Date()).toISOString();
     const ageHours = getAgeInHours(postedAt);
@@ -5218,6 +5225,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
   };
   const renderContextPlaceholder = (comment, state2, repliesHtml = "") => {
     const postedAtMs = toPostedAtEpochMs(comment.postedAt);
+    const authorHandle = getAuthorHandle(comment);
     const metadataHtml = renderMetadata(comment, {
       state: state2,
       style: "font-size: 80%;",
@@ -5226,6 +5234,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     return `
     <div class="pr-comment pr-item context pr-context-placeholder"
          data-id="${comment._id}"
+         data-author="${escapeHtml(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ""}"
          data-post-id="${comment.postId}"
          data-posted-at-ms="${postedAtMs}">
@@ -5257,7 +5266,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       </div>
     `;
     }
-    const authorHandle = comment.user?.username || comment.author || "Unknown Author";
+    const authorHandle = getAuthorHandle(comment);
     const postedAt = comment.postedAt || ( new Date()).toISOString();
     const postedAtMs = toPostedAtEpochMs(postedAt);
     const ageHours = getAgeInHours(postedAt);
@@ -5484,7 +5493,7 @@ baseScore: 0,
       state: state2
     });
     const postBodyHtml = isFullPost ? renderPostBody(group.fullPost, currentlyTruncated !== false) : "";
-    const authorHandle = postToRender.user?.username || "";
+    const authorHandle = getAuthorHandle(postToRender, "");
     const postPostedAtMs = toPostedAtEpochMs(postToRender.postedAt);
     return `
     <div class="pr-post pr-item ${isReadPost ? "read" : ""}" 
@@ -5810,7 +5819,7 @@ refresh() {
         isFullPost,
         state: state2
       });
-      this.container.setAttribute("data-author", post.user?.username || "");
+      this.container.setAttribute("data-author", getAuthorHandle(post, ""));
       const newHeader = this.container.querySelector(".pr-post-header");
       const titleH2 = newHeader.querySelector("h2");
       const authorLink = newHeader.querySelector(".pr-author");
@@ -8634,7 +8643,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -8809,7 +8818,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -10687,29 +10696,58 @@ currentCommentId = null;
       }
     }
   };
-  const handleAuthorUp = (target, _state) => {
-    const item = target.closest(".pr-item");
-    let author = item?.getAttribute("data-author");
+  const handleAuthorPreference = (target, direction, state2) => {
+    const clickedCommentId = target.closest(".pr-comment")?.getAttribute("data-id") || null;
+    if (clickedCommentId) {
+      const clickedComment = state2.commentById.get(clickedCommentId);
+      if (clickedComment) {
+        markCommentRevealed(clickedComment);
+        window.setTimeout(() => {
+          setJustRevealed(clickedComment, false);
+        }, JUST_REVEALED_DURATION_MS);
+      }
+    }
+    let author = target.dataset.author;
+    if (!author) {
+      const item = target.closest(".pr-item");
+      author = item?.getAttribute("data-author") || void 0;
+    }
     if (!author) {
       const sticky = target.closest(".pr-sticky-header");
-      author = sticky?.getAttribute("data-author");
+      author = sticky?.getAttribute("data-author") || void 0;
     }
     if (author) {
-      toggleAuthorPreference(author, "up");
-      getUIHost().rerenderAll();
+      toggleAuthorPreference(author, direction);
+      const escapedAuthor = CSS.escape(author);
+      const affectedPostIds = new Set();
+      for (const el of document.querySelectorAll(`.pr-item[data-author="${escapedAuthor}"]`)) {
+        const postId = el.dataset.postId || el.closest(".pr-post")?.getAttribute("data-id");
+        if (postId) affectedPostIds.add(postId);
+      }
+      for (const postId of affectedPostIds) {
+        getUIHost().rerenderPostGroup(postId);
+      }
+      const stickyHeader2 = document.getElementById("pr-sticky-header");
+      if (stickyHeader2) {
+        const newPrefs = getAuthorPreferences();
+        const pref = newPrefs[author] || 0;
+        for (const btn of stickyHeader2.querySelectorAll(
+          `[data-action="author-up"][data-author="${escapedAuthor}"], [data-action="author-down"][data-author="${escapedAuthor}"]`
+        )) {
+          if (btn.dataset.action === "author-up") {
+            btn.classList.toggle("active-up", pref > 0);
+          } else {
+            btn.classList.toggle("active-down", pref < 0);
+          }
+        }
+      }
     }
   };
+  const handleAuthorUp = (target, _state) => {
+    handleAuthorPreference(target, "up", _state);
+  };
   const handleAuthorDown = (target, _state) => {
-    const item = target.closest(".pr-item");
-    let author = item?.getAttribute("data-author");
-    if (!author) {
-      const sticky = target.closest(".pr-sticky-header");
-      author = sticky?.getAttribute("data-author");
-    }
-    if (author) {
-      toggleAuthorPreference(author, "down");
-      getUIHost().rerenderAll();
-    }
+    handleAuthorPreference(target, "down", _state);
   };
   const fetchAndRenderPost = async (postId, state2) => {
     const temporarilyForcedCommentIds = preserveVisibleCommentsForPostRerender(postId, state2);
@@ -10889,60 +10927,6 @@ currentCommentId = null;
       }
     } catch (err) {
       Logger.error("Failed to load all comments", err);
-    } finally {
-      target.textContent = originalText;
-    }
-  };
-  const handleLoadThread = async (target, state2) => {
-    const commentId = getCommentIdFromTarget(target);
-    if (!commentId) return;
-    const comment = state2.commentById.get(commentId);
-    if (!comment) return;
-    let topLevelId = findTopLevelAncestorId(commentId, state2);
-    if (!topLevelId && comment.parentCommentId) {
-      const originalText2 = target.textContent;
-      target.textContent = "[...]";
-      try {
-        let currentParentId = comment.parentCommentId;
-        const visited = new Set();
-        while (currentParentId && !visited.has(currentParentId)) {
-          visited.add(currentParentId);
-          const existing = state2.commentById.get(currentParentId);
-          if (existing) {
-            currentParentId = existing.parentCommentId || null;
-            continue;
-          }
-          const res = await queryGraphQL(GET_COMMENT, { id: currentParentId });
-          const parent = res?.comment?.result;
-          if (!parent) break;
-          getUIHost().mergeComments([parent], true);
-          currentParentId = parent.parentCommentId || null;
-        }
-        topLevelId = findTopLevelAncestorId(commentId, state2);
-      } catch (err) {
-        Logger.error("Failed to walk parent chain for thread load", err);
-        target.textContent = originalText2;
-        return;
-      }
-    }
-    if (!topLevelId) {
-      topLevelId = findHighestKnownAncestorId(commentId, state2) || commentId;
-    }
-    const originalText = target.textContent;
-    target.textContent = "[...]";
-    try {
-      const res = await queryGraphQL(GET_THREAD_COMMENTS, {
-        topLevelCommentId: topLevelId,
-        limit: CONFIG.loadMax
-      });
-      const comments = res?.comments?.results || [];
-      const added = getUIHost().mergeComments(comments, true);
-      Logger.info(`Load thread ${topLevelId}: ${comments.length} fetched, ${added} new`);
-      if (added > 0 && comment.postId) {
-        getUIHost().rerenderPostGroup(comment.postId, commentId);
-      }
-    } catch (err) {
-      Logger.error("Failed to load thread", err);
     } finally {
       target.textContent = originalText;
     }
@@ -11210,7 +11194,7 @@ currentCommentId = null;
     const childIndent = makeIndent(depth + 1);
     const isFocal = item._id === focalId;
     const type = typeof item.title === "string" ? "post" : "comment";
-    const author = item.user?.username || item.author || "unknown";
+    const author = getAuthorHandle(item, "unknown");
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
     const titleAttr = type === "post" && item.title ? ` title="${escapeXmlAttr(item.title)}"` : "";
     let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}${titleAttr}>
@@ -11250,7 +11234,7 @@ ${childIndent}</body_markdown>
     const indent = makeIndent(depth);
     const childIndent = makeIndent(depth + 1);
     return children.map((child) => {
-      const author = child.user?.username || child.author || "unknown";
+      const author = getAuthorHandle(child, "unknown");
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
       let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
@@ -11531,11 +11515,13 @@ getPromptPrefix: getAIStudioPrefix,
         e.stopPropagation();
         handlePostExpand(actionTarget);
       } else if (action === "author-up") {
+        e.preventDefault();
         e.stopPropagation();
-        handleAuthorUp(actionTarget);
+        handleAuthorUp(actionTarget, state2);
       } else if (action === "author-down") {
+        e.preventDefault();
         e.stopPropagation();
-        handleAuthorDown(actionTarget);
+        handleAuthorDown(actionTarget, state2);
       } else if (action === "read-more") {
         e.stopPropagation();
         handleReadMore(actionTarget);
@@ -11597,14 +11583,6 @@ getPromptPrefix: getAIStudioPrefix,
         e.preventDefault();
         e.stopPropagation();
         handleFindParent(target, state2);
-      } else if (action === "load-thread") {
-        e.preventDefault();
-        e.stopPropagation();
-        handleLoadThread(target, state2);
-      } else if (action === "load-parents") {
-        e.preventDefault();
-        e.stopPropagation();
-        handleLoadParents(target, state2);
       } else if (action === "load-descendants") {
         e.preventDefault();
         e.stopPropagation();
@@ -15218,7 +15196,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17275,7 +17253,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.706"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

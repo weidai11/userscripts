@@ -9,6 +9,7 @@ import type {
 } from '../../../generated/graphql';
 import type { ReaderState } from '../state';
 import { Logger } from '../utils/logger';
+import { getAuthorHandle } from '../utils/author';
 import {
   fetchAllPostCommentsWithCache,
   getAvailablePostComments,
@@ -103,7 +104,7 @@ const toXml = (
 
   const isFocal = item._id === focalId;
   const type: 'post' | 'comment' = typeof item.title === 'string' ? 'post' : 'comment';
-  const author = item.user?.username || item.author || 'unknown';
+  const author = getAuthorHandle(item, 'unknown');
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
   const titleAttr = type === 'post' && item.title ? ` title="${escapeXmlAttr(item.title)}"` : '';
 
@@ -146,7 +147,7 @@ const descendantsToXmlWithIndex = (
   const childIndent = makeIndent(depth + 1);
 
   return children.map(child => {
-    const author = child.user?.username || child.author || 'unknown';
+    const author = getAuthorHandle(child, 'unknown');
     const md = child.contents?.markdown || child.htmlBody || '(no content)';
     let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
     xml += `${childIndent}<body_markdown>\n${indentMultiline(escapeXmlText(md), depth + 2)}\n${childIndent}</body_markdown>\n`;

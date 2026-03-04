@@ -10,6 +10,7 @@ import { getScoreColor, getRecencyColor } from '../utils/colors';
 import { isRead, getReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
+import { getAuthorHandle } from '../utils/author';
 import { getCommentContextType, isForceVisible, isJustRevealed } from '../types/uiCommentFlags';
 import { toPostedAtEpochMs } from '../utils/dom';
 import { renderMetadata } from './components/metadata';
@@ -271,6 +272,7 @@ const renderContextPlaceholder = (
   comment: Comment, state: ReaderState, repliesHtml: string = ''
 ): string => {
   const postedAtMs = toPostedAtEpochMs(comment.postedAt);
+  const authorHandle = getAuthorHandle(comment);
   const metadataHtml = renderMetadata(comment, {
     state,
     style: 'font-size: 80%;',
@@ -279,6 +281,7 @@ const renderContextPlaceholder = (
   return `
     <div class="pr-comment pr-item context pr-context-placeholder"
          data-id="${comment._id}"
+         data-author="${escapeHtml(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ''}"
          data-post-id="${comment.postId}"
          data-posted-at-ms="${postedAtMs}">
@@ -327,7 +330,7 @@ export const renderComment = (
     `;
   }
 
-  const authorHandle = comment.user?.username || (comment as any).author || 'Unknown Author';
+  const authorHandle = getAuthorHandle(comment);
   const postedAt = comment.postedAt || new Date().toISOString();
   const postedAtMs = toPostedAtEpochMs(postedAt);
   const ageHours = getAgeInHours(postedAt);

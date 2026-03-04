@@ -11,6 +11,7 @@ import { buildRenderDescendantMetrics, renderCommentTree } from './comment';
 import { calculateTreeKarma } from '../utils/scoring';
 import { Logger } from '../utils/logger';
 import { toPostedAtEpochMs } from '../utils/dom';
+import { getAuthorHandle } from '../utils/author';
 import { renderPostBody as renderSharedPostBody } from './components/body';
 
 export interface PostGroup {
@@ -210,7 +211,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
 
   const postBodyHtml = isFullPost ? renderPostBody(group.fullPost!, currentlyTruncated !== false) : '';
 
-  const authorHandle = postToRender.user?.username || '';
+  const authorHandle = getAuthorHandle(postToRender, '');
   const postPostedAtMs = toPostedAtEpochMs(postToRender.postedAt);
 
   return `

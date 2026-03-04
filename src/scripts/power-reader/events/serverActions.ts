@@ -29,7 +29,7 @@ import type { ReaderState } from '../state';
 import { smartScrollTo } from '../utils/dom';
 import { CONFIG } from '../config';
 import { Logger } from '../utils/logger';
-import { toggleAuthorPreference } from '../utils/storage';
+import { toggleAuthorPreference, getAuthorPreferences } from '../utils/storage';
 import { getCommentVisibilityTarget, getStickyViewportTop } from '../utils/commentVisibility';
 import { logFindParentTrace } from '../utils/findParentTrace';
 import {
@@ -661,34 +661,68 @@ export const handleFindParent = async (target: HTMLElement, state: ReaderState):
 /**
  * Handle author preference up/down
  */
-export const handleAuthorUp = (target: HTMLElement, _state: ReaderState): void => {
-    const item = target.closest('.pr-item');
-    let author = item?.getAttribute('data-author');
+const handleAuthorPreference = (target: HTMLElement, direction: 'up' | 'down', state: ReaderState): void => {
+    const clickedCommentId = target.closest('.pr-comment')?.getAttribute('data-id') || null;
+    if (clickedCommentId) {
+        const clickedComment = state.commentById.get(clickedCommentId);
+        if (clickedComment) {
+            // Preserve the interacted comment through rerender so author toggles
+            // don't immediately collapse it into a read placeholder.
+            markCommentRevealed(clickedComment);
+            window.setTimeout(() => {
+                setJustRevealed(clickedComment, false);
+            }, JUST_REVEALED_DURATION_MS);
+        }
+    }
 
+    let author = target.dataset.author;
+    if (!author) {
+        const item = target.closest('.pr-item');
+        author = item?.getAttribute('data-author') || undefined;
+    }
     if (!author) {
         const sticky = target.closest('.pr-sticky-header');
-        author = sticky?.getAttribute('data-author');
+        author = sticky?.getAttribute('data-author') || undefined;
     }
 
     if (author) {
-        toggleAuthorPreference(author, 'up');
-        getUIHost().rerenderAll();
+        toggleAuthorPreference(author, direction);
+        // Re-render each post group that contains comments by this author so header
+        // coloring / font-size update.  Don't rerenderAll() — a full re-render rebuilds
+        // post groups, which filters out all-read groups and wipes the page.
+        const escapedAuthor = CSS.escape(author);
+        const affectedPostIds = new Set<string>();
+        for (const el of document.querySelectorAll<HTMLElement>(`.pr-item[data-author="${escapedAuthor}"]`)) {
+            const postId = el.dataset.postId || el.closest('.pr-post')?.getAttribute('data-id');
+            if (postId) affectedPostIds.add(postId);
+        }
+        for (const postId of affectedPostIds) {
+            getUIHost().rerenderPostGroup(postId);
+        }
+        // Patch sticky header buttons (outside root, not covered by post-group re-render)
+        const stickyHeader = document.getElementById('pr-sticky-header');
+        if (stickyHeader) {
+            const newPrefs = getAuthorPreferences();
+            const pref = newPrefs[author] || 0;
+            for (const btn of stickyHeader.querySelectorAll<HTMLElement>(
+                `[data-action="author-up"][data-author="${escapedAuthor}"], [data-action="author-down"][data-author="${escapedAuthor}"]`
+            )) {
+                if (btn.dataset.action === 'author-up') {
+                    btn.classList.toggle('active-up', pref > 0);
+                } else {
+                    btn.classList.toggle('active-down', pref < 0);
+                }
+            }
+        }
     }
 };
 
+export const handleAuthorUp = (target: HTMLElement, _state: ReaderState): void => {
+    handleAuthorPreference(target, 'up', _state);
+};
+
 export const handleAuthorDown = (target: HTMLElement, _state: ReaderState): void => {
-    const item = target.closest('.pr-item');
-    let author = item?.getAttribute('data-author');
-
-    if (!author) {
-        const sticky = target.closest('.pr-sticky-header');
-        author = sticky?.getAttribute('data-author');
-    }
-
-    if (author) {
-        toggleAuthorPreference(author, 'down');
-        getUIHost().rerenderAll();
-    }
+    handleAuthorPreference(target, 'down', _state);
 };
 
 /**
@@ -930,66 +964,6 @@ export const handleLoadAllComments = async (target: HTMLElement, state: ReaderSt
         }
     } catch (err) {
         Logger.error('Failed to load all comments', err);
-    } finally {
-        target.textContent = originalText;
-    }
-};
-
-export const handleLoadThread = async (target: HTMLElement, state: ReaderState): Promise<void> => {
-    const commentId = getCommentIdFromTarget(target);
-    if (!commentId) return;
-    const comment = state.commentById.get(commentId);
-    if (!comment) return;
-
-    let topLevelId = findTopLevelAncestorId(commentId, state);
-
-    if (!topLevelId && comment.parentCommentId) {
-        const originalText = target.textContent;
-        target.textContent = '[...]';
-        try {
-            let currentParentId: string | null = comment.parentCommentId;
-            const visited = new Set<string>();
-            while (currentParentId && !visited.has(currentParentId)) {
-                visited.add(currentParentId);
-                const existing = state.commentById.get(currentParentId);
-                if (existing) {
-                    currentParentId = existing.parentCommentId || null;
-                    continue;
-                }
-                const res = await queryGraphQL<GetCommentQuery, GetCommentQueryVariables>(GET_COMMENT, { id: currentParentId });
-                const parent = res?.comment?.result as unknown as Comment;
-                if (!parent) break;
-                getUIHost().mergeComments([parent], true);
-                currentParentId = parent.parentCommentId || null;
-            }
-            topLevelId = findTopLevelAncestorId(commentId, state);
-        } catch (err) {
-            Logger.error('Failed to walk parent chain for thread load', err);
-            target.textContent = originalText;
-            return;
-        }
-    }
-
-    if (!topLevelId) {
-        topLevelId = findHighestKnownAncestorId(commentId, state) || commentId;
-    }
-
-    const originalText = target.textContent;
-    target.textContent = '[...]';
-
-    try {
-        const res = await queryGraphQL<GetThreadCommentsQuery, GetThreadCommentsQueryVariables>(GET_THREAD_COMMENTS, {
-            topLevelCommentId: topLevelId,
-            limit: CONFIG.loadMax,
-        });
-        const comments = res?.comments?.results || [];
-        const added = getUIHost().mergeComments(comments as Comment[], true);
-        Logger.info(`Load thread ${topLevelId}: ${comments.length} fetched, ${added} new`);
-        if (added > 0 && comment.postId) {
-            getUIHost().rerenderPostGroup(comment.postId, commentId);
-        }
-    } catch (err) {
-        Logger.error('Failed to load thread', err);
     } finally {
         target.textContent = originalText;
     }

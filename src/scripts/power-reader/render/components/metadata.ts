@@ -6,6 +6,7 @@ import { escapeHtml } from '../../utils/rendering';
 import { getAuthorPreferences } from '../../utils/storage';
 import { renderVoteButtons, renderReactions } from './actions';
 import { isEAForumLikeHost } from '../../utils/forum';
+import { getAuthorHandle } from '../../utils/author';
 import type { Post, Comment, NamesAttachedReactionsScore, CurrentUserExtendedVote } from '../../../../shared/graphql/queries';
 import type { ReaderState } from '../../state';
 
@@ -102,7 +103,7 @@ export const renderMetadata = (
   const { state, isFullPost = true, style = '', extraClass = '', children = '' } = options;
   const isPost = 'title' in item;
 
-  const authorHandle = item.user?.username || ('author' in item ? item.author : undefined) || 'Unknown Author';
+  const authorHandle = getAuthorHandle(item);
   const authorName = item.user?.displayName || authorHandle;
   const authorId = item.user?._id || '';
 

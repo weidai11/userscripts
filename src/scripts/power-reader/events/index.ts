@@ -25,8 +25,6 @@ import {
   handleScrollToPostTop,
   handleScrollToComments,
   handleScrollToNextPost,
-  handleLoadThread,
-  handleLoadParents,
   handleLoadDescendants,
   handleScrollToRoot,
   handleLoadParentsAndScroll,
@@ -115,10 +113,12 @@ export const attachEventListeners = (state: ReaderState): void => {
     }
     // Author preferences
     else if (action === 'author-up') {
+      e.preventDefault();
       e.stopPropagation();
       handleAuthorUp(actionTarget, state);
     }
     else if (action === 'author-down') {
+      e.preventDefault();
       e.stopPropagation();
       handleAuthorDown(actionTarget, state);
     }
@@ -206,16 +206,6 @@ export const attachEventListeners = (state: ReaderState): void => {
       handleFindParent(target, state);
     }
     // Comment action buttons
-    else if (action === 'load-thread') {
-      e.preventDefault();
-      e.stopPropagation();
-      handleLoadThread(target, state);
-    }
-    else if (action === 'load-parents') {
-      e.preventDefault();
-      e.stopPropagation();
-      handleLoadParents(target, state);
-    }
     else if (action === 'load-descendants') {
       e.preventDefault();
       e.stopPropagation();

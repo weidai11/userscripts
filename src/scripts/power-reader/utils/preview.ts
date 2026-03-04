@@ -7,6 +7,7 @@
 import { Logger } from './logger';
 import { sanitizeHtml } from './sanitize';
 import { getCommentVisibilityTarget, getStickyViewportTop } from './commentVisibility';
+import { getAuthorHandle } from './author';
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
@@ -610,7 +611,7 @@ export function createPostPreviewFetcher(postId: string): () => Promise<string> 
       <div class="pr-preview-header">
         <strong>${escapeHtml(post.title || '')}</strong>
         <span style="color: #666; margin-left: 10px;">
-          by ${escapeHtml(post.user?.username || 'Unknown')} · ${post.baseScore} points
+          by ${escapeHtml(getAuthorHandle(post, 'Unknown'))} · ${post.baseScore} points
         </span>
       </div>
       <div class="pr-preview-content">
@@ -656,7 +657,7 @@ function formatCommentPreview(comment: Comment): string {
 
   return `
     <div class="pr-preview-header">
-      <strong>${escapeHtml(comment.user?.username || 'Unknown')}</strong>
+      <strong>${escapeHtml(getAuthorHandle(comment, 'Unknown'))}</strong>
       <span style="color: #666; margin-left: 10px;">
         ${comment.baseScore} points · ${timeStr}
       </span>
