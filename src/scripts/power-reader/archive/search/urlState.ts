@@ -1,4 +1,5 @@
 import type { ArchiveSearchScope, ArchiveSearchSortMode } from './types';
+import { randomBase36 } from '../../utils/random';
 
 const MAX_ENCODED_QUERY_LENGTH = 2000;
 const QUERY_POINTER_PARAM = 'qk';
@@ -60,7 +61,7 @@ const evictOldSessionQueries = (): void => {
 const writeSessionQuery = (query: string): string | null => {
   if (!canUseSessionStorage()) return null;
   try {
-    const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const key = `${Date.now()}-${randomBase36(6)}`;
     sessionStorage.setItem(`${SESSION_KEY_PREFIX}${key}`, query);
     evictOldSessionQueries();
     return key;

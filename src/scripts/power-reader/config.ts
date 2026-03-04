@@ -17,3 +17,5 @@ export const CONFIG = {
 } as const;
 
 export type Config = typeof CONFIG;
+
+export const Z_INDEX_TOP_LAYER = 2147483647;

@@ -7,6 +7,7 @@
 import { Logger } from './logger';
 import { isEAForumHostname } from './forum';
 import { clearAllAIPayloadKeys } from './aiPayloadStorage';
+import { randomUuid } from './random';
 
 declare const GM_setValue: (key: string, value: string) => void;
 declare const GM_getValue: (key: string, defaultValue: string) => string;
@@ -446,9 +447,7 @@ export function getDeviceId(): string {
       return normalized;
     }
   }
-  const generated = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const generated = randomUuid();
   GM_setValue(key, generated);
   return generated;
 }

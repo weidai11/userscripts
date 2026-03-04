@@ -1,7 +1,7 @@
 {
   "name": "userscripts",
   "private": true,
-  "version": "1.2.707",
+  "version": "1.2.708",
   "type": "module",
   "scripts": {
     "dev:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite",
@@ -39,6 +39,7 @@
     "vite-plugin-monkey": "7.1.9"
   },
   "overrides": {
-    "minimatch": "^10.2.1"
+    "minimatch": "^10.2.1",
+    "immutable": "^4.3.8"
   }
 }

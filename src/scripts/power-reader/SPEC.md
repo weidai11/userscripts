@@ -632,6 +632,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
 - **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
+- **[PR-AI-09]** **Native Forum Handoff**: On native LW/EAF pages (non-`/reader`), `g/G/m/M` hotkeys MUST use the same payload + tab handoff pipeline as reader mode, resolving hovered comment/post targets from forum DOM/permalink context.
 
 ---
 
@@ -672,6 +673,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-HK-05]** **Alias Support**: The `=` key is supported as an alias for `+` (Expand) to allow one-handed use without requiring the Shift key.
 - **[PR-HK-06]** **Feedback**: Successful hotkey triggers are logged to the console (Info level) and provide immediate visual feedback via the triggered action (e.g., scroll, collapse, or loading state).
 - **[PR-HK-07]** **Post Action Fallback**: If a post-level hotkey (e.g., `n`, `a`, `c`, `e`) is pressed while hovering over a **comment**, the system MUST automatically identify the parent post and trigger the corresponding action on that post. This ensures seamless navigation without requiring the user to precisely hover the post header.
+- **[PR-HK-08]** **Native Forum AI Hotkeys**: On native LW/EAF pages in `forum-injection` mode, `g/G/m/M` MUST trigger AI send actions for hovered comment/post targets, with input/modifier suppression, selection-aware suppression, TOC/navigation exclusion zones, and stale-operation handoff suppression on route re-init.
 
 ---
 
@@ -710,13 +712,13 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-01] Route Activation**: Archive mode activates only on `/archive?username=[username]`.
 - **[PR-UARCH-02] Missing Username Fallback**: If `/archive` is present but `username` is missing, the route falls back to normal `/reader` mode (no archive init).
 - **[PR-UARCH-03] Cache-First Boot**: On init, the archive MUST load IndexedDB data first and render cached items immediately when available.
-- **[PR-UARCH-04] Background Sync**: After cache load, archive mode performs an incremental sync for posts and comments newer than the stored watermark.
-- **[PR-UARCH-15] Adaptive Cursor Pagination**: The background sync loader uses cursor-based pagination (via the `after` filter) to bypass API offset limits (typically 2000 items). It dynamically adjusts the pagination limit (between 50 and 1000 items) based on the measured duration of previous requests, targeting a ~2.5 second response time per batch to ensure reliability on unstable networks. Forward sync starts from the `lastSyncDate` and fetches newer items using `sortBy: "oldest"`.
+- **[PR-UARCH-04] Background Sync**: After cache load, archive mode performs incremental sync for posts/comments newer than the stored watermark, using edit-aware server time fields (`comments.timeField = "lastEditedAt"`, `posts.timeField = "modifiedAt"`).
+- **[PR-UARCH-15] Adaptive Cursor Pagination**: The background sync loader uses cursor-based pagination (`after`) to bypass API offset limits (typically 2000 items). It dynamically adjusts pagination limit (50-1000 items) to target ~2.5s per batch for reliability on unstable networks. Cursor advancement/watermarks are based on the active sync time field (with `postedAt` fallback when needed), while canonical display order remains `postedAt` descending.
 - **[PR-UARCH-05] Stable Sync Watermark**: The persisted `lastSyncDate` watermark MUST be a stable value captured at sync start (not sync end) to avoid skipping in-flight items created during the sync window.
 - **[PR-UARCH-06] Non-Destructive Sync Failure**: If background sync fails after cached items are shown, the UI MUST keep showing cached data and report sync failure in the status line. Failure status MUST be highlighted in **red/bold** to differentiate from normal status.
 - **[PR-UARCH-16] Status Line Indicators**: While syncing, the status line MUST show an animated indicator (`...`). Success/Progress messages use neutral colors; Errors use `status-error` styling.
 - **[PR-UARCH-14] Manual Resync Recovery**: A "Resync" button allows users to bypass the `lastSyncDate` watermark and force a full history download from the server to recover from corrupted local states.
-- **[PR-UARCH-07] Merge Semantics**: New archive items are merged by `_id` without duplicates, then sorted by `postedAt` descending for canonical in-memory order.
+- **[PR-UARCH-07] Merge Semantics**: Archive sync upserts by `_id` (same-ID items replace stale cache rows so edits propagate), remains duplicate-free, and keeps canonical in-memory order sorted by `postedAt` descending.
 - **[PR-UARCH-17] Payload Optimization**: To minimize bandwidth and prevent GraphQL timeouts, archive comment fetches MUST use a "Lite" post fragment (metadata only) rather than full post bodies for parent references.
 - **[PR-UARCH-08] Structured Search Behavior**: Archive search uses a structured query grammar (`author:`, `replyto:`, `date:`, `score:`, `type:`, `scope:`) with plain terms and quoted phrases. Regex is supported only through explicit regex literals (`/pattern/flags`). Invalid regex literals MUST produce a non-fatal warning and be excluded from execution.
 - **[PR-UARCH-39] Search Result Count Status**: The archive top status line (`#archive-status`) MUST include the current search result count (`N search result(s)`) alongside sync/status messaging.

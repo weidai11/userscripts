@@ -5,7 +5,11 @@
 
 import { Logger } from '../utils/logger';
 
-declare const GM_addStyle: (css: string) => void;
+declare const GM_addStyle: ((css: string) => void) | undefined;
+
+let headerInjectionAbort: AbortController | null = null;
+let headerObserver: MutationObserver | null = null;
+let scheduledInjectId: number | null = null;
 
 /**
  * Extract username/slug from the current URL
@@ -30,6 +34,7 @@ const getUsernameFromUrl = (): string | null => {
  */
 const addSharedStyles = (): void => {
   if (document.getElementById('pr-header-injection-styles')) return;
+  if (typeof GM_addStyle !== 'function') return;
 
   GM_addStyle(`
     #pr-header-links-container {
@@ -63,7 +68,9 @@ const addSharedStyles = (): void => {
   const styleMarker = document.createElement('div');
   styleMarker.id = 'pr-header-injection-styles';
   styleMarker.style.display = 'none';
-  document.head.appendChild(styleMarker);
+  const markerHost = document.head || document.documentElement;
+  if (!markerHost) return;
+  markerHost.appendChild(styleMarker);
 };
 
 /**
@@ -164,39 +171,72 @@ const injectLinks = (): void => {
   }
 };
 
+const scheduleInjectLinks = (): void => {
+  if (scheduledInjectId !== null) return;
+  scheduledInjectId = window.requestAnimationFrame(() => {
+    scheduledInjectId = null;
+    injectLinks();
+  });
+};
+
 /**
  * Setup mutation observer to ensure links persist across page loads.
  * Uses hydration detection to avoid issues with React SSR.
  */
 export const setupHeaderInjection = (): void => {
+  if (headerInjectionAbort) {
+    headerInjectionAbort.abort();
+  }
+  if (headerObserver) {
+    headerObserver.disconnect();
+  }
+  if (scheduledInjectId !== null) {
+    window.cancelAnimationFrame(scheduledInjectId);
+    scheduledInjectId = null;
+  }
+
+  headerInjectionAbort = new AbortController();
+  const signal = headerInjectionAbort.signal;
+
   let isHydrated = false;
+  let lastPathname = window.location.pathname;
 
   const detectHydration = () => {
     if (document.querySelector('.Header-rightHeaderItems')) {
       isHydrated = true;
-      injectLinks();
+      scheduleInjectLinks();
     }
   };
 
   if (document.readyState === 'complete') {
     detectHydration();
   } else {
-    window.addEventListener('load', detectHydration);
+    window.addEventListener('load', detectHydration, { signal });
   }
 
   const observer = new MutationObserver(() => {
-    if (!isHydrated) {
-      if (document.querySelector('.Header-rightHeaderItems')) {
-        isHydrated = true;
-        injectLinks();
-      }
+    const headerExists = !!document.querySelector('.Header-rightHeaderItems');
+    if (!headerExists) {
+      isHydrated = false;
       return;
     }
 
-    // Re-inject or update links if anything changes in the header
-    // We check efficiently if the container is missing OR if we just need to update (handled by injectLinks)
-    if (document.querySelector('.Header-rightHeaderItems')) {
-      injectLinks();
+    if (!isHydrated) {
+      isHydrated = true;
+      scheduleInjectLinks();
+      return;
+    }
+
+    const pathnameChanged = window.location.pathname !== lastPathname;
+    if (pathnameChanged) {
+      lastPathname = window.location.pathname;
+      scheduleInjectLinks();
+      return;
+    }
+
+    // Keep link injection resilient to header rerenders without running full injection on every subtree mutation.
+    if (!document.getElementById('pr-header-links-container') || !document.getElementById('pr-reader-link')) {
+      scheduleInjectLinks();
     }
   });
 
@@ -204,6 +244,10 @@ export const setupHeaderInjection = (): void => {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   } else {
     const earlyCheck = setInterval(() => {
+      if (signal.aborted) {
+        clearInterval(earlyCheck);
+        return;
+      }
       if (document.documentElement) {
         clearInterval(earlyCheck);
         observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -211,5 +255,9 @@ export const setupHeaderInjection = (): void => {
     }, 100);
   }
 
-  window.addEventListener('beforeunload', () => observer.disconnect());
+  headerObserver = observer;
+
+  window.addEventListener('popstate', scheduleInjectLinks, { signal });
+  window.addEventListener('hashchange', scheduleInjectLinks, { signal });
+  window.addEventListener('beforeunload', () => observer.disconnect(), { signal });
 };

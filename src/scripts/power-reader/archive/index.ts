@@ -2356,6 +2356,32 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 /**
  * Sync logic: Fetch new items, merge, and save.
  */
+const newestBatchTimestamp = (
+  items: Array<Record<string, unknown>>,
+  primaryField: 'lastEditedAt' | 'modifiedAt'
+): string | null => {
+  let newest: string | null = null;
+  for (const item of items) {
+    const candidate = (typeof item[primaryField] === 'string' && (item[primaryField] as string).length > 0)
+      ? item[primaryField] as string
+      : (typeof item.postedAt === 'string' ? item.postedAt : null);
+    if (!candidate) continue;
+    if (!newest) {
+      newest = candidate;
+      continue;
+    }
+    const candidateMs = Date.parse(candidate);
+    const newestMs = Date.parse(newest);
+    const candidateIsValid = Number.isFinite(candidateMs);
+    const newestIsValid = Number.isFinite(newestMs);
+    if ((candidateIsValid && newestIsValid && candidateMs > newestMs)
+      || (!candidateIsValid || !newestIsValid) && candidate.localeCompare(newest) > 0) {
+      newest = candidate;
+    }
+  }
+  return newest;
+};
+
 const syncArchive = async (
   username: string,
   state: any,
@@ -2401,9 +2427,9 @@ const syncArchive = async (
     onStatus(`Fetching comments: ${count} new...`);
   }, afterDateComments, async (batch) => {
     // Incremental save for comments
-    const newestInBatch = batch[batch.length - 1].postedAt;
-    await saveArchiveData(username, batch, { lastSyncDate_comments: newestInBatch });
-    console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch}`);
+    const newestInBatch = newestBatchTimestamp(batch as unknown as Array<Record<string, unknown>>, 'lastEditedAt');
+    await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_comments: newestInBatch } : {});
+    console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch ?? 'n/a'}`);
   }, username);
 
   // Check for abort after fetching comments
@@ -2415,9 +2441,9 @@ const syncArchive = async (
     onStatus(`Fetching posts: ${count} new...`);
   }, afterDatePosts, async (batch) => {
     // Incremental save for posts
-    const newestInBatch = batch[batch.length - 1].postedAt;
-    await saveArchiveData(username, batch, { lastSyncDate_posts: newestInBatch });
-    console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch}`);
+    const newestInBatch = newestBatchTimestamp(batch as unknown as Array<Record<string, unknown>>, 'modifiedAt');
+    await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_posts: newestInBatch } : {});
+    console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch ?? 'n/a'}`);
   });
 
   // Check for abort after fetching posts
@@ -2435,11 +2461,18 @@ const syncArchive = async (
   if (newItems.length > 0) {
     onStatus(`Found ${newItems.length} new items. Merging...`);
 
-    // Merge strategy: Add new items to state.items, avoiding duplicates by ID
-    const existingIds = new Set(state.items.map((i: any) => i._id));
-    const uniqueNewItems = newItems.filter(i => !existingIds.has(i._id));
-
-    state.items = [...uniqueNewItems, ...state.items];
+    // Merge strategy: upsert by ID so edited items replace stale cache rows.
+    const existingIndexById = new Map<string, number>();
+    state.items.forEach((item: any, index: number) => existingIndexById.set(item._id, index));
+    for (const item of newItems) {
+      const existingIndex = existingIndexById.get(item._id);
+      if (existingIndex === undefined) {
+        existingIndexById.set(item._id, state.items.length);
+        state.items.push(item);
+      } else {
+        state.items[existingIndex] = item;
+      }
+    }
 
     // Re-sort (Default to date for the background state)
     state.items.sort((a: any, b: any) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());

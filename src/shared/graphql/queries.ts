@@ -41,6 +41,7 @@ export const POST_FIELDS_LITE = /* GraphQL */ `
     slug
     pageUrl
     postedAt
+    modifiedAt
     baseScore
     voteCount
     commentCount
@@ -73,6 +74,7 @@ export const COMMENT_FIELDS_CORE = /* GraphQL */ `
   fragment CommentFieldsCore on Comment {
     _id
     postedAt
+    lastEditedAt
     htmlBody
     baseScore
     voteCount
@@ -359,6 +361,27 @@ export const GET_USER_POSTS = /* GraphQL */ `
         userPosts: {
           userId: $userId
           sortedBy: "oldest"
+          timeField: "modifiedAt"
+          after: $after
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`;
+
+export const GET_USER_POSTS_FALLBACK = /* GraphQL */ `
+  query GetUserPostsFallback($userId: String!, $limit: Int, $after: String) {
+    posts(
+      selector: {
+        userPosts: {
+          userId: $userId
+          sortedBy: "oldest"
           after: $after
         }
       },
@@ -374,6 +397,27 @@ export const GET_USER_POSTS = /* GraphQL */ `
 
 export const GET_USER_COMMENTS = /* GraphQL */ `
   query GetUserComments($userId: String!, $limit: Int, $after: String) {
+    comments(
+      selector: {
+        allRecentComments: {
+          userId: $userId
+          after: $after
+          sortBy: "oldest"
+          timeField: "lastEditedAt"
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...CommentFieldsLite
+      }
+    }
+  }
+  ${COMMENT_FIELDS_LITE}
+`;
+
+export const GET_USER_COMMENTS_FALLBACK = /* GraphQL */ `
+  query GetUserCommentsFallback($userId: String!, $limit: Int, $after: String) {
     comments(
       selector: {
         allRecentComments: {
@@ -457,6 +501,7 @@ export type Post = {
   slug: string;
   pageUrl: string;
   postedAt: string;
+  modifiedAt?: string | null;
   baseScore: number;
   voteCount: number;
   htmlBody?: string | null;
@@ -499,6 +544,7 @@ export type ParentCommentRef = {
 export type Comment = {
   _id: string;
   postedAt: string;
+  lastEditedAt?: string | null;
   htmlBody: string;
   contents: {
     markdown: string | null;

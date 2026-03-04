@@ -2,6 +2,7 @@ import { queryGraphQL, queryGraphQLResponse } from '../../../shared/graphql/clie
 import { GET_CURRENT_USER, UPDATE_SYNC_SECRET } from '../../../shared/graphql/queries';
 import { Logger } from '../utils/logger';
 import { isEAForumHost } from '../utils/forum';
+import { randomInt, randomUuid } from '../utils/random';
 import {
   applyExternalAuthorPrefs,
   applyExternalLoadFrom,
@@ -281,10 +282,7 @@ function setPushDisabled(reason: string, context: string, error?: unknown): void
 }
 
 function safeRandomUuid(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  return randomUuid();
 }
 
 function makeWriterId(): string {
@@ -495,7 +493,7 @@ function classifyAndSetQuota(error: unknown): void {
   );
   const cooldownLevel = Math.max(1, runtime.meta.quotaCooldownLevel || 1);
   const nextMinutes = QUOTA_COOLDOWN_LADDER_MIN[Math.min(cooldownLevel - 1, QUOTA_COOLDOWN_LADDER_MIN.length - 1)];
-  const jitterMs = Math.floor(Math.random() * QUOTA_COOLDOWN_JITTER_MS);
+  const jitterMs = randomInt(QUOTA_COOLDOWN_JITTER_MS);
   runtime.meta.quotaDisabledUntilMs = nowMs() + (nextMinutes * 60_000) + jitterMs;
   runtime.meta.quotaNextProbeAtMs = runtime.meta.quotaDisabledUntilMs;
   runtime.quotaDisabledUntilMs = runtime.meta.quotaDisabledUntilMs || 0;
@@ -1697,7 +1695,7 @@ function installListeners(): void {
     if (runtime.periodicPullTimer !== null) {
       window.clearTimeout(runtime.periodicPullTimer);
     }
-    const delayMs = PULL_FALLBACK_BASE_MS + Math.floor(Math.random() * PULL_FALLBACK_JITTER_MS);
+    const delayMs = PULL_FALLBACK_BASE_MS + randomInt(PULL_FALLBACK_JITTER_MS);
     runtime.periodicPullTimer = window.setTimeout(() => {
       runtime.periodicPullTimer = null;
       void runPeriodicPull().finally(() => {

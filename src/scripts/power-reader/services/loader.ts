@@ -149,7 +149,7 @@ export const loadInitial = async (
     : queryGraphQL<GetAllRecentCommentsQuery, GetAllRecentCommentsQueryVariables>(GET_ALL_RECENT_COMMENTS_LITE, {
       after: afterDate,
       limit: CONFIG.loadMax,
-      sortBy: afterDate ? 'oldest' : 'newest'
+      sortBy: afterDate ? 'oldest' : 'newest',
     }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS('GetAllRecentCommentsLite')).then(res => (res?.comments?.results || []) as Comment[]);
 
   const [userRes, comments] = await Promise.all([

@@ -6,7 +6,9 @@ import { queryGraphQL, type GraphQLQueryOptions } from '../../../shared/graphql/
 import {
     GET_USER_BY_SLUG,
     GET_USER_POSTS,
+    GET_USER_POSTS_FALLBACK,
     GET_USER_COMMENTS,
+    GET_USER_COMMENTS_FALLBACK,
     GET_COMMENTS_BY_IDS,
     type Post,
     type Comment,
@@ -37,6 +39,12 @@ const ARCHIVE_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
     allowPartialData: true,
     toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i],
 };
+type CursorField = 'postedAt' | 'lastEditedAt' | 'modifiedAt';
+
+interface TimeFieldFallbackConfig {
+    query: string;
+    cursorField: CursorField;
+}
 
 const isValidArchiveItem = <T extends { _id: string; postedAt: string }>(
     item: T | null | undefined
@@ -48,15 +56,28 @@ const isValidArchiveItem = <T extends { _id: string; postedAt: string }>(
         && item.postedAt.length > 0;
 };
 
+const getCursorTimestampValue = (item: unknown, cursorField: CursorField): string | null => {
+    const source = item as any;
+    const primary = source?.[cursorField];
+    if (typeof primary === 'string' && primary.length > 0) {
+        return primary;
+    }
+    const fallback = source?.postedAt;
+    if (typeof fallback === 'string' && fallback.length > 0) {
+        return fallback;
+    }
+    return null;
+};
+
 const getCursorTimestampFromBatch = <T extends { postedAt: string }>(
-    rawItems: Array<T | null | undefined>
+    rawItems: Array<T | null | undefined>,
+    cursorField: CursorField
 ): string | null => {
     // For forward sync (oldest to newest), the cursor is the timestamp of the LAST (newest) item in the batch
     for (let i = rawItems.length - 1; i >= 0; i--) {
-        const item = rawItems[i] as any;
-        if (item && typeof item.postedAt === 'string' && item.postedAt.length > 0) {
-            return item.postedAt;
-        }
+        const item = rawItems[i];
+        const timestamp = getCursorTimestampValue(item, cursorField);
+        if (timestamp) return timestamp;
     }
     return null;
 };
@@ -64,6 +85,12 @@ const getCursorTimestampFromBatch = <T extends { postedAt: string }>(
 const parseTimestampMs = (timestamp: string): number | null => {
     const value = Date.parse(timestamp);
     return Number.isFinite(value) ? value : null;
+};
+
+const isUnsupportedTimeFieldError = (error: unknown): boolean => {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    if (!/timefield/i.test(message)) return false;
+    return /unknown argument|doesn['’]?t accept argument|cannot query field|not defined by type/i.test(message);
 };
 
 const compareTimestamps = (a: string, b: string): number => {
@@ -76,16 +103,17 @@ const compareTimestamps = (a: string, b: string): number => {
 
 const getLatestCursorTimestampFromBatch = <T extends { postedAt: string }>(
     rawItems: Array<T | null | undefined>,
-    baselineCursor: string | null
+    baselineCursor: string | null,
+    cursorField: CursorField
 ): string | null => {
     let latest: string | null = null;
 
     for (const item of rawItems) {
-        const postedAt = (item as any)?.postedAt;
-        if (typeof postedAt !== 'string' || postedAt.length === 0) continue;
-        if (baselineCursor && compareTimestamps(postedAt, baselineCursor) <= 0) continue;
-        if (!latest || compareTimestamps(postedAt, latest) > 0) {
-            latest = postedAt;
+        const timestamp = getCursorTimestampValue(item, cursorField);
+        if (!timestamp) continue;
+        if (baselineCursor && compareTimestamps(timestamp, baselineCursor) <= 0) continue;
+        if (!latest || compareTimestamps(timestamp, latest) > 0) {
+            latest = timestamp;
         }
     }
 
@@ -93,7 +121,8 @@ const getLatestCursorTimestampFromBatch = <T extends { postedAt: string }>(
 };
 
 const summarizeBatchForCursorDebug = <T extends { postedAt: string; _id: string }>(
-    rawItems: Array<T | null | undefined>
+    rawItems: Array<T | null | undefined>,
+    cursorField: CursorField
 ): {
     firstTimestamp: string | null;
     lastTimestamp: string | null;
@@ -128,21 +157,19 @@ const summarizeBatchForCursorDebug = <T extends { postedAt: string; _id: string 
             seenIds.add(itemId);
         }
 
-        const postedAt = typeof anyItem?.postedAt === 'string' && anyItem.postedAt.length > 0
-            ? anyItem.postedAt
-            : null;
+        const timestamp = getCursorTimestampValue(anyItem, cursorField);
 
-        if (!postedAt) {
+        if (!timestamp) {
             missingTimestampCount++;
             continue;
         }
 
-        uniqueTimestamps.add(postedAt);
+        uniqueTimestamps.add(timestamp);
         if (!firstTimestamp) {
-            firstTimestamp = postedAt;
+            firstTimestamp = timestamp;
             firstId = itemId;
         }
-        lastTimestamp = postedAt;
+        lastTimestamp = timestamp;
         lastId = itemId;
     }
 
@@ -213,27 +240,34 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
     userId: string,
     query: string,
     key: 'posts' | 'comments',
+    cursorField: CursorField,
     onProgress?: (count: number) => void,
     afterDate?: Date,
     onBatch?: (items: T[]) => Promise<void>,
-    archiveUsername?: string
+    archiveUsername?: string,
+    timeFieldFallback?: TimeFieldFallbackConfig
 ): Promise<T[]> {
     let allItems: T[] = [];
     const itemIndexById = new Map<string, number>();
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor: string | null = afterDate ? afterDate.toISOString() : null;
+    let activeQuery = query;
+    let activeCursorField = cursorField;
+    let fallbackActivated = false;
     let batchNumber = 0;
-    let previousBatchTail: { id: string | null; postedAt: string | null } | null = null;
+    let previousBatchTail: { id: string | null; timestamp: string | null } | null = null;
 
     while (hasMore) {
         const startTime = Date.now();
         batchNumber++;
         try {
-            console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
+            Logger.debug(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}, cursorField=${activeCursorField}`);
             const requestBatch = async (limit: number): Promise<Array<T | null | undefined>> => {
-                const operationName = key === 'posts' ? 'GetUserPosts' : 'GetUserComments';
-                const response = await queryGraphQL<any, any>(query, {
+                const operationName = key === 'posts'
+                    ? (fallbackActivated ? 'GetUserPostsFallback' : 'GetUserPosts')
+                    : (fallbackActivated ? 'GetUserCommentsFallback' : 'GetUserComments');
+                const response = await queryGraphQL<any, any>(activeQuery, {
                     userId,
                     limit,
                     after: afterCursor
@@ -242,25 +276,43 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
             };
 
             let fetchLimitUsed = currentLimit;
-            let rawResults = await requestBatch(fetchLimitUsed);
+            let rawResults: Array<T | null | undefined>;
+            try {
+                rawResults = await requestBatch(fetchLimitUsed);
+            } catch (e) {
+                if (!fallbackActivated && timeFieldFallback && isUnsupportedTimeFieldError(e)) {
+                    fallbackActivated = true;
+                    activeQuery = timeFieldFallback.query;
+                    activeCursorField = timeFieldFallback.cursorField;
+                    // Watermarks from edit-time fields are not directly comparable to postedAt cursors.
+                    // Restart this collection scan in compatibility mode to avoid skipping items.
+                    afterCursor = null;
+                    Logger.warn(
+                        `Archive ${key}: server rejected timeField; retrying with fallback query/cursor (${activeCursorField}).`
+                    );
+                    rawResults = await requestBatch(fetchLimitUsed);
+                } else {
+                    throw e;
+                }
+            }
 
             // If the batch ends on a duplicated timestamp boundary, expand the page size and retry
             // from the same cursor to reduce risk of skipping records with identical postedAt values.
             while (rawResults.length === fetchLimitUsed) {
-                const boundaryTimestamp = getCursorTimestampFromBatch(rawResults);
+                const boundaryTimestamp = getCursorTimestampFromBatch(rawResults, activeCursorField);
                 if (!boundaryTimestamp) break;
 
                 let boundaryCount = 0;
                 for (let i = rawResults.length - 1; i >= 0; i--) {
-                    const row = rawResults[i] as any;
-                    if (!row || row.postedAt !== boundaryTimestamp) break;
+                    const rowTimestamp = getCursorTimestampValue(rawResults[i], activeCursorField);
+                    if (!rowTimestamp || rowTimestamp !== boundaryTimestamp) break;
                     boundaryCount++;
                 }
 
                 if (boundaryCount <= 1) break;
                 if (fetchLimitUsed >= MAX_PAGE_SIZE) {
                     Logger.warn(
-                        `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical postedAt.`
+                        `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical ${activeCursorField} values.`
                     );
                     break;
                 }
@@ -270,7 +322,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                     Math.max(fetchLimitUsed + boundaryCount, Math.round(fetchLimitUsed * 1.5))
                 );
                 Logger.debug(
-                    `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce timestamp boundary truncation risk.`
+                    `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce ${activeCursorField} boundary truncation risk.`
                 );
                 fetchLimitUsed = expandedLimit;
                 rawResults = await requestBatch(fetchLimitUsed);
@@ -279,14 +331,14 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
             const results = rawResults.filter(isValidArchiveItem);
             const duration = Date.now() - startTime;
 
-            console.log(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
+            Logger.debug(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
 
             if (results.length !== rawResults.length) {
                 Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
             }
 
             if (rawResults.length === 0) {
-                console.log(`[Archive ${key}] End of collection reached (empty batch).`);
+                Logger.debug(`[Archive ${key}] End of collection reached (empty batch).`);
                 hasMore = false;
                 break;
             }
@@ -344,9 +396,9 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 // We intentionally avoid stopping early on short non-empty batches.
                 // Some partial-response paths may return fewer items than requested
                 // before the true end of collection.
-                const batchSummary = summarizeBatchForCursorDebug(rawResults);
-                const nextCursorTail = getCursorTimestampFromBatch(rawResults);
-                const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor);
+                const batchSummary = summarizeBatchForCursorDebug(rawResults, activeCursorField);
+                const nextCursorTail = getCursorTimestampFromBatch(rawResults, activeCursorField);
+                const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor, activeCursorField);
                 if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
                     Logger.debug(
                         `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
@@ -357,13 +409,14 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                     const stopReason = 'cursor_not_advancing';
                     const hint = !nextCursorTail
                         ? (batchSummary.missingTimestampCount === rawResults.length
-                            ? 'all_raw_items_missing_postedAt'
-                            : 'tail_item_missing_or_invalid_postedAt')
+                            ? `all_raw_items_missing_${cursorField}`
+                            : `tail_item_missing_or_invalid_${cursorField}`)
                         : (batchSummary.uniqueTimestampCount <= 1
                             ? 'batch_collapsed_to_single_timestamp'
                             : 'server_returned_non_advancing_page');
                     Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
                         key,
+                        cursorField: activeCursorField,
                         batchNumber,
                         hint,
                         request: {
@@ -388,8 +441,8 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                             missingTimestampsInRawBatch: batchSummary.missingTimestampCount
                         },
                         batchEdges: {
-                            first: { id: batchSummary.firstId, postedAt: batchSummary.firstTimestamp },
-                            last: { id: batchSummary.lastId, postedAt: batchSummary.lastTimestamp },
+                            first: { id: batchSummary.firstId, timestamp: batchSummary.firstTimestamp },
+                            last: { id: batchSummary.lastId, timestamp: batchSummary.lastTimestamp },
                             headIds: batchSummary.headIds,
                             tailIds: batchSummary.tailIds
                         },
@@ -401,7 +454,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 }
                 previousBatchTail = {
                     id: batchSummary.lastId,
-                    postedAt: batchSummary.lastTimestamp
+                    timestamp: batchSummary.lastTimestamp
                 };
             }
         } catch (e) {
@@ -422,7 +475,17 @@ export const fetchUserPosts = (
     afterDate?: Date,
     onBatch?: (posts: Post[]) => Promise<void>
 ): Promise<Post[]> => {
-    return fetchCollectionAdaptively<Post>(userId, GET_USER_POSTS, 'posts', onProgress, afterDate, onBatch);
+    return fetchCollectionAdaptively<Post>(
+        userId,
+        GET_USER_POSTS,
+        'posts',
+        'modifiedAt',
+        onProgress,
+        afterDate,
+        onBatch,
+        undefined,
+        { query: GET_USER_POSTS_FALLBACK, cursorField: 'postedAt' }
+    );
 };
 
 /**
@@ -435,7 +498,17 @@ export const fetchUserComments = (
     onBatch?: (comments: Comment[]) => Promise<void>,
     archiveUsername?: string
 ): Promise<Comment[]> => {
-    return fetchCollectionAdaptively<Comment>(userId, GET_USER_COMMENTS, 'comments', onProgress, afterDate, onBatch, archiveUsername);
+    return fetchCollectionAdaptively<Comment>(
+        userId,
+        GET_USER_COMMENTS,
+        'comments',
+        'lastEditedAt',
+        onProgress,
+        afterDate,
+        onBatch,
+        archiveUsername,
+        { query: GET_USER_COMMENTS_FALLBACK, cursorField: 'postedAt' }
+    );
 };
 
 /**

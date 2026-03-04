@@ -376,6 +376,7 @@ const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
           <ul>
             <li><strong>g</strong>: Thread to AI Studio (new tab) · <strong>⇧G</strong>: + Descendants</li>
             <li><strong>m</strong>: Thread to Arena Max (new tab) · <strong>⇧M</strong>: + Descendants</li>
+            <li>Same <strong>g/G/m/M</strong> hotkeys also work on native LW/EAF pages (hover a post or comment).</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>

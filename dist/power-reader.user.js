@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.707
+// @version    1.2.708
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1694,6 +1694,8 @@ reset: () => {
     currentSelection: null,
     lastMousePos: { x: 0, y: 0 },
     postDescendantsCache: new Map(),
+    forumCommentById: new Map(),
+    forumPostById: new Map(),
     isArchiveMode: false,
     archiveUsername: null
   });
@@ -1772,7 +1774,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.707"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.708"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2017,6 +2019,7 @@ reset: () => {
     slug
     pageUrl
     postedAt
+    modifiedAt
     baseScore
     voteCount
     commentCount
@@ -2051,6 +2054,7 @@ reset: () => {
   fragment CommentFieldsCore on Comment {
     _id
     postedAt
+    lastEditedAt
     htmlBody
     baseScore
     voteCount
@@ -2330,6 +2334,28 @@ reset: () => {
         userPosts: {
           userId: $userId
           sortedBy: "oldest"
+          timeField: "modifiedAt"
+          after: $after
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...PostFieldsFull
+      }
+    }
+  }
+  ${POST_FIELDS_FULL}
+`
+  );
+  const GET_USER_POSTS_FALLBACK = (
+`
+  query GetUserPostsFallback($userId: String!, $limit: Int, $after: String) {
+    posts(
+      selector: {
+        userPosts: {
+          userId: $userId
+          sortedBy: "oldest"
           after: $after
         }
       },
@@ -2346,6 +2372,28 @@ reset: () => {
   const GET_USER_COMMENTS = (
 `
   query GetUserComments($userId: String!, $limit: Int, $after: String) {
+    comments(
+      selector: {
+        allRecentComments: {
+          userId: $userId
+          after: $after
+          sortBy: "oldest"
+          timeField: "lastEditedAt"
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        ...CommentFieldsLite
+      }
+    }
+  }
+  ${COMMENT_FIELDS_LITE}
+`
+  );
+  const GET_USER_COMMENTS_FALLBACK = (
+`
+  query GetUserCommentsFallback($userId: String!, $limit: Int, $after: String) {
     comments(
       selector: {
         allRecentComments: {
@@ -2434,6 +2482,86 @@ reset: () => {
   const isEAForumHost = () => isEAForumHostname(window.location.hostname);
   const isEAForumLikeHost = () => isEAForumHost() || isLocalhostHostname(window.location.hostname);
   const getForumMeta = () => isEAForumHost() ? { forumLabel: "EA Forum", forumHomeUrl: "https://forum.effectivealtruism.org/" } : { forumLabel: "Less Wrong", forumHomeUrl: "https://www.lesswrong.com/" };
+  const BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+  const HEX_DIGITS = "0123456789abcdef";
+  const UUID_HEX_LENGTH = 32;
+  const getCryptoApi = () => {
+    if (typeof globalThis === "undefined") return null;
+    const candidate = globalThis.crypto;
+    if (!candidate || typeof candidate.getRandomValues !== "function") return null;
+    return candidate;
+  };
+  const mathRandomInt = (maxExclusive) => Math.floor(Math.random() * maxExclusive);
+  const byteToHex = (value) => `${HEX_DIGITS[value >>> 4 & 15]}${HEX_DIGITS[value & 15]}`;
+  const randomHex = (length) => {
+    const targetLength = Math.max(0, Math.floor(length));
+    if (targetLength === 0) return "";
+    const cryptoApi = getCryptoApi();
+    if (cryptoApi) {
+      const bytes2 = new Uint8Array(Math.ceil(targetLength / 2));
+      cryptoApi.getRandomValues(bytes2);
+      let out2 = "";
+      for (const byte of bytes2) {
+        out2 += byteToHex(byte);
+      }
+      return out2.slice(0, targetLength);
+    }
+    const bytes = new Uint8Array(Math.ceil(targetLength / 2));
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = mathRandomInt(256);
+    }
+    let out = "";
+    for (const byte of bytes) {
+      out += byteToHex(byte);
+    }
+    return out.slice(0, targetLength);
+  };
+  const randomUuid = () => {
+    const cryptoApi = getCryptoApi();
+    if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+      return cryptoApi.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    if (cryptoApi) {
+      cryptoApi.getRandomValues(bytes);
+    } else {
+      const fallbackHex = randomHex(UUID_HEX_LENGTH);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = Number.parseInt(fallbackHex.slice(i * 2, i * 2 + 2), 16);
+      }
+    }
+    bytes[6] = bytes[6] & 15 | 64;
+    bytes[8] = bytes[8] & 63 | 128;
+    const hex = Array.from(bytes, byteToHex).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  };
+  const randomBase36 = (length) => {
+    const targetLength = Math.max(0, Math.floor(length));
+    if (targetLength === 0) return "";
+    let out = "";
+    for (let i = 0; i < targetLength; i++) {
+      out += BASE36_ALPHABET[randomInt(BASE36_ALPHABET.length)];
+    }
+    return out;
+  };
+  const randomInt = (maxExclusive) => {
+    const max = Math.floor(maxExclusive);
+    if (!Number.isFinite(max) || max <= 0) return 0;
+    const cryptoApi = getCryptoApi();
+    if (cryptoApi) {
+      const random = new Uint32Array(1);
+      const range = 4294967296;
+      if (max >= range) {
+        return mathRandomInt(max);
+      }
+      const maxUnbiased = Math.floor(range / max) * max;
+      do {
+        cryptoApi.getRandomValues(random);
+      } while (random[0] >= maxUnbiased);
+      return random[0] % max;
+    }
+    return mathRandomInt(max);
+  };
   const STORAGE_KEYS = {
     READ: "power-reader-read",
     READ_FROM: "power-reader-read-from",
@@ -2711,7 +2839,7 @@ reset: () => {
         return normalized;
       }
     }
-    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const generated = randomUuid();
     GM_setValue(key, generated);
     return generated;
   }
@@ -2742,6 +2870,7 @@ reset: () => {
 hoverDelay: 300,
     maxPostHeight: "50vh"
   };
+  const Z_INDEX_TOP_LAYER = 2147483647;
   const asUIComment = (comment) => comment;
   const isForceVisible = (comment) => asUIComment(comment).forceVisible === true;
   const setForceVisible = (comment, value) => {
@@ -6560,7 +6689,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   };
   const withRetryJitter = async (attempt) => {
     const base = Math.min(1200, 120 + attempt * 170);
-    const jitter = Math.floor(Math.random() * 90);
+    const jitter = randomInt(90);
     await new Promise((resolve) => window.setTimeout(resolve, base + jitter));
   };
   const defaultEnvelope = (site, writerId, nowIso2, expiresAtIso) => ({
@@ -6732,10 +6861,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     };
   }
   function safeRandomUuid() {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-      return crypto.randomUUID();
-    }
-    return `fallback-${Date.now()}-${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+    return randomUuid();
   }
   function makeWriterId() {
     return `${getDeviceId()}:${safeRandomUuid().replace(/-/g, "").slice(0, 8)}`;
@@ -6909,7 +7035,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     );
     const cooldownLevel = Math.max(1, runtime.meta.quotaCooldownLevel || 1);
     const nextMinutes = QUOTA_COOLDOWN_LADDER_MIN[Math.min(cooldownLevel - 1, QUOTA_COOLDOWN_LADDER_MIN.length - 1)];
-    const jitterMs = Math.floor(Math.random() * QUOTA_COOLDOWN_JITTER_MS);
+    const jitterMs = randomInt(QUOTA_COOLDOWN_JITTER_MS);
     runtime.meta.quotaDisabledUntilMs = nowMs() + nextMinutes * 6e4 + jitterMs;
     runtime.meta.quotaNextProbeAtMs = runtime.meta.quotaDisabledUntilMs;
     runtime.quotaDisabledUntilMs = runtime.meta.quotaDisabledUntilMs || 0;
@@ -7900,7 +8026,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       if (runtime.periodicPullTimer !== null) {
         window.clearTimeout(runtime.periodicPullTimer);
       }
-      const delayMs = PULL_FALLBACK_BASE_MS + Math.floor(Math.random() * PULL_FALLBACK_JITTER_MS);
+      const delayMs = PULL_FALLBACK_BASE_MS + randomInt(PULL_FALLBACK_JITTER_MS);
       runtime.periodicPullTimer = window.setTimeout(() => {
         runtime.periodicPullTimer = null;
         void runPeriodicPull().finally(() => {
@@ -8593,6 +8719,7 @@ currentUserSnapshot: void 0
           <ul>
             <li><strong>g</strong>: Thread to AI Studio (new tab) · <strong>⇧G</strong>: + Descendants</li>
             <li><strong>m</strong>: Thread to Arena Max (new tab) · <strong>⇧M</strong>: + Descendants</li>
+            <li>Same <strong>g/G/m/M</strong> hotkeys also work on native LW/EAF pages (hover a post or comment).</li>
             <li>Drag edges to resize · Width saved across sessions</li>
           </ul>
         </div>
@@ -8643,7 +8770,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.708"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -8818,7 +8945,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.708"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -10123,10 +10250,17 @@ currentCommentId = null;
   const LARGE_DESCENDANT_THRESHOLD = 100;
   const shouldPromptForLargeDescendants = (descendantCount) => descendantCount > LARGE_DESCENDANT_THRESHOLD;
   const OVERLAY_ID = "pr-descendant-confirm-overlay";
-  const promptLargeDescendantConfirmation = async (options) => {
+  let activePromptFinalize = null;
+  const promptLargeDescendantConfirmation = async (options, signal) => {
+    if (signal?.aborted) return "cancel";
+    if (activePromptFinalize) {
+      activePromptFinalize("cancel");
+      activePromptFinalize = null;
+    }
     const existing = document.getElementById(OVERLAY_ID);
     if (existing) existing.remove();
     return new Promise((resolve) => {
+      let settled = false;
       const overlay = document.createElement("div");
       overlay.id = OVERLAY_ID;
       overlay.style.position = "fixed";
@@ -10135,7 +10269,7 @@ currentCommentId = null;
       overlay.style.display = "flex";
       overlay.style.alignItems = "center";
       overlay.style.justifyContent = "center";
-      overlay.style.zIndex = "100000";
+      overlay.style.zIndex = String(Z_INDEX_TOP_LAYER);
       const dialog = document.createElement("div");
       dialog.style.width = "min(560px, 92vw)";
       dialog.style.background = "#fff";
@@ -10155,14 +10289,26 @@ currentCommentId = null;
         <button data-choice="cancel" style="padding: 8px 12px; cursor: pointer;">Cancel</button>
       </div>
     `;
+      const onAbort = () => {
+        finalize("cancel");
+      };
       const cleanup = () => {
         document.removeEventListener("keydown", onKeyDown, true);
+        if (signal) {
+          signal.removeEventListener("abort", onAbort);
+        }
         overlay.remove();
       };
       const finalize = (decision) => {
+        if (settled) return;
+        settled = true;
+        if (activePromptFinalize === finalize) {
+          activePromptFinalize = null;
+        }
         cleanup();
         resolve(decision);
       };
+      activePromptFinalize = finalize;
       const onKeyDown = (e) => {
         if (e.key === "Escape") {
           e.preventDefault();
@@ -10180,6 +10326,17 @@ currentCommentId = null;
           finalize("cancel");
         }
       });
+      if (signal) {
+        if (signal.aborted) {
+          finalize("cancel");
+          return;
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) {
+          finalize("cancel");
+          return;
+        }
+      }
       document.addEventListener("keydown", onKeyDown, true);
       overlay.appendChild(dialog);
       document.body.appendChild(overlay);
@@ -11169,23 +11326,148 @@ currentCommentId = null;
     }
     handleScrollToRoot(target, topLevelId);
   };
-  const setStatusMessage = (message, color) => {
-    const statusEl = document.querySelector(".pr-status");
-    if (!statusEl) return;
-    statusEl.textContent = "";
-    if (!color) {
-      statusEl.textContent = message;
-      return;
+  const readerStatusReporter = {
+    setMessage(message, color) {
+      const statusEl = document.querySelector(".pr-status");
+      if (!statusEl) return;
+      statusEl.textContent = "";
+      if (!color) {
+        statusEl.textContent = message;
+        return;
+      }
+      const span = document.createElement("span");
+      span.style.color = color;
+      span.textContent = message;
+      statusEl.appendChild(span);
+    },
+    clear() {
+      const statusEl = document.querySelector(".pr-status");
+      if (!statusEl) return;
+      statusEl.textContent = "";
     }
-    const span = document.createElement("span");
-    span.style.color = color;
-    span.textContent = message;
-    statusEl.appendChild(span);
+  };
+  const isNonEmptyText = (value) => typeof value === "string" && value.trim().length > 0;
+  const createAbortError = () => {
+    const err = new Error("Operation aborted");
+    err.name = "AbortError";
+    return err;
+  };
+  const ensureNotAborted = (signal) => {
+    if (signal?.aborted) throw createAbortError();
+  };
+  const ensureOperationActive = (options) => {
+    ensureNotAborted(options?.abortSignal);
+    if (options?.expectedHref && window.location.href !== options.expectedHref) {
+      throw createAbortError();
+    }
+  };
+  const isAbortError = (err) => err instanceof Error && err.name === "AbortError";
+  const FORUM_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+  const FORUM_CACHE_MAX_ENTRIES = 1e3;
+  let forumFetchSeq = 0;
+  const forumCacheMetaByKey = new Map();
+  const resetForumAICache = (state2) => {
+    forumFetchSeq = 0;
+    forumCacheMetaByKey.clear();
+    if (state2) {
+      state2.forumCommentById.clear();
+      state2.forumPostById.clear();
+    }
+  };
+  const forumCacheKey = (kind, id) => `${kind}:${id}`;
+  const getCachedPost = (state2, postId) => state2.postById.get(postId) || state2.forumPostById.get(postId);
+  const getCachedComment = (state2, commentId) => state2.commentById.get(commentId) || state2.forumCommentById.get(commentId);
+  const removeForumCacheEntry = (state2, key) => {
+    const meta = forumCacheMetaByKey.get(key);
+    if (!meta) return;
+    if (meta.kind === "post") {
+      state2.forumPostById.delete(meta.id);
+    } else {
+      state2.forumCommentById.delete(meta.id);
+    }
+    forumCacheMetaByKey.delete(key);
+  };
+  const pruneForumCache = (state2) => {
+    const now = Date.now();
+    for (const [key, meta] of forumCacheMetaByKey) {
+      if (now - meta.updatedAt > FORUM_CACHE_TTL_MS) {
+        removeForumCacheEntry(state2, key);
+      } else {
+        break;
+      }
+    }
+    while (forumCacheMetaByKey.size > FORUM_CACHE_MAX_ENTRIES) {
+      const oldestKey = forumCacheMetaByKey.keys().next().value;
+      if (!oldestKey) break;
+      removeForumCacheEntry(state2, oldestKey);
+    }
+  };
+  const mergeThreadItem = (existing, incoming) => {
+    if (!existing) return incoming;
+    const existingMd = existing.contents?.markdown;
+    const incomingMd = incoming.contents?.markdown;
+    const mergedMd = isNonEmptyText(incomingMd) ? incomingMd : isNonEmptyText(existingMd) ? existingMd : incomingMd ?? existingMd ?? null;
+    const mergedContents = {
+      ...existing.contents || {},
+      ...incoming.contents || {},
+      markdown: mergedMd
+    };
+    const existingHtml = existing.htmlBody;
+    const incomingHtml = incoming.htmlBody;
+    let mergedHtml = existingHtml;
+    if (isNonEmptyText(incomingHtml)) {
+      mergedHtml = incomingHtml;
+    } else if (isNonEmptyText(existingHtml) && (incomingHtml === null || incomingHtml === "" || incomingHtml === void 0)) {
+      mergedHtml = existingHtml;
+    }
+    Object.assign(existing, incoming, {
+      contents: mergedContents,
+      htmlBody: mergedHtml
+    });
+    return existing;
+  };
+  const upsertForumCacheItem = (state2, kind, id, incoming, seq) => {
+    const key = forumCacheKey(kind, id);
+    const meta = forumCacheMetaByKey.get(key);
+    if (meta && seq < meta.seq) {
+      const existing = kind === "post" ? getCachedPost(state2, id) : getCachedComment(state2, id);
+      if (existing) return existing;
+    }
+    if (kind === "post") {
+      const existing = getCachedPost(state2, id);
+      const merged = mergeThreadItem(existing, incoming);
+      state2.forumPostById.set(id, merged);
+    } else {
+      const existing = getCachedComment(state2, id);
+      const merged = mergeThreadItem(existing, incoming);
+      state2.forumCommentById.set(id, merged);
+    }
+    forumCacheMetaByKey.delete(key);
+    forumCacheMetaByKey.set(key, {
+      kind,
+      id,
+      seq,
+      updatedAt: Date.now()
+    });
+    pruneForumCache(state2);
+    return kind === "post" ? state2.forumPostById.get(id) || incoming : state2.forumCommentById.get(id) || incoming;
+  };
+  const setStatusMessage = (reporter, message, color) => {
+    reporter.setMessage(message, color);
+  };
+  const getStatusReporter = (custom) => custom || readerStatusReporter;
+  const clearHighlight = (itemEl) => {
+    if (itemEl?.isConnected) {
+      itemEl.classList.remove("being-summarized");
+    }
+  };
+  const highlightItem = (itemEl) => {
+    document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
+    if (itemEl) itemEl.classList.add("being-summarized");
   };
   const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
   const makeIndent = (depth) => "  ".repeat(Math.max(0, depth));
-  const indentMultiline = (value, depth) => value.replace(/^/gm, makeIndent(depth));
   const toXml = (items, focalId, descendants = [], depth = 0) => {
     if (items.length === 0) return "";
     const item = items[0];
@@ -11200,7 +11482,7 @@ currentCommentId = null;
     let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}${titleAttr}>
 `;
     xml += `${childIndent}<body_markdown>
-${indentMultiline(escapeXmlText(md), depth + 2)}
+${escapeXmlText(md)}
 ${childIndent}</body_markdown>
 `;
     if (isFocal && descendants.length > 0) {
@@ -11239,7 +11521,7 @@ ${childIndent}</body_markdown>
       let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
       xml += `${childIndent}<body_markdown>
-${indentMultiline(escapeXmlText(md), depth + 2)}
+${escapeXmlText(md)}
 ${childIndent}</body_markdown>
 `;
       const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1);
@@ -11255,7 +11537,7 @@ ${childIndent}</body_markdown>
     const childrenByParent = buildDescendantChildrenIndex(descendants);
     return descendantsToXmlWithIndex(childrenByParent, parentId, depth);
   };
-  const buildPayloadStorageKey = (baseKey) => `${baseKey}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`;
+  const buildPayloadStorageKey = (baseKey) => `${baseKey}:${Date.now().toString(36)}:${randomBase36(8)}`;
   const toTimestamp = (value) => {
     if (!value) return 0;
     const parsed = Date.parse(value);
@@ -11273,61 +11555,86 @@ ${childIndent}</body_markdown>
       return `${baseUrl}${separator}pr_payload_key=${encodeURIComponent(payloadKey)}`;
     }
   };
-  const fetchItemMarkdown = async (itemId, itemIsPost, state2, providerName) => {
+  const fetchItemMarkdown = async (itemId, itemIsPost, state2, providerName, options) => {
+    ensureOperationActive(options);
     if (itemIsPost) {
-      const p = state2.postById.get(itemId);
+      const p = getCachedPost(state2, itemId);
       if (p?.contents?.markdown) return p;
     } else {
-      const c = state2.commentById.get(itemId);
+      const c = getCachedComment(state2, itemId);
       if (c?.contents?.markdown) return c;
     }
     Logger.info(`${providerName}: Fetching ${itemId} source from server...`);
+    const seq = ++forumFetchSeq;
     if (itemIsPost) {
       const res = await queryGraphQL(GET_POST, { id: itemId });
-      return res?.post?.result || null;
+      ensureOperationActive(options);
+      const fetched = res?.post?.result || null;
+      if (!fetched) return null;
+      return upsertForumCacheItem(state2, "post", itemId, fetched, seq);
     } else {
       const res = await queryGraphQL(GET_COMMENT, { id: itemId });
-      return res?.comment?.result || null;
+      ensureOperationActive(options);
+      const fetched = res?.comment?.result || null;
+      if (!fetched) return null;
+      return upsertForumCacheItem(state2, "comment", itemId, fetched, seq);
     }
   };
   const createAIProviderFeature = (config) => {
-    const handleSend = async (state2, includeDescendants = false, focalItemId) => {
+    const handleSend = async (state2, includeDescendants = false, focalItemId, target, options) => {
+      const reporter = getStatusReporter(options?.statusReporter);
       let itemEl = null;
-      if (focalItemId) {
+      let id = null;
+      let isPost2 = false;
+      let postIdHint = null;
+      if (target) {
+        id = target.itemId;
+        isPost2 = !!target.isPost;
+        postIdHint = target.postIdHint || null;
+        itemEl = target.sourceEl || null;
+      }
+      if (!id && focalItemId) {
         itemEl = document.querySelector(`.pr-comment[data-id="${focalItemId}"], .pr-post[data-id="${focalItemId}"]`);
         if (!itemEl) {
           Logger.warn(`${config.name}: Focal item ${focalItemId} no longer in DOM.`);
           return;
         }
-      } else {
-        const target = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
-        if (target) {
-          itemEl = target.closest(".pr-comment, .pr-post");
+        id = focalItemId;
+        isPost2 = itemEl.classList.contains("pr-post");
+      } else if (!id) {
+        const target2 = document.elementFromPoint(state2.lastMousePos.x, state2.lastMousePos.y);
+        if (target2) {
+          itemEl = target2.closest(".pr-comment, .pr-post");
         }
         if (!itemEl) {
           itemEl = document.querySelector(".being-summarized.pr-comment, .being-summarized.pr-post");
         }
+        if (itemEl) {
+          id = itemEl.dataset.id || null;
+          isPost2 = itemEl.classList.contains("pr-post");
+          postIdHint = itemEl.dataset.postId || null;
+        }
       }
-      if (!itemEl) {
+      if (!id) {
+        Logger.warn(`${config.name}: Target has no item id.`);
+        return;
+      }
+      if (!itemEl && !target) {
         Logger.warn(`${config.name}: No comment or post found under mouse.`);
         return;
       }
-      document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
-      itemEl.classList.add("being-summarized");
-      const id = itemEl.dataset.id;
-      if (!id) {
-        Logger.warn(`${config.name}: Element has no ID.`);
-        return;
-      }
-      const isPost2 = itemEl.classList.contains("pr-post");
-      Logger.info(`${config.name}: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
       try {
-        setStatusMessage(`${config.statusTag} Building conversation thread...`, "#007bff");
+        ensureOperationActive(options);
+        highlightItem(itemEl);
+        Logger.info(`${config.name}: Target identified - ${isPost2 ? "Post" : "Comment"} ${id} (Include descendants: ${includeDescendants})`);
+        setStatusMessage(reporter, `${config.statusTag} Building conversation thread...`, "#007bff");
         const lineage = [];
         let currentId = id;
         let currentIsPost = isPost2;
         while (currentId && lineage.length < 8) {
-          const item = await fetchItemMarkdown(currentId, currentIsPost, state2, config.name);
+          ensureOperationActive(options);
+          const item = await fetchItemMarkdown(currentId, currentIsPost, state2, config.name, options);
+          ensureOperationActive(options);
           if (!item) break;
           lineage.unshift(item);
           if (currentIsPost) {
@@ -11353,7 +11660,7 @@ ${childIndent}</body_markdown>
           let decision = "load_all";
           let prompted = false;
           if (isPost2) {
-            const post = state2.postById.get(id);
+            const post = getCachedPost(state2, id);
             const totalCount = post?.commentCount ?? -1;
             baselineDescendants = getAvailablePostComments(state2, id);
             fullDescendants = baselineDescendants;
@@ -11362,19 +11669,30 @@ ${childIndent}</body_markdown>
               decision = await promptLargeDescendantConfirmation({
                 descendantCount: actualDescendantCount,
                 subjectLabel: "post"
-              });
+              }, options?.abortSignal);
               prompted = true;
             }
             if (decision === "load_all" && !isPostComplete(state2, id, totalCount)) {
-              setStatusMessage(`${config.statusTag} Loading descendants...`, "#007bff");
+              setStatusMessage(reporter, `${config.statusTag} Loading descendants...`, "#007bff");
               await fetchAllPostCommentsWithCache(state2, id, totalCount);
+              ensureOperationActive(options);
               fullDescendants = getAvailablePostComments(state2, id);
               actualDescendantCount = totalCount >= 0 ? totalCount : fullDescendants.length;
             }
           } else {
-            const focalComment = state2.commentById.get(id);
-            const postId = focalComment?.postId || itemEl.dataset.postId || "";
-            const postTotalCount = state2.postById.get(postId)?.commentCount ?? -1;
+            const focalComment = getCachedComment(state2, id);
+            let postId = focalComment?.postId || postIdHint || itemEl?.dataset.postId || "";
+            if (!postId) {
+              const fetchedFocal = await fetchItemMarkdown(id, false, state2, config.name, options);
+              ensureOperationActive(options);
+              postId = fetchedFocal?.postId || postIdHint || "";
+            }
+            if (!postId) {
+              setStatusMessage(reporter, `${config.statusTag} Unable to resolve post context for descendants.`, "#dc3545");
+              clearHighlight(itemEl);
+              return;
+            }
+            const postTotalCount = getCachedPost(state2, postId)?.commentCount ?? -1;
             const baselineSource = postId ? getAvailablePostComments(state2, postId) : state2.comments;
             baselineDescendants = collectCommentDescendants(baselineSource, id);
             fullDescendants = baselineDescendants;
@@ -11383,12 +11701,13 @@ ${childIndent}</body_markdown>
               decision = await promptLargeDescendantConfirmation({
                 descendantCount: actualDescendantCount,
                 subjectLabel: "comment"
-              });
+              }, options?.abortSignal);
               prompted = true;
             }
             if (decision === "load_all" && postId && !isPostComplete(state2, postId, postTotalCount)) {
-              setStatusMessage(`${config.statusTag} Loading descendants...`, "#007bff");
+              setStatusMessage(reporter, `${config.statusTag} Loading descendants...`, "#007bff");
               await fetchAllPostCommentsWithCache(state2, postId, postTotalCount);
+              ensureOperationActive(options);
               const mergedSource = getAvailablePostComments(state2, postId);
               fullDescendants = collectCommentDescendants(mergedSource, id);
               actualDescendantCount = fullDescendants.length;
@@ -11398,11 +11717,11 @@ ${childIndent}</body_markdown>
             decision = await promptLargeDescendantConfirmation({
               descendantCount: actualDescendantCount,
               subjectLabel: isPost2 ? "post" : "comment"
-            });
+            }, options?.abortSignal);
           }
           if (decision === "cancel") {
-            setStatusMessage(`${config.statusTag} Action canceled.`, "#dc3545");
-            itemEl.classList.remove("being-summarized");
+            setStatusMessage(reporter, `${config.statusTag} Action canceled.`, "#dc3545");
+            clearHighlight(itemEl);
             return;
           }
           descendants = decision === "continue_without_loading" ? baselineDescendants : fullDescendants;
@@ -11413,15 +11732,18 @@ ${childIndent}</body_markdown>
         const payloadStorageKey = buildPayloadStorageKey(config.promptPayloadKey);
         const providerUrl = buildProviderUrl(config.openUrl, payloadStorageKey);
         Logger.info(`${config.name}: Opening tab with deep threaded payload...`);
+        ensureOperationActive(options);
         if (typeof GM_setValue !== "function") {
           throw new Error("GM_setValue unavailable");
         }
         GM_setValue(payloadStorageKey, finalPayload);
         registerAIPayloadKey(payloadStorageKey);
         try {
+          ensureOperationActive(options);
           if (typeof GM_openInTab !== "function") {
             throw new Error("GM_openInTab unavailable");
           }
+          ensureOperationActive(options);
           GM_openInTab(providerUrl, { active: true });
         } catch (openError) {
           if (typeof GM_deleteValue === "function") {
@@ -11430,14 +11752,18 @@ ${childIndent}</body_markdown>
           consumeAIPayloadKey(payloadStorageKey);
           throw openError;
         }
-        setStatusMessage(config.openingStatusText, "#28a745");
+        setStatusMessage(reporter, config.openingStatusText, "#28a745");
         window.setTimeout(() => {
-          if (itemEl?.isConnected) itemEl.classList.remove("being-summarized");
+          clearHighlight(itemEl);
         }, 3e3);
       } catch (error) {
-        Logger.error(`${config.name}: Failed to prepare threaded payload`, error);
-        setStatusMessage(`[${config.name}] Failed to prepare payload. Check console.`, "#dc3545");
-        itemEl.classList.remove("being-summarized");
+        if (isAbortError(error)) {
+          setStatusMessage(reporter, `${config.statusTag} Action canceled.`, "#dc3545");
+        } else {
+          Logger.error(`${config.name}: Failed to prepare threaded payload`, error);
+          setStatusMessage(reporter, `[${config.name}] Failed to prepare payload. Check console.`, "#dc3545");
+        }
+        clearHighlight(itemEl);
       }
     };
     return { handleSend };
@@ -11882,6 +12208,9 @@ getPromptPrefix: getAIStudioPrefix,
       tooltipElement.style.opacity = "0";
     }
   };
+  let headerInjectionAbort = null;
+  let headerObserver = null;
+  let scheduledInjectId = null;
   const getUsernameFromUrl = () => {
     const path = window.location.pathname;
     if (!path.startsWith("/users/")) return null;
@@ -11896,6 +12225,7 @@ getPromptPrefix: getAIStudioPrefix,
   };
   const addSharedStyles = () => {
     if (document.getElementById("pr-header-injection-styles")) return;
+    if (typeof GM_addStyle !== "function") return;
     GM_addStyle(`
     #pr-header-links-container {
       display: inline-flex;
@@ -11927,7 +12257,9 @@ getPromptPrefix: getAIStudioPrefix,
     const styleMarker = document.createElement("div");
     styleMarker.id = "pr-header-injection-styles";
     styleMarker.style.display = "none";
-    document.head.appendChild(styleMarker);
+    const markerHost = document.head || document.documentElement;
+    if (!markerHost) return;
+    markerHost.appendChild(styleMarker);
   };
   const createReaderLink = () => {
     const link = document.createElement("a");
@@ -12000,42 +12332,589 @@ getPromptPrefix: getAIStudioPrefix,
       }
     }
   };
+  const scheduleInjectLinks = () => {
+    if (scheduledInjectId !== null) return;
+    scheduledInjectId = window.requestAnimationFrame(() => {
+      scheduledInjectId = null;
+      injectLinks();
+    });
+  };
   const setupHeaderInjection = () => {
+    if (headerInjectionAbort) {
+      headerInjectionAbort.abort();
+    }
+    if (headerObserver) {
+      headerObserver.disconnect();
+    }
+    if (scheduledInjectId !== null) {
+      window.cancelAnimationFrame(scheduledInjectId);
+      scheduledInjectId = null;
+    }
+    headerInjectionAbort = new AbortController();
+    const signal = headerInjectionAbort.signal;
     let isHydrated = false;
+    let lastPathname = window.location.pathname;
     const detectHydration = () => {
       if (document.querySelector(".Header-rightHeaderItems")) {
         isHydrated = true;
-        injectLinks();
+        scheduleInjectLinks();
       }
     };
     if (document.readyState === "complete") {
       detectHydration();
     } else {
-      window.addEventListener("load", detectHydration);
+      window.addEventListener("load", detectHydration, { signal });
     }
     const observer = new MutationObserver(() => {
-      if (!isHydrated) {
-        if (document.querySelector(".Header-rightHeaderItems")) {
-          isHydrated = true;
-          injectLinks();
-        }
+      const headerExists = !!document.querySelector(".Header-rightHeaderItems");
+      if (!headerExists) {
+        isHydrated = false;
         return;
       }
-      if (document.querySelector(".Header-rightHeaderItems")) {
-        injectLinks();
+      if (!isHydrated) {
+        isHydrated = true;
+        scheduleInjectLinks();
+        return;
+      }
+      const pathnameChanged = window.location.pathname !== lastPathname;
+      if (pathnameChanged) {
+        lastPathname = window.location.pathname;
+        scheduleInjectLinks();
+        return;
+      }
+      if (!document.getElementById("pr-header-links-container") || !document.getElementById("pr-reader-link")) {
+        scheduleInjectLinks();
       }
     });
     if (document.documentElement) {
       observer.observe(document.documentElement, { childList: true, subtree: true });
     } else {
       const earlyCheck = setInterval(() => {
+        if (signal.aborted) {
+          clearInterval(earlyCheck);
+          return;
+        }
         if (document.documentElement) {
           clearInterval(earlyCheck);
           observer.observe(document.documentElement, { childList: true, subtree: true });
         }
       }, 100);
     }
-    window.addEventListener("beforeunload", () => observer.disconnect());
+    headerObserver = observer;
+    window.addEventListener("popstate", scheduleInjectLinks, { signal });
+    window.addEventListener("hashchange", scheduleInjectLinks, { signal });
+    window.addEventListener("beforeunload", () => observer.disconnect(), { signal });
+  };
+  const COMMENT_CONTAINER_SELECTORS = [".comments-node[id]", ".CommentFrame-node[id]"];
+  const FEED_CARD_SELECTORS = [".LWPostsItem-postsItem", ".PostsItem2-root", ".PostsItem-root"];
+  const COMMENT_BODY_SELECTORS = [
+    ".CommentsItem-content",
+    ".CommentBody-root",
+    ".commentBody",
+    ".CommentsItem-body",
+    ".CommentFrame-body"
+  ];
+  const POST_BODY_SELECTORS = ["#postBody", ".PostsPage-postsPage", ".PostsPage-post"];
+  const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS = [
+    ".CommentsItem-meta",
+    ".CommentFrame-meta",
+    ".CommentMeta",
+    ".comment-meta",
+    ".commentTime"
+  ];
+  const STRUCTURAL_POST_LINK_CONTEXT_SELECTORS = [
+    ".LWPostsItem-title",
+    ".PostsItem2-title",
+    ".PostsItem-title",
+    ".PostsPageTitle-root",
+    "h1",
+    "h2"
+  ];
+  const EXCLUDED_REGION_SELECTORS = [
+    "header",
+    "footer",
+    "nav",
+    '[role="navigation"]',
+    '[role="search"]',
+    '[role="complementary"]',
+    "aside",
+    ".FixedPositionToC",
+    ".TableOfContents",
+    ".table-of-contents",
+    ".Header-root",
+    ".GlobalHeader-root",
+    ".UsersMenu-root",
+    ".SearchBar-root",
+    ".GlobalSidebar-root"
+  ];
+  const joinSelector = (selectors) => selectors.join(", ");
+  const COMMENT_CONTAINER_SELECTOR = joinSelector(COMMENT_CONTAINER_SELECTORS);
+  const FEED_CARD_SELECTOR = joinSelector(FEED_CARD_SELECTORS);
+  const POST_BODY_SELECTOR = joinSelector(POST_BODY_SELECTORS);
+  const BODY_CONTENT_SELECTOR = joinSelector([...COMMENT_BODY_SELECTORS, ...POST_BODY_SELECTORS]);
+  const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR = joinSelector(STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS);
+  const STRUCTURAL_POST_LINK_CONTEXT_SELECTOR = joinSelector(STRUCTURAL_POST_LINK_CONTEXT_SELECTORS);
+  const EXCLUDED_REGION_SELECTOR = joinSelector(EXCLUDED_REGION_SELECTORS);
+  const COMMENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{1,127}$/;
+  const extractCommentId = (value) => {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    let decoded = trimmed;
+    try {
+      decoded = decodeURIComponent(trimmed);
+    } catch {
+    }
+    const normalized = decoded.replace(/^#/, "").replace(/^(?:comment(?:s)?(?:id)?|id)[-_:=/]*/i, "").trim();
+    if (!COMMENT_ID_PATTERN.test(normalized)) return null;
+    return normalized;
+  };
+  const parseCommentIdFromHref = (href) => {
+    try {
+      const url = new URL(href, window.location.origin);
+      const commentId = url.searchParams.get("commentId");
+      if (commentId) return extractCommentId(commentId);
+      const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
+      const hashMatch = hash.match(/(?:^|[/?&])comment(?:id)?[-_:/=]([A-Za-z0-9_-]{2,128})(?:$|[/?&])/i);
+      if (hashMatch?.[1]) return extractCommentId(hashMatch[1]);
+    } catch {
+      return null;
+    }
+    return null;
+  };
+  const parsePostIdFromPath = (pathOrHref) => {
+    const match = pathOrHref.match(/\/posts\/([A-Za-z0-9_-]+)/i);
+    return match?.[1] || null;
+  };
+  const parsePostIdFromAnchor = (anchor) => {
+    const href = anchor.getAttribute("href") || anchor.href || "";
+    return parsePostIdFromPath(href);
+  };
+  const getClosestElement = (target) => {
+    if (!target) return null;
+    if (target instanceof HTMLElement) return target;
+    if (target instanceof Element) return target.parentElement;
+    if (target instanceof Node) return target.parentElement;
+    return null;
+  };
+  const isInExcludedRegion = (el) => !!el.closest(EXCLUDED_REGION_SELECTOR);
+  const isInBodyContent = (el) => !!el.closest(BODY_CONTENT_SELECTOR);
+  const getStructuralCommentLinkId = (anchor) => {
+    const commentId = parseCommentIdFromHref(anchor.href || anchor.getAttribute("href") || "");
+    if (!commentId) return null;
+    if (isInBodyContent(anchor)) return null;
+    if (!anchor.closest(STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR)) return null;
+    return commentId;
+  };
+  const isStructuralPostLink = (anchor) => {
+    if (!parsePostIdFromAnchor(anchor)) return false;
+    if (isInBodyContent(anchor)) return false;
+    return !!anchor.closest(STRUCTURAL_POST_LINK_CONTEXT_SELECTOR);
+  };
+  const getPostIdFromCurrentUrl = () => parsePostIdFromPath(window.location.pathname);
+  const findFirstPostLinkInContainer = (container) => container.querySelector('a[href*="/posts/"]');
+  const getPostIdHintForElement = (el) => {
+    const nearestPostAnchor = el.closest('a[href*="/posts/"]');
+    const fromAnchor = nearestPostAnchor ? parsePostIdFromAnchor(nearestPostAnchor) : null;
+    if (fromAnchor) return fromAnchor;
+    const card = el.closest(FEED_CARD_SELECTOR);
+    if (card) {
+      const cardLink = findFirstPostLinkInContainer(card);
+      const fromCard = cardLink ? parsePostIdFromAnchor(cardLink) : null;
+      if (fromCard) return fromCard;
+    }
+    return getPostIdFromCurrentUrl();
+  };
+  const buildCommentTarget = (commentId, sourceEl, containerEl) => ({
+    itemId: commentId,
+    isPost: false,
+    sourceEl,
+    postIdHint: containerEl || sourceEl ? getPostIdHintForElement(containerEl || sourceEl) : getPostIdFromCurrentUrl(),
+    containerEl
+  });
+  const buildPostTarget = (postId, sourceEl, containerEl) => ({
+    itemId: postId,
+    isPost: true,
+    sourceEl,
+    containerEl
+  });
+  const getCommentContainer = (el) => el.closest(COMMENT_CONTAINER_SELECTOR);
+  const resolvePostContainer = (el) => el.closest(FEED_CARD_SELECTOR) || el.closest(POST_BODY_SELECTORS.join(", ")) || null;
+  const resolveForumAITargetFromElement = (rawEl) => {
+    const el = getClosestElement(rawEl);
+    if (!el) return null;
+    if (isInExcludedRegion(el)) return null;
+    const anchor = el.closest("a[href]");
+    if (anchor && !isInExcludedRegion(anchor)) {
+      const commentId = getStructuralCommentLinkId(anchor);
+      if (commentId) {
+        const container = getCommentContainer(anchor);
+        const contextEl = container || anchor;
+        return buildCommentTarget(commentId, contextEl, container || contextEl);
+      }
+      if (isStructuralPostLink(anchor)) {
+        const postId = parsePostIdFromAnchor(anchor);
+        if (postId) {
+          const container = resolvePostContainer(anchor) || anchor;
+          return buildPostTarget(postId, container, container);
+        }
+      }
+    }
+    const commentContainer = getCommentContainer(el);
+    if (commentContainer) {
+      const commentId = extractCommentId(commentContainer.id);
+      if (commentId) {
+        return buildCommentTarget(commentId, commentContainer, commentContainer);
+      }
+    }
+    if (anchor && !isInBodyContent(anchor) && !isInExcludedRegion(anchor)) {
+      const postId = parsePostIdFromAnchor(anchor);
+      if (postId) {
+        const container = resolvePostContainer(anchor) || anchor;
+        return buildPostTarget(postId, container, container);
+      }
+    }
+    const card = el.closest(FEED_CARD_SELECTOR);
+    if (card) {
+      const link = findFirstPostLinkInContainer(card);
+      const postId = link ? parsePostIdFromAnchor(link) : null;
+      const fallback = postId || card.getAttribute("data-post-id") || null;
+      if (fallback) {
+        return buildPostTarget(fallback, card, card);
+      }
+    }
+    const postBodyContainer = el.closest(POST_BODY_SELECTOR);
+    if (postBodyContainer) {
+      const postIdFromUrl = getPostIdFromCurrentUrl();
+      if (postIdFromUrl) {
+        const anchorPostId = anchor ? parsePostIdFromAnchor(anchor) : null;
+        if (!anchorPostId || anchorPostId === postIdFromUrl) {
+          const container = postBodyContainer || el;
+          return buildPostTarget(postIdFromUrl, container, container);
+        }
+      }
+    }
+    return null;
+  };
+  const FORUM_STYLE_MARKER_ID = "pr-forum-ai-hotkeys-style-marker";
+  const FORUM_STATUS_HOST_ID = "pr-forum-ai-status-host";
+  const FORUM_STATUS_ID = "pr-forum-ai-status";
+  const STATUS_AUTO_CLEAR_MS = 7e3;
+  const LOCK_SAFETY_TIMEOUT_MS = 15e3;
+  const FALLBACK_TARGET_MAX_AGE_MS = 120;
+  const SELECTION_CONTEXT_SELECTOR = [
+    ".comments-node[id]",
+    ".CommentFrame-node[id]",
+    ".LWPostsItem-postsItem",
+    ".PostsItem2-root",
+    ".PostsItem-root",
+    "#postBody",
+    ".PostsPage-postsPage",
+    ".PostsPage-post"
+  ].join(", ");
+  const INTERACTIVE_TARGET_SELECTOR = [
+    "button",
+    "a[href]",
+    "summary",
+    "details",
+    '[role="button"]',
+    '[role="menuitem"]',
+    '[role="option"]',
+    '[role="listbox"]',
+    '[role="dialog"]',
+    '[aria-haspopup="menu"]'
+  ].join(", ");
+  let forumHotkeysAbort = null;
+  let lastMousePos = { x: 0, y: 0 };
+  let hasPointerHistory = false;
+  let lastResolvedTarget = null;
+  let inFlight = false;
+  let inFlightToken = 0;
+  let inFlightTimeout = null;
+  class ForumToastStatusReporter {
+    clearTimeout = null;
+    version = 0;
+    setMessage(message, color) {
+      const statusEl = this.ensureStatusElement();
+      if (!statusEl) return;
+      this.version += 1;
+      const currentVersion = this.version;
+      statusEl.textContent = message;
+      if (color) {
+        statusEl.style.borderColor = color;
+        statusEl.style.color = color;
+      } else {
+        statusEl.style.borderColor = "#333";
+        statusEl.style.color = "#222";
+      }
+      statusEl.style.opacity = "1";
+      if (this.clearTimeout) {
+        window.clearTimeout(this.clearTimeout);
+      }
+      this.clearTimeout = window.setTimeout(() => {
+        if (this.version === currentVersion) {
+          this.clear();
+        }
+      }, STATUS_AUTO_CLEAR_MS);
+    }
+    clear() {
+      const statusEl = document.getElementById(FORUM_STATUS_ID);
+      if (!statusEl) return;
+      statusEl.style.opacity = "0";
+      this.clearTimeout = null;
+    }
+    ensureStatusElement() {
+      const host = this.ensureHost();
+      if (!host) return null;
+      let statusEl = document.getElementById(FORUM_STATUS_ID);
+      if (!statusEl) {
+        statusEl = document.createElement("div");
+        statusEl.id = FORUM_STATUS_ID;
+        statusEl.style.pointerEvents = "none";
+        statusEl.style.padding = "8px 10px";
+        statusEl.style.background = "#fff";
+        statusEl.style.border = "1px solid #333";
+        statusEl.style.borderRadius = "8px";
+        statusEl.style.boxShadow = "0 8px 24px rgba(0,0,0,0.25)";
+        statusEl.style.fontSize = "12px";
+        statusEl.style.fontWeight = "600";
+        statusEl.style.lineHeight = "1.35";
+        statusEl.style.maxWidth = "min(520px, 92vw)";
+        statusEl.style.opacity = "0";
+        statusEl.style.transition = "opacity 120ms ease-out";
+        host.appendChild(statusEl);
+      }
+      return statusEl;
+    }
+    ensureHost() {
+      if (!document.body) return null;
+      let host = document.getElementById(FORUM_STATUS_HOST_ID);
+      if (!host) {
+        host = document.createElement("div");
+        host.id = FORUM_STATUS_HOST_ID;
+        host.style.position = "fixed";
+        host.style.top = "12px";
+        host.style.right = "12px";
+        host.style.zIndex = String(Z_INDEX_TOP_LAYER);
+        host.style.pointerEvents = "none";
+        document.body.appendChild(host);
+      }
+      return host;
+    }
+  }
+  const forumStatusReporter = new ForumToastStatusReporter();
+  const getTargetElement = (target) => {
+    if (!target) return null;
+    if (target instanceof HTMLElement) return target;
+    if (target instanceof Element) return target.parentElement;
+    if (target instanceof Node) return target.parentElement;
+    return null;
+  };
+  const isEditableTarget = (target) => {
+    const el = getTargetElement(target);
+    if (!el) return false;
+    const role = el.getAttribute("role");
+    return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable || role === "textbox" || role === "combobox";
+  };
+  const isInteractiveTarget = (target) => {
+    const el = getTargetElement(target);
+    if (!el) return false;
+    return !!el.closest(INTERACTIVE_TARGET_SELECTOR);
+  };
+  const isPointerOnInteractiveElement = () => {
+    if (!hasPointerHistory) return false;
+    const elUnderPointer = document.elementFromPoint(lastMousePos.x, lastMousePos.y);
+    if (!(elUnderPointer instanceof Element)) return false;
+    return !!elUnderPointer.closest(INTERACTIVE_TARGET_SELECTOR);
+  };
+  const hasActiveSelectionOutside = (containerEl) => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    if (!selection.toString().trim()) return false;
+    if (!containerEl) return true;
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i);
+      if (!containerEl.contains(range.commonAncestorContainer)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const ensureForumStyles = () => {
+    if (document.getElementById(FORUM_STYLE_MARKER_ID)) return;
+    if (typeof GM_addStyle !== "function") return;
+    GM_addStyle(`
+    .being-summarized {
+      outline: 2px solid #ff8a00 !important;
+      outline-offset: 2px !important;
+      background-color: rgba(255, 138, 0, 0.08) !important;
+    }
+  `);
+    const marker = document.createElement("div");
+    marker.id = FORUM_STYLE_MARKER_ID;
+    marker.style.display = "none";
+    const markerHost = document.head || document.documentElement;
+    if (!markerHost) return;
+    markerHost.appendChild(marker);
+  };
+  const clearAllHighlights = () => {
+    document.querySelectorAll(".being-summarized").forEach((el) => el.classList.remove("being-summarized"));
+  };
+  const clearInFlightLock = (token) => {
+    if (token !== inFlightToken) return;
+    inFlight = false;
+    if (inFlightTimeout) {
+      window.clearTimeout(inFlightTimeout);
+      inFlightTimeout = null;
+    }
+  };
+  const resolveTargetAtPointer = () => {
+    if (hasPointerHistory) {
+      const elUnderPointer = document.elementFromPoint(lastMousePos.x, lastMousePos.y);
+      const pointerResolved = resolveForumAITargetFromElement(elUnderPointer);
+      if (pointerResolved) {
+        lastResolvedTarget = { target: pointerResolved, ts: Date.now() };
+        return pointerResolved;
+      }
+    }
+    const activeElementResolved = resolveForumAITargetFromElement(document.activeElement);
+    if (activeElementResolved) {
+      lastResolvedTarget = { target: activeElementResolved, ts: Date.now() };
+      return activeElementResolved;
+    }
+    if (lastResolvedTarget && Date.now() - lastResolvedTarget.ts <= FALLBACK_TARGET_MAX_AGE_MS) {
+      return lastResolvedTarget.target;
+    }
+    return null;
+  };
+  const getSelectionContext = (resolved) => {
+    if (resolved.containerEl) return resolved.containerEl;
+    if (resolved.sourceEl) {
+      return resolved.sourceEl.closest(SELECTION_CONTEXT_SELECTOR) || resolved.sourceEl;
+    }
+    return null;
+  };
+  const startNavigationAbortWatcher = (expectedHref, abortController) => {
+    const onAbort = () => {
+      window.clearInterval(timer);
+    };
+    const timer = window.setInterval(() => {
+      if (window.location.href !== expectedHref && !abortController.signal.aborted) {
+        Logger.debug("[Forum AI Hotkeys] URL changed during in-flight send; aborting operation.");
+        abortController.abort();
+      }
+    }, 120);
+    abortController.signal.addEventListener("abort", onAbort, { once: true });
+    return () => {
+      window.clearInterval(timer);
+      abortController.signal.removeEventListener("abort", onAbort);
+    };
+  };
+  const setupForumAIHotkeys = (state2) => {
+    if (forumHotkeysAbort) {
+      forumHotkeysAbort.abort();
+    }
+    resetForumAICache(state2);
+    clearAllHighlights();
+    hasPointerHistory = false;
+    lastResolvedTarget = null;
+    inFlight = false;
+    inFlightToken += 1;
+    if (inFlightTimeout) {
+      window.clearTimeout(inFlightTimeout);
+      inFlightTimeout = null;
+    }
+    forumHotkeysAbort = new AbortController();
+    const signal = forumHotkeysAbort.signal;
+    ensureForumStyles();
+    document.addEventListener("mousemove", (event) => {
+      hasPointerHistory = true;
+      lastMousePos.x = event.clientX;
+      lastMousePos.y = event.clientY;
+    }, { passive: true, signal });
+    document.addEventListener("mouseover", (event) => {
+      const resolved = resolveForumAITargetFromElement(event.target);
+      if (resolved) {
+        lastResolvedTarget = { target: resolved, ts: Date.now() };
+      }
+    }, { signal });
+    document.addEventListener("mouseout", (event) => {
+      if (!lastResolvedTarget) return;
+      const related = event.relatedTarget;
+      if (!related) {
+        lastResolvedTarget = null;
+        return;
+      }
+      const currentContainer = lastResolvedTarget.target.containerEl || lastResolvedTarget.target.sourceEl;
+      if (currentContainer && currentContainer.contains(related)) {
+        return;
+      }
+      const resolvedRelated = resolveForumAITargetFromElement(related);
+      if (!resolvedRelated || resolvedRelated.itemId !== lastResolvedTarget.target.itemId || resolvedRelated.isPost !== lastResolvedTarget.target.isPost) {
+        lastResolvedTarget = null;
+      }
+    }, { signal });
+    document.addEventListener("keydown", async (event) => {
+      if (event.ctrlKey || event.altKey || event.metaKey) return;
+      if (event.repeat) return;
+      if (event.defaultPrevented) return;
+      if (isEditableTarget(event.target)) return;
+      if (isInteractiveTarget(event.target) || isInteractiveTarget(document.activeElement)) return;
+      const key = event.key.toLowerCase();
+      const isAIHotkey = key === "g" || key === "m";
+      if (!isAIHotkey) return;
+      if (isPointerOnInteractiveElement()) return;
+      const resolved = resolveTargetAtPointer();
+      if (!resolved) return;
+      const selectionContainer = getSelectionContext(resolved);
+      if (hasActiveSelectionOutside(selectionContainer)) {
+        return;
+      }
+      if (inFlight) {
+        Logger.debug("[Forum AI Hotkeys] Ignoring keypress while another send is in progress.");
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      inFlight = true;
+      const token = ++inFlightToken;
+      const sendAbort = new AbortController();
+      const expectedHref = window.location.href;
+      const stopNavigationWatcher = startNavigationAbortWatcher(expectedHref, sendAbort);
+      const onSetupAbort = () => {
+        sendAbort.abort();
+      };
+      signal.addEventListener("abort", onSetupAbort, { once: true });
+      if (inFlightTimeout) {
+        window.clearTimeout(inFlightTimeout);
+        inFlightTimeout = null;
+      }
+      inFlightTimeout = window.setTimeout(() => {
+        if (token !== inFlightToken || sendAbort.signal.aborted) return;
+        Logger.warn("[Forum AI Hotkeys] Send timed out. Aborting in-flight operation.");
+        forumStatusReporter.setMessage("[AI] Request timed out. Canceled.", "#dc3545");
+        sendAbort.abort();
+      }, LOCK_SAFETY_TIMEOUT_MS);
+      try {
+        if (key === "g") {
+          await handleSendToAIStudio(state2, event.shiftKey, void 0, resolved, {
+            statusReporter: forumStatusReporter,
+            abortSignal: sendAbort.signal,
+            expectedHref
+          });
+        } else {
+          await handleSendToArenaMax(state2, event.shiftKey, void 0, resolved, {
+            statusReporter: forumStatusReporter,
+            abortSignal: sendAbort.signal,
+            expectedHref
+          });
+        }
+      } finally {
+        stopNavigationWatcher();
+        signal.removeEventListener("abort", onSetupAbort);
+        clearInFlightLock(token);
+      }
+    }, { signal });
   };
   const isThreadMode = (mode) => mode === "thread-full" || mode === "thread-placeholder";
   const createInitialArchiveState = (username) => ({
@@ -12403,12 +13282,23 @@ getPromptPrefix: getAIStudioPrefix,
   const isValidArchiveItem = (item) => {
     return !!item && typeof item._id === "string" && item._id.length > 0 && typeof item.postedAt === "string" && item.postedAt.length > 0;
   };
-  const getCursorTimestampFromBatch = (rawItems) => {
+  const getCursorTimestampValue = (item, cursorField) => {
+    const source = item;
+    const primary = source?.[cursorField];
+    if (typeof primary === "string" && primary.length > 0) {
+      return primary;
+    }
+    const fallback = source?.postedAt;
+    if (typeof fallback === "string" && fallback.length > 0) {
+      return fallback;
+    }
+    return null;
+  };
+  const getCursorTimestampFromBatch = (rawItems, cursorField) => {
     for (let i = rawItems.length - 1; i >= 0; i--) {
       const item = rawItems[i];
-      if (item && typeof item.postedAt === "string" && item.postedAt.length > 0) {
-        return item.postedAt;
-      }
+      const timestamp = getCursorTimestampValue(item, cursorField);
+      if (timestamp) return timestamp;
     }
     return null;
   };
@@ -12416,25 +13306,30 @@ getPromptPrefix: getAIStudioPrefix,
     const value = Date.parse(timestamp);
     return Number.isFinite(value) ? value : null;
   };
+  const isUnsupportedTimeFieldError = (error) => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (!/timefield/i.test(message)) return false;
+    return /unknown argument|doesn['’]?t accept argument|cannot query field|not defined by type/i.test(message);
+  };
   const compareTimestamps = (a, b) => {
     const aMs = parseTimestampMs(a);
     const bMs = parseTimestampMs(b);
     if (aMs !== null && bMs !== null) return aMs - bMs;
     return a.localeCompare(b);
   };
-  const getLatestCursorTimestampFromBatch = (rawItems, baselineCursor) => {
+  const getLatestCursorTimestampFromBatch = (rawItems, baselineCursor, cursorField) => {
     let latest = null;
     for (const item of rawItems) {
-      const postedAt = item?.postedAt;
-      if (typeof postedAt !== "string" || postedAt.length === 0) continue;
-      if (baselineCursor && compareTimestamps(postedAt, baselineCursor) <= 0) continue;
-      if (!latest || compareTimestamps(postedAt, latest) > 0) {
-        latest = postedAt;
+      const timestamp = getCursorTimestampValue(item, cursorField);
+      if (!timestamp) continue;
+      if (baselineCursor && compareTimestamps(timestamp, baselineCursor) <= 0) continue;
+      if (!latest || compareTimestamps(timestamp, latest) > 0) {
+        latest = timestamp;
       }
     }
     return latest;
   };
-  const summarizeBatchForCursorDebug = (rawItems) => {
+  const summarizeBatchForCursorDebug = (rawItems, cursorField) => {
     const seenIds = new Set();
     const duplicateIds = new Set();
     const uniqueTimestamps = new Set();
@@ -12452,17 +13347,17 @@ getPromptPrefix: getAIStudioPrefix,
         if (seenIds.has(itemId)) duplicateIds.add(itemId);
         seenIds.add(itemId);
       }
-      const postedAt = typeof anyItem?.postedAt === "string" && anyItem.postedAt.length > 0 ? anyItem.postedAt : null;
-      if (!postedAt) {
+      const timestamp = getCursorTimestampValue(anyItem, cursorField);
+      if (!timestamp) {
         missingTimestampCount++;
         continue;
       }
-      uniqueTimestamps.add(postedAt);
+      uniqueTimestamps.add(timestamp);
       if (!firstTimestamp) {
-        firstTimestamp = postedAt;
+        firstTimestamp = timestamp;
         firstId = itemId;
       }
-      lastTimestamp = postedAt;
+      lastTimestamp = timestamp;
       lastId = itemId;
     }
     const headIds = idSequence.slice(0, 3);
@@ -12517,22 +13412,25 @@ getPromptPrefix: getAIStudioPrefix,
       contextType: "fetched"
     };
   };
-  async function fetchCollectionAdaptively(userId, query, key, onProgress, afterDate, onBatch, archiveUsername) {
+  async function fetchCollectionAdaptively(userId, query, key, cursorField, onProgress, afterDate, onBatch, archiveUsername, timeFieldFallback) {
     let allItems = [];
     const itemIndexById2 = new Map();
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;
     let afterCursor = afterDate ? afterDate.toISOString() : null;
+    let activeQuery = query;
+    let activeCursorField = cursorField;
+    let fallbackActivated = false;
     let batchNumber = 0;
     let previousBatchTail = null;
     while (hasMore) {
       const startTime = Date.now();
       batchNumber++;
       try {
-        console.log(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}`);
+        Logger.debug(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}, cursorField=${activeCursorField}`);
         const requestBatch = async (limit) => {
-          const operationName = key === "posts" ? "GetUserPosts" : "GetUserComments";
-          const response = await queryGraphQL(query, {
+          const operationName = key === "posts" ? fallbackActivated ? "GetUserPostsFallback" : "GetUserPosts" : fallbackActivated ? "GetUserCommentsFallback" : "GetUserComments";
+          const response = await queryGraphQL(activeQuery, {
             userId,
             limit,
             after: afterCursor
@@ -12540,20 +13438,36 @@ getPromptPrefix: getAIStudioPrefix,
           return response[key]?.results || [];
         };
         let fetchLimitUsed = currentLimit;
-        let rawResults = await requestBatch(fetchLimitUsed);
+        let rawResults;
+        try {
+          rawResults = await requestBatch(fetchLimitUsed);
+        } catch (e) {
+          if (!fallbackActivated && timeFieldFallback && isUnsupportedTimeFieldError(e)) {
+            fallbackActivated = true;
+            activeQuery = timeFieldFallback.query;
+            activeCursorField = timeFieldFallback.cursorField;
+            afterCursor = null;
+            Logger.warn(
+              `Archive ${key}: server rejected timeField; retrying with fallback query/cursor (${activeCursorField}).`
+            );
+            rawResults = await requestBatch(fetchLimitUsed);
+          } else {
+            throw e;
+          }
+        }
         while (rawResults.length === fetchLimitUsed) {
-          const boundaryTimestamp = getCursorTimestampFromBatch(rawResults);
+          const boundaryTimestamp = getCursorTimestampFromBatch(rawResults, activeCursorField);
           if (!boundaryTimestamp) break;
           let boundaryCount = 0;
           for (let i = rawResults.length - 1; i >= 0; i--) {
-            const row = rawResults[i];
-            if (!row || row.postedAt !== boundaryTimestamp) break;
+            const rowTimestamp = getCursorTimestampValue(rawResults[i], activeCursorField);
+            if (!rowTimestamp || rowTimestamp !== boundaryTimestamp) break;
             boundaryCount++;
           }
           if (boundaryCount <= 1) break;
           if (fetchLimitUsed >= MAX_PAGE_SIZE) {
             Logger.warn(
-              `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical postedAt.`
+              `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical ${activeCursorField} values.`
             );
             break;
           }
@@ -12562,19 +13476,19 @@ getPromptPrefix: getAIStudioPrefix,
             Math.max(fetchLimitUsed + boundaryCount, Math.round(fetchLimitUsed * 1.5))
           );
           Logger.debug(
-            `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce timestamp boundary truncation risk.`
+            `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce ${activeCursorField} boundary truncation risk.`
           );
           fetchLimitUsed = expandedLimit;
           rawResults = await requestBatch(fetchLimitUsed);
         }
         const results = rawResults.filter(isValidArchiveItem);
         const duration = Date.now() - startTime;
-        console.log(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
+        Logger.debug(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
         if (results.length !== rawResults.length) {
           Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
         }
         if (rawResults.length === 0) {
-          console.log(`[Archive ${key}] End of collection reached (empty batch).`);
+          Logger.debug(`[Archive ${key}] End of collection reached (empty batch).`);
           hasMore = false;
           break;
         }
@@ -12616,9 +13530,9 @@ getPromptPrefix: getAIStudioPrefix,
         }
         if (onProgress) onProgress(allItems.length);
         if (hasMore) {
-          const batchSummary = summarizeBatchForCursorDebug(rawResults);
-          const nextCursorTail = getCursorTimestampFromBatch(rawResults);
-          const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor);
+          const batchSummary = summarizeBatchForCursorDebug(rawResults, activeCursorField);
+          const nextCursorTail = getCursorTimestampFromBatch(rawResults, activeCursorField);
+          const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor, activeCursorField);
           if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
             Logger.debug(
               `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
@@ -12627,9 +13541,10 @@ getPromptPrefix: getAIStudioPrefix,
           const nextCursor = nextCursorLatest;
           if (!nextCursor) {
             const stopReason = "cursor_not_advancing";
-            const hint = !nextCursorTail ? batchSummary.missingTimestampCount === rawResults.length ? "all_raw_items_missing_postedAt" : "tail_item_missing_or_invalid_postedAt" : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
+            const hint = !nextCursorTail ? batchSummary.missingTimestampCount === rawResults.length ? `all_raw_items_missing_${cursorField}` : `tail_item_missing_or_invalid_${cursorField}` : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
             Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
               key,
+              cursorField: activeCursorField,
               batchNumber,
               hint,
               request: {
@@ -12654,8 +13569,8 @@ getPromptPrefix: getAIStudioPrefix,
                 missingTimestampsInRawBatch: batchSummary.missingTimestampCount
               },
               batchEdges: {
-                first: { id: batchSummary.firstId, postedAt: batchSummary.firstTimestamp },
-                last: { id: batchSummary.lastId, postedAt: batchSummary.lastTimestamp },
+                first: { id: batchSummary.firstId, timestamp: batchSummary.firstTimestamp },
+                last: { id: batchSummary.lastId, timestamp: batchSummary.lastTimestamp },
                 headIds: batchSummary.headIds,
                 tailIds: batchSummary.tailIds
               },
@@ -12667,7 +13582,7 @@ getPromptPrefix: getAIStudioPrefix,
           }
           previousBatchTail = {
             id: batchSummary.lastId,
-            postedAt: batchSummary.lastTimestamp
+            timestamp: batchSummary.lastTimestamp
           };
         }
       } catch (e) {
@@ -12678,10 +13593,30 @@ getPromptPrefix: getAIStudioPrefix,
     return allItems;
   }
   const fetchUserPosts = (userId, onProgress, afterDate, onBatch) => {
-    return fetchCollectionAdaptively(userId, GET_USER_POSTS, "posts", onProgress, afterDate, onBatch);
+    return fetchCollectionAdaptively(
+      userId,
+      GET_USER_POSTS,
+      "posts",
+      "modifiedAt",
+      onProgress,
+      afterDate,
+      onBatch,
+      void 0,
+      { query: GET_USER_POSTS_FALLBACK, cursorField: "postedAt" }
+    );
   };
   const fetchUserComments = (userId, onProgress, afterDate, onBatch, archiveUsername) => {
-    return fetchCollectionAdaptively(userId, GET_USER_COMMENTS, "comments", onProgress, afterDate, onBatch, archiveUsername);
+    return fetchCollectionAdaptively(
+      userId,
+      GET_USER_COMMENTS,
+      "comments",
+      "lastEditedAt",
+      onProgress,
+      afterDate,
+      onBatch,
+      archiveUsername,
+      { query: GET_USER_COMMENTS_FALLBACK, cursorField: "postedAt" }
+    );
   };
   const extractPostsFromComments = (comments) => {
     const postMap = new Map();
@@ -14002,7 +14937,7 @@ sortCanonicalItems() {
   }
   const SEARCH_SCHEMA_VERSION = 1;
   const DEFAULT_INDEX_CHUNK_SIZE = 500;
-  const randomId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const randomId = (prefix) => `${prefix}-${Date.now()}-${randomBase36(6)}`;
   const isQueryResult = (msg) => msg.kind === "query.result";
   const isIndexReady = (msg) => msg.kind === "index.ready";
   const isError = (msg) => msg.kind === "error";
@@ -14186,7 +15121,7 @@ sortCanonicalItems() {
     }
     return chunks;
   };
-  const randomRequestId = () => `query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const randomRequestId = () => `query-${Date.now()}-${randomBase36(6)}`;
   const hasSameItemRefs = (a, b) => {
     if (a === b) return true;
     if (a.length !== b.length) return false;
@@ -14449,7 +15384,7 @@ sortCanonicalItems() {
   const writeSessionQuery = (query) => {
     if (!canUseSessionStorage()) return null;
     try {
-      const key = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const key = `${Date.now()}-${randomBase36(6)}`;
       sessionStorage.setItem(`${SESSION_KEY_PREFIX}${key}`, query);
       evictOldSessionQueries();
       return key;
@@ -15196,7 +16131,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.708"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -16603,6 +17538,25 @@ sortCanonicalItems() {
       }
     }
   };
+  const newestBatchTimestamp = (items, primaryField) => {
+    let newest = null;
+    for (const item of items) {
+      const candidate = typeof item[primaryField] === "string" && item[primaryField].length > 0 ? item[primaryField] : typeof item.postedAt === "string" ? item.postedAt : null;
+      if (!candidate) continue;
+      if (!newest) {
+        newest = candidate;
+        continue;
+      }
+      const candidateMs = Date.parse(candidate);
+      const newestMs = Date.parse(newest);
+      const candidateIsValid = Number.isFinite(candidateMs);
+      const newestIsValid = Number.isFinite(newestMs);
+      if (candidateIsValid && newestIsValid && candidateMs > newestMs || (!candidateIsValid || !newestIsValid) && candidate.localeCompare(newest) > 0) {
+        newest = candidate;
+      }
+    }
+    return newest;
+  };
   const syncArchive = async (username, state2, watermarks, onStatus, abortSignal) => {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
@@ -16628,9 +17582,9 @@ sortCanonicalItems() {
     const comments = await fetchUserComments(userId, (count) => {
       onStatus(`Fetching comments: ${count} new...`);
     }, afterDateComments, async (batch) => {
-      const newestInBatch = batch[batch.length - 1].postedAt;
-      await saveArchiveData(username, batch, { lastSyncDate_comments: newestInBatch });
-      console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch}`);
+      const newestInBatch = newestBatchTimestamp(batch, "lastEditedAt");
+      await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_comments: newestInBatch } : {});
+      console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch ?? "n/a"}`);
     }, username);
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
@@ -16638,9 +17592,9 @@ sortCanonicalItems() {
     const posts = await fetchUserPosts(userId, (count) => {
       onStatus(`Fetching posts: ${count} new...`);
     }, afterDatePosts, async (batch) => {
-      const newestInBatch = batch[batch.length - 1].postedAt;
-      await saveArchiveData(username, batch, { lastSyncDate_posts: newestInBatch });
-      console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch}`);
+      const newestInBatch = newestBatchTimestamp(batch, "modifiedAt");
+      await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_posts: newestInBatch } : {});
+      console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch ?? "n/a"}`);
     });
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
@@ -16651,9 +17605,17 @@ sortCanonicalItems() {
     }
     if (newItems.length > 0) {
       onStatus(`Found ${newItems.length} new items. Merging...`);
-      const existingIds = new Set(state2.items.map((i) => i._id));
-      const uniqueNewItems = newItems.filter((i) => !existingIds.has(i._id));
-      state2.items = [...uniqueNewItems, ...state2.items];
+      const existingIndexById = new Map();
+      state2.items.forEach((item, index) => existingIndexById.set(item._id, index));
+      for (const item of newItems) {
+        const existingIndex = existingIndexById.get(item._id);
+        if (existingIndex === void 0) {
+          existingIndexById.set(item._id, state2.items.length);
+          state2.items.push(item);
+        } else {
+          state2.items[existingIndex] = item;
+        }
+      }
       state2.items.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
       await saveArchiveData(username, [], {
         lastSyncDate: syncStartTime,
@@ -17195,6 +18157,7 @@ sortCanonicalItems() {
     }
     if (route.type === "forum-injection") {
       setupHeaderInjection();
+      setupForumAIHotkeys(getState());
       return;
     }
     if (route.type === "ai-studio") {
@@ -17253,7 +18216,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.707"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.708"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

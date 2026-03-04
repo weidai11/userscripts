@@ -1,3 +1,5 @@
+import { Z_INDEX_TOP_LAYER } from '../config';
+
 export type DescendantLoadDecision = 'load_all' | 'continue_without_loading' | 'cancel';
 
 export const LARGE_DESCENDANT_THRESHOLD = 100;
@@ -11,14 +13,24 @@ interface PromptOptions {
 }
 
 const OVERLAY_ID = 'pr-descendant-confirm-overlay';
+let activePromptFinalize: ((decision: DescendantLoadDecision) => void) | null = null;
 
 export const promptLargeDescendantConfirmation = async (
-  options: PromptOptions
+  options: PromptOptions,
+  signal?: AbortSignal
 ): Promise<DescendantLoadDecision> => {
+  if (signal?.aborted) return 'cancel';
+  if (activePromptFinalize) {
+    activePromptFinalize('cancel');
+    activePromptFinalize = null;
+  }
+
   const existing = document.getElementById(OVERLAY_ID);
   if (existing) existing.remove();
 
   return new Promise((resolve) => {
+    let settled = false;
+
     const overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
     overlay.style.position = 'fixed';
@@ -27,7 +39,7 @@ export const promptLargeDescendantConfirmation = async (
     overlay.style.display = 'flex';
     overlay.style.alignItems = 'center';
     overlay.style.justifyContent = 'center';
-    overlay.style.zIndex = '100000';
+    overlay.style.zIndex = String(Z_INDEX_TOP_LAYER);
 
     const dialog = document.createElement('div');
     dialog.style.width = 'min(560px, 92vw)';
@@ -49,15 +61,29 @@ export const promptLargeDescendantConfirmation = async (
       </div>
     `;
 
+    const onAbort = () => {
+      finalize('cancel');
+    };
+
     const cleanup = () => {
       document.removeEventListener('keydown', onKeyDown, true);
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
       overlay.remove();
     };
 
     const finalize = (decision: DescendantLoadDecision) => {
+      if (settled) return;
+      settled = true;
+      if (activePromptFinalize === finalize) {
+        activePromptFinalize = null;
+      }
       cleanup();
       resolve(decision);
     };
+
+    activePromptFinalize = finalize;
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -78,6 +104,19 @@ export const promptLargeDescendantConfirmation = async (
         finalize('cancel');
       }
     });
+
+    if (signal) {
+      if (signal.aborted) {
+        finalize('cancel');
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+      // Close the race where signal aborts between the check above and listener registration.
+      if (signal.aborted) {
+        finalize('cancel');
+        return;
+      }
+    }
 
     document.addEventListener('keydown', onKeyDown, true);
     overlay.appendChild(dialog);

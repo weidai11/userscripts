@@ -6,6 +6,7 @@ import type {
   SearchDebugExplainPayload,
   SearchDiagnostics
 } from './types';
+import { randomBase36 } from '../../utils/random';
 
 export const SEARCH_SCHEMA_VERSION = 1;
 const DEFAULT_INDEX_CHUNK_SIZE = 500;
@@ -77,7 +78,7 @@ type PendingIndex = {
 };
 
 const randomId = (prefix: string): string =>
-  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  `${prefix}-${Date.now()}-${randomBase36(6)}`;
 
 const isQueryResult = (msg: SearchWorkerResponse): msg is Extract<SearchWorkerResponse, { kind: 'query.result' }> =>
   msg.kind === 'query.result';

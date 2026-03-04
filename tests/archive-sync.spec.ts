@@ -220,6 +220,158 @@ test.describe('Power Reader Archive Sync', () => {
         }).toPass({ timeout: 10000 });
     });
 
+    test('[PR-UARCH-04][PR-UARCH-07][PR-UARCH-15] archive sync uses edit-time fields and upserts edited same-id items', async ({ page }) => {
+        const username = `EditAwareSync_${Date.now()}`;
+        const userId = 'u-edit-aware-sync';
+        const userObj = { _id: userId, username, displayName: 'Edit Aware Sync', slug: 'edit-aware-sync', karma: 100 };
+
+        const initialPost = {
+            _id: 'p-edit-aware',
+            title: 'Original Sync Post',
+            slug: 'original-sync-post',
+            pageUrl: 'https://lesswrong.com/posts/p-edit-aware/original-sync-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: '2025-01-01T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 1,
+            htmlBody: '<p>Original post body</p>',
+            contents: { markdown: 'Original post body' },
+            user: userObj
+        };
+        const editedPost = {
+            ...initialPost,
+            title: 'Edited Sync Post',
+            modifiedAt: '3000-01-01T00:00:00.000Z',
+            htmlBody: '<p>Edited post body</p>',
+            contents: { markdown: 'Edited post body' }
+        };
+
+        const initialComment = {
+            _id: 'c-edit-aware',
+            postedAt: '2020-02-01T00:00:00.000Z',
+            lastEditedAt: '2025-01-01T00:00:00.000Z',
+            baseScore: 5,
+            voteCount: 2,
+            htmlBody: '<p>Original comment body</p>',
+            author: username,
+            rejected: false,
+            topLevelCommentId: 'c-edit-aware',
+            postId: initialPost._id,
+            parentCommentId: null,
+            parentComment: null,
+            user: userObj,
+            post: {
+                _id: initialPost._id,
+                title: initialPost.title,
+                slug: initialPost.slug,
+                pageUrl: initialPost.pageUrl,
+                postedAt: initialPost.postedAt,
+                modifiedAt: initialPost.modifiedAt,
+                baseScore: initialPost.baseScore,
+                voteCount: initialPost.voteCount,
+                user: userObj
+            },
+            pageUrl: `${initialPost.pageUrl}#${'c-edit-aware'}`,
+            contents: { markdown: 'Original comment body' }
+        };
+        const editedComment = {
+            ...initialComment,
+            lastEditedAt: '3000-01-02T00:00:00.000Z',
+            htmlBody: '<p>Edited comment body</p>',
+            contents: { markdown: 'Edited comment body' },
+            post: {
+                ...initialComment.post,
+                title: editedPost.title,
+                modifiedAt: editedPost.modifiedAt
+            }
+        };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserComments')) {
+  window.__COMMENT_BATCH_COUNT__ = (window.__COMMENT_BATCH_COUNT__ || 0) + 1;
+  if (!variables.after) {
+    return { data: { comments: { results: [${JSON.stringify(initialComment)}] } } };
+  }
+  return { data: { comments: { results: [] } } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__POST_BATCH_COUNT__ = (window.__POST_BATCH_COUNT__ || 0) + 1;
+  if (!variables.after) {
+    return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
+  }
+  return { data: { posts: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+        await expect(page.locator('#archive-feed')).toContainText('Original Sync Post');
+        await expect(page.locator('#archive-feed')).toContainText('Original comment body');
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserComments')) {
+  window.__SEEN_COMMENT_TIMEFIELD__ = query.includes('timeField: "lastEditedAt"');
+  window.__COMMENT_AFTER_VALUES__ = window.__COMMENT_AFTER_VALUES__ || [];
+  window.__COMMENT_AFTER_VALUES__.push(variables.after ?? null);
+  window.__COMMENT_BATCH_COUNT__ = (window.__COMMENT_BATCH_COUNT__ || 0) + 1;
+  if (window.__COMMENT_BATCH_COUNT__ === 1) {
+    return { data: { comments: { results: [${JSON.stringify(editedComment)}] } } };
+  }
+  return { data: { comments: { results: [] } } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__SEEN_POST_TIMEFIELD__ = query.includes('timeField: "modifiedAt"');
+  window.__POST_AFTER_VALUES__ = window.__POST_AFTER_VALUES__ || [];
+  window.__POST_AFTER_VALUES__.push(variables.after ?? null);
+  window.__POST_BATCH_COUNT__ = (window.__POST_BATCH_COUNT__ || 0) + 1;
+  if (window.__POST_BATCH_COUNT__ === 1) {
+    return { data: { posts: { results: [${JSON.stringify(editedPost)}] } } };
+  }
+  return { data: { posts: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.reload();
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        await expect(page.locator('#archive-feed')).toContainText('Edited Sync Post');
+        await expect(page.locator('#archive-feed')).toContainText('Edited comment body');
+
+        const selectorChecks = await page.evaluate(() => ({
+            commentTimeField: (window as any).__SEEN_COMMENT_TIMEFIELD__ === true,
+            postTimeField: (window as any).__SEEN_POST_TIMEFIELD__ === true,
+            commentAfterValues: (window as any).__COMMENT_AFTER_VALUES__ || [],
+            postAfterValues: (window as any).__POST_AFTER_VALUES__ || []
+        }));
+        expect(selectorChecks.commentTimeField).toBe(true);
+        expect(selectorChecks.postTimeField).toBe(true);
+        expect(selectorChecks.commentAfterValues.length).toBeGreaterThan(0);
+        expect(selectorChecks.postAfterValues.length).toBeGreaterThan(0);
+        expect(selectorChecks.commentAfterValues.every((v: unknown) => typeof v === 'string' && v.length > 0)).toBe(true);
+        expect(selectorChecks.postAfterValues.every((v: unknown) => typeof v === 'string' && v.length > 0)).toBe(true);
+    });
+
 test('[PR-UARCH-22] canonical state sync preserves fetched context across rerenders', async ({ page }) => {
   const username = 'canonical-sync-test';
   const userId = 'u-canonical-sync';

@@ -30,6 +30,7 @@ import { initPersistenceSync } from './persistence/persistenceSync';
 // Features
 import { initReactionTooltips } from './features/reactionTooltips';
 import { setupHeaderInjection } from './features/headerInjection';
+import { setupForumAIHotkeys } from './features/forumAIHotkeys';
 import { initArchive } from './archive/index';
 import { getForumMeta } from './utils/forum';
 import { setupSyncUiConsistencyLayer } from './features/syncUiConsistency';
@@ -55,6 +56,7 @@ const initReader = async (): Promise<void> => {
 
   if (route.type === 'forum-injection') {
     setupHeaderInjection();
+    setupForumAIHotkeys(getState());
     return;
   }
 

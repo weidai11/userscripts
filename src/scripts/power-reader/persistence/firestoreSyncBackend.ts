@@ -1,4 +1,5 @@
 import { Logger } from '../utils/logger';
+import { randomInt } from '../utils/random';
 
 declare const __PR_FIRESTORE_PROJECT_ID__: string;
 declare const __PR_FIRESTORE_API_KEY__: string;
@@ -548,7 +549,7 @@ export const commitEnvelope = async (
 
 export const withRetryJitter = async (attempt: number): Promise<void> => {
   const base = Math.min(1200, 120 + (attempt * 170));
-  const jitter = Math.floor(Math.random() * 90);
+  const jitter = randomInt(90);
   await new Promise((resolve) => window.setTimeout(resolve, base + jitter));
 };
 

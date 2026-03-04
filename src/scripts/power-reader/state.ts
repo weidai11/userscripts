@@ -39,6 +39,8 @@ export interface ReaderState {
     complete: boolean;
     fetchedAt: number;
   }>;
+  forumCommentById: Map<string, Comment>;
+  forumPostById: Map<string, Post>;
 
   // Feature flags / Modes
   isArchiveMode: boolean;
@@ -66,6 +68,8 @@ export const createInitialState = (): ReaderState => ({
   currentSelection: null,
   lastMousePos: { x: 0, y: 0 },
   postDescendantsCache: new Map(),
+  forumCommentById: new Map(),
+  forumPostById: new Map(),
   isArchiveMode: false,
   archiveUsername: null,
 });

@@ -308,7 +308,7 @@ export class ReadTracker {
                 // EAF legacy `comments(input.terms)` ignores `after`, so compare newest postedAt client-side.
                 const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
                     limit: 1,
-                    sortBy: 'newest'
+                    sortBy: 'newest',
                 }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS) as AllRecentCommentsResponse;
                 const newestPostedAt = res?.comments?.results?.[0]?.postedAt;
                 const newestMs = newestPostedAt ? new Date(newestPostedAt).getTime() : NaN;
@@ -318,7 +318,7 @@ export class ReadTracker {
                 const res = await queryGraphQL(GET_ALL_RECENT_COMMENTS, {
                     after: afterIso,
                     limit: 1,
-                    sortBy: 'oldest'
+                    sortBy: 'oldest',
                 }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS) as AllRecentCommentsResponse;
                 hasMore = (res?.comments?.results?.length || 0) > 0;
             }

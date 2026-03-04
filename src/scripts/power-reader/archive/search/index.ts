@@ -1,4 +1,5 @@
 import { SearchQueryCancelledError } from './protocol';
+import { randomBase36 } from '../../utils/random';
 import type { SearchWorkerClient } from './protocol';
 import type {
   ArchiveItem,
@@ -20,7 +21,7 @@ export type ArchiveSearchManagerOptions = {
 };
 
 const randomRequestId = (): string =>
-  `query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  `query-${Date.now()}-${randomBase36(6)}`;
 
 const hasSameItemRefs = (a: readonly ArchiveItem[], b: readonly ArchiveItem[]): boolean => {
   if (a === b) return true;
