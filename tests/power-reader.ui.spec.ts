@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { PowerReaderPage } from './pages/PowerReaderPage';
 import { initPowerReader } from './helpers/setup';
 
 test.describe('Power Reader UI Interactions', () => {

@@ -1,18 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { setupMockEnvironment, initPowerReader } from './helpers/setup';
-import { fileURLToPath } from 'url';
-import path from 'path';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { initPowerReader } from './helpers/setup';
 
 test.describe('Power Reader Hover Previews', () => {
-    let scriptContent: string;
-
-    test.beforeEach(async ({ page }) => {
-        // Use setupMockEnvironment via initPowerReader
-    });
-
     async function waitAtLeast(ms: number): Promise<void> {
         const start = Date.now();
         await expect.poll(() => Date.now() - start, { timeout: ms + 1000 }).toBeGreaterThanOrEqual(ms);

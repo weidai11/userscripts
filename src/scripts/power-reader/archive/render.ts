@@ -9,6 +9,7 @@ import type { ReaderState } from '../state';
 import { renderPostGroup, renderPostBody } from '../render/post';
 import { renderComment } from '../render/comment';
 import { getUIHost } from '../render/uiHost';
+import { isLinkpostCategory, normalizeLinkpostUrl } from '../utils/linkpost';
 
 const getDefaultRenderLimit = (): number => {
   const override = (window as any).__PR_RENDER_LIMIT_OVERRIDE;
@@ -653,6 +654,12 @@ export const renderIndexItem = (
   const snippetTerms = options.snippetTerms ?? [];
   const snippetPattern = options.snippetPattern;
   const isPost = 'title' in item;
+  const linkpostUrl = isPost && isLinkpostCategory((item as Post).postCategory)
+    ? normalizeLinkpostUrl((item as Post).linkUrl)
+    : null;
+  const linkpostHtml = linkpostUrl
+    ? ` <a class="pr-index-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>`
+    : '';
   let title: string;
   if (isPost) {
     title = (item as Post).title;
@@ -669,7 +676,7 @@ export const renderIndexItem = (
                 ${item.baseScore || 0}
             </div>
             <div class="pr-index-title">
-                ${escapeHtml(title)}
+                ${escapeHtml(title)}${linkpostHtml}
             </div>
             <div class="pr-index-meta">
                 ${context} • ${date}

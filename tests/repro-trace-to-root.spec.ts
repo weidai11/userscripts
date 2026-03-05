@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupMockEnvironment, initPowerReader } from './helpers/setup';
+import { initPowerReader } from './helpers/setup';
 
 test.describe('Reproduction: [t] failing to show parent content', () => {
 

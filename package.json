@@ -1,7 +1,7 @@
 {
   "name": "userscripts",
   "private": true,
-  "version": "1.2.708",
+  "version": "1.2.709",
   "type": "module",
   "scripts": {
     "dev:playground": "node tooling/maybe-codegen.js && cross-env VITE_SCRIPT=playground vite",
@@ -16,7 +16,9 @@
     "test:audit": "tsx tooling/check-coverage.ts",
     "test:sync-emulator": "tsx tests/integration/firestore-sync/run.ts",
     "codegen": "graphql-codegen --config codegen.ts",
-    "lint": "eslint .",
+    "lint": "npm run lint:app",
+    "lint:app": "eslint src/scripts/power-reader src/shared tests tooling eslint.config.js",
+    "lint:changed": "node tooling/lint-changed.mjs",
     "update-schema": "node src/shared/graphql/fetch_schema.js && npm run codegen"
   },
   "devDependencies": {

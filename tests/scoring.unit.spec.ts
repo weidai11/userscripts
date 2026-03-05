@@ -11,7 +11,6 @@ test.describe('Scoring Logic', () => {
   });
 
   test('getExpectedPoints applies multiplier for posts', () => {
-    const baseComments = getExpectedPoints(4, false); // 9
     const expectedPost = 9 * 6.7; // ~60.3
     expect(getExpectedPoints(4, true)).toBe(expectedPost);
 

@@ -1,12 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
-import { PowerReaderPage } from './pages/PowerReaderPage';
 
 test.describe('Power Reader Post Loading', () => {
 
     test('[PR-POST-04] should fetch and display posts with truncation and read-more', async ({ page }) => {
-        const prPage = new PowerReaderPage(page);
-
         await initPowerReader(page, {
             testMode: true,
             comments: [{
@@ -64,8 +61,6 @@ test.describe('Power Reader Post Loading', () => {
     });
 
     test('[PR-POST-06][PR-POST-07][PR-POST-08] should mark posts as read on scroll', async ({ page }) => {
-        const prPage = new PowerReaderPage(page);
-
         await initPowerReader(page, {
             testMode: true,
             onGraphQL: `

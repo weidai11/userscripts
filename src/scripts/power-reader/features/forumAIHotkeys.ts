@@ -37,7 +37,7 @@ const INTERACTIVE_TARGET_SELECTOR = [
 ].join(', ');
 
 let forumHotkeysAbort: AbortController | null = null;
-let lastMousePos = { x: 0, y: 0 };
+const lastMousePos = { x: 0, y: 0 };
 let hasPointerHistory = false;
 let lastResolvedTarget: { target: ForumResolvedAITarget; ts: number } | null = null;
 let inFlight = false;

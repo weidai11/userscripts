@@ -9,7 +9,7 @@ test.describe('Power Reader Arena Max Integration', () => {
                 _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
                 htmlBody: '<p>Arena Target Comment</p>', baseScore: 10,
                 user: { _id: 'u1', username: 'Author', karma: 100 },
-                post: { _id: 'p1', title: 'Post 1', baseScore: 10, user: { karma: 100 } },
+                post: { _id: 'p1', title: 'Post 1', linkUrl: 'https://example.com/linkpost-target', postCategory: 'linkpost', baseScore: 10, user: { karma: 100 } },
                 contents: { markdown: 'Arena Target Comment Markdown' }
             }
         ];
@@ -26,6 +26,7 @@ test.describe('Power Reader Arena Max Integration', () => {
         });
 
         const comment = page.locator('.pr-comment').first();
+        await expect(page.locator('.pr-post-linkpost-url').first()).toHaveAttribute('href', 'https://example.com/linkpost-target');
         // Collapse help section
         await page.evaluate(() => {
             const help = document.getElementById('pr-help-section') as HTMLDetailsElement;
@@ -63,6 +64,7 @@ test.describe('Power Reader Arena Max Integration', () => {
 
         const payload = await page.evaluate(() => (window as any)._lastArenaPayload);
         expect(payload).toContain('Arena Target Comment');
+        expect(payload).toContain('https://example.com/linkpost-target');
 
         // Verify highlight
         await expect(comment).toHaveClass(/being-summarized/);
@@ -129,6 +131,25 @@ test.describe('Power Reader Arena Max Integration', () => {
 
         expect(payload).toContain('Parent');
         expect(payload).toContain('Child');
+    });
+
+    test('does not render linkpost badge for non-link posts', async ({ page }) => {
+        const comments = [
+            {
+                _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
+                htmlBody: '<p>Regular post comment</p>', baseScore: 10,
+                user: { _id: 'u1', username: 'Author', karma: 100 },
+                post: { _id: 'p1', title: 'Post 1', linkUrl: 'https://www.lesswrong.com/posts/p1/post-1', postCategory: 'post', baseScore: 10, user: { karma: 100 } },
+                contents: { markdown: 'Regular post comment markdown' }
+            }
+        ];
+
+        await initPowerReader(page, {
+            testMode: true,
+            comments
+        });
+
+        await expect(page.locator('.pr-post-linkpost-url')).toHaveCount(0);
     });
 
     test('[PR-AI-03] Arena responses are not rendered in-reader', async ({ page }) => {

@@ -44,7 +44,6 @@ test.describe('Comment Read Tracking', () => {
 
         const parent = page.locator('.pr-comment[data-id="c1"]');
         const parentBody = parent.locator('> .pr-comment-body');
-        const child = page.locator('.pr-comment[data-id="c2"]');
 
         // Initial state: not read
         await expect(parent).not.toHaveClass(/read/);

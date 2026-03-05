@@ -6,11 +6,9 @@ declare const GM_deleteValue: (key: string) => void;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const ARENA_PROMPT_REINJECT_TIMEOUT_MS = 45000;
-const ARENA_PROMPT_SETTLE_DELAY_MS = 120;
-const ARENA_PROMPT_RECHECK_DELAY_MS = 200;
-const ARENA_SEND_ATTEMPTS = 3;
-const ARENA_SEND_ATTEMPT_TIMEOUT_MS = 12000;
+const ARENA_INPUT_DETECTED_DELAY_MS = 2000;
+const ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS = 8000;
+const ARENA_SEND_BUTTON_POLL_INTERVAL_MS = 200;
 const ARENA_FALLBACK_PAYLOAD_KEY = 'arena_max_prompt_payload';
 
 const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
@@ -25,15 +23,61 @@ const ARENA_TEXTAREA_CLASS_FALLBACK_SELECTORS = [
     "textarea[class*='box-border'][class*='resize-none']"
 ].join(', ');
 
-const normalizeText = (value: string): string =>
-    value.replace(/\s+/g, ' ').trim();
+const NEGATIVE_BUTTON_KEYWORDS = ['dismiss', 'close', 'cancel', 'banner', 'skip', 'later'];
+
+function getButtonSignals(btn: HTMLButtonElement): string {
+    return [
+        btn.getAttribute('aria-label') || '',
+        btn.getAttribute('title') || '',
+        btn.textContent || ''
+    ].join(' ').toLowerCase();
+}
+
+function hasNegativeButtonSignal(btn: HTMLButtonElement): boolean {
+    const signals = getButtonSignals(btn);
+    return NEGATIVE_BUTTON_KEYWORDS.some((kw) => signals.includes(kw));
+}
+
+function hasSendWordSignal(btn: HTMLButtonElement): boolean {
+    const signals = getButtonSignals(btn);
+    return /\b(send|submit|run)\b/.test(signals);
+}
+
+function hasArrowLikeSendIcon(btn: HTMLButtonElement): boolean {
+    if (btn.querySelector('svg.lucide-arrow-up, svg.lucide-send, svg[class*="arrow-up"], svg[class*="send"]')) {
+        return true;
+    }
+    const paths = Array.from(btn.querySelectorAll('svg path'));
+    return paths.some((path) => {
+        const d = (path.getAttribute('d') || '').replace(/[\s,]+/g, '').toUpperCase();
+        // Common Arena send icon path: M3 12L21 12 ... L12.5 3.5 ... L12.5 20.5
+        return d.includes('M312L2112') && d.includes('L12.53.5') && d.includes('L12.520.5');
+    });
+}
+
+function hasPositiveSendSignal(btn: HTMLButtonElement): boolean {
+    return btn.type === 'submit' || hasSendWordSignal(btn) || hasArrowLikeSendIcon(btn);
+}
+
+function getSendButtonScore(btn: HTMLButtonElement, textarea: HTMLTextAreaElement): number {
+    if (hasNegativeButtonSignal(btn)) return -10_000;
+    if (!hasPositiveSendSignal(btn)) return -5_000;
+
+    let score = 0;
+    const hasSendWord = hasSendWordSignal(btn);
+    const hasArrowIcon = hasArrowLikeSendIcon(btn);
+    const sameForm = textarea.closest('form') !== null && textarea.closest('form') === btn.closest('form');
+
+    if (sameForm) score += 120;
+    if (hasSendWord) score += 120;
+    if (hasArrowIcon) score += 100;
+    if (btn.type === 'submit') score += 80;
+
+    return score;
+}
 
 function isArenaSendButton(btn: HTMLButtonElement): boolean {
-    return (
-        btn.type === 'submit' ||
-        (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
-        !!btn.querySelector('svg.lucide-arrow-up, svg.lucide-send')
-    );
+    return !hasNegativeButtonSignal(btn) && hasPositiveSendSignal(btn);
 }
 
 function isInteractableTextarea(el: Element): el is HTMLTextAreaElement {
@@ -51,11 +95,49 @@ function isVisibleElement(el: HTMLElement): boolean {
     return true;
 }
 
+function isEnabledAndVisibleButton(btn: HTMLButtonElement): boolean {
+    return !btn.disabled && isVisibleElement(btn);
+}
+
 function hasNearbySendButton(textarea: HTMLTextAreaElement): boolean {
     const container = textarea.closest('form') || textarea.parentElement?.parentElement || textarea.parentElement;
     if (!container) return false;
     const buttons = Array.from(container.querySelectorAll('button')) as HTMLButtonElement[];
     return buttons.some((btn) => isArenaSendButton(btn));
+}
+
+function getElementCenter(el: HTMLElement): { x: number; y: number } {
+    const rect = el.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+function getElementDistance(a: HTMLElement, b: HTMLElement): number {
+    const ca = getElementCenter(a);
+    const cb = getElementCenter(b);
+    return Math.hypot(ca.x - cb.x, ca.y - cb.y);
+}
+
+function getNearbyButtonCandidates(textarea: HTMLTextAreaElement): HTMLButtonElement[] {
+    const containers: Element[] = [];
+    const form = textarea.closest('form');
+    if (form) containers.push(form);
+
+    let ancestor: Element | null = textarea.parentElement;
+    let steps = 0;
+    while (ancestor && steps < 5) {
+        containers.push(ancestor);
+        ancestor = ancestor.parentElement;
+        steps += 1;
+    }
+
+    const dedupButtons = new Set<HTMLButtonElement>();
+    for (const container of containers) {
+        const buttons = Array.from(container.querySelectorAll('button'))
+            .filter((el): el is HTMLButtonElement => el instanceof HTMLButtonElement);
+        for (const btn of buttons) dedupButtons.add(btn);
+    }
+
+    return Array.from(dedupButtons).filter(isArenaSendButton);
 }
 
 function findArenaTextarea(): HTMLTextAreaElement | null {
@@ -153,90 +235,96 @@ function setTextareaValue(textarea: HTMLTextAreaElement, payload: string): void 
     textarea.setSelectionRange(0, 0);
 }
 
-function getPayloadProbe(payload: string): string {
-    return normalizeText(payload).slice(0, 180);
-}
-
-function textareaContainsProbe(textarea: HTMLTextAreaElement | null, payloadProbe: string): boolean {
-    if (!textarea) return false;
-    const value = normalizeText(textarea.value || '');
-    if (!payloadProbe) return value.length > 0;
-    return value.includes(payloadProbe);
-}
-
 function findSendButtonNearTextarea(textarea: HTMLTextAreaElement): HTMLButtonElement | null {
-    const container = textarea.closest('form') || textarea.parentElement?.parentElement || textarea.parentElement;
-    if (!container) return null;
-    const buttons = Array.from(container.querySelectorAll('button')) as HTMLButtonElement[];
-    return buttons.find((btn) => isArenaSendButton(btn)) ?? null;
+    const candidates = getNearbyButtonCandidates(textarea)
+        .filter(isEnabledAndVisibleButton)
+        .filter((btn) => getSendButtonScore(btn, textarea) > 0);
+    if (candidates.length === 0) return null;
+
+    let best: HTMLButtonElement | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const btn of candidates) {
+        const score = getSendButtonScore(btn, textarea);
+        const distance = getElementDistance(textarea, btn);
+        if (score > bestScore || (score === bestScore && distance < bestDistance)) {
+            best = btn;
+            bestScore = score;
+            bestDistance = distance;
+        }
+    }
+    return bestScore > 0 ? best : null;
 }
 
-async function ensurePromptPersisted(payload: string, timeoutMs: number = ARENA_PROMPT_REINJECT_TIMEOUT_MS): Promise<HTMLTextAreaElement> {
-    const deadline = Date.now() + timeoutMs;
-    const payloadProbe = getPayloadProbe(payload);
-    let lastIssue = 'unknown';
+function clickSendButton(button: HTMLButtonElement): void {
+    button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    button.focus();
+    if (typeof PointerEvent !== 'undefined') {
+        button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+    }
+    button.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    button.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    button.click();
+}
 
+async function injectPrompt(payload: string): Promise<HTMLTextAreaElement> {
+    const textarea = await waitForArenaTextarea();
+    await sleep(ARENA_INPUT_DETECTED_DELAY_MS);
+    setTextareaValue(textarea, payload);
+    return textarea;
+}
+
+async function automateRun(textarea: HTMLTextAreaElement) {
+    const targetTextarea = findArenaTextarea() ?? textarea;
+
+    const runBtn = findSendButtonNearTextarea(targetTextarea);
+    if (runBtn && !runBtn.disabled) {
+        clickSendButton(runBtn);
+        return;
+    }
+    const deadline = Date.now() + ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS;
     while (Date.now() < deadline) {
-        try {
-            const remaining = Math.max(250, deadline - Date.now());
-            const textarea = await waitForArenaTextarea(Math.min(4000, remaining));
-            setTextareaValue(textarea, payload);
-            await sleep(ARENA_PROMPT_SETTLE_DELAY_MS);
-            const current = findArenaTextarea() ?? textarea;
-            if (textareaContainsProbe(current, payloadProbe)) {
-                return current;
-            }
-            lastIssue = 'composer reset after injection';
-        } catch (error) {
-            lastIssue = error instanceof Error ? error.message : String(error);
+        await sleep(ARENA_SEND_BUTTON_POLL_INTERVAL_MS);
+        const latestTextarea = findArenaTextarea() ?? targetTextarea;
+        const enabledBtn = findSendButtonNearTextarea(latestTextarea);
+        if (enabledBtn && !enabledBtn.disabled) {
+            clickSendButton(enabledBtn);
+            return;
         }
-        await sleep(ARENA_PROMPT_RECHECK_DELAY_MS);
     }
+    Logger.warn('Arena Max: send button did not enable in time; using non-click fallbacks');
 
-    throw new Error(`Prompt injection did not persist (${lastIssue})`);
-}
-
-async function injectPrompt(payload: string) {
-    await ensurePromptPersisted(payload);
-}
-
-async function automateRun(payload: string) {
-    const payloadProbe = getPayloadProbe(payload);
-    let lastIssue = 'send button unavailable';
-
-    for (let attempt = 1; attempt <= ARENA_SEND_ATTEMPTS; attempt++) {
-        const textarea = await ensurePromptPersisted(payload, ARENA_SEND_ATTEMPT_TIMEOUT_MS);
-        const runBtn = findSendButtonNearTextarea(textarea);
-
-        if (runBtn && !runBtn.disabled) {
-            runBtn.focus();
-            runBtn.click();
-            lastIssue = 'send button click did not produce submission signal';
-        } else {
-            textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                key: 'Enter',
-                code: 'Enter',
-                charCode: 13,
-                keyCode: 13,
-                bubbles: true,
-                ctrlKey: true,
-                metaKey: true
-            }));
-            lastIssue = runBtn ? 'send button disabled' : 'send button missing';
+    const form = targetTextarea.closest('form');
+    if (form) {
+        if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+            return;
         }
-
-        await sleep(350);
-
-        const current = findArenaTextarea();
-        const hasStopIcon = document.querySelector('svg.lucide-square') !== null;
-        const promptStillPresent = textareaContainsProbe(current, payloadProbe);
-        const submissionStarted = hasStopIcon || !promptStillPresent;
-        if (submissionStarted) return;
-
-        Logger.warn(`Arena Max: Submit attempt ${attempt} did not take, retrying...`);
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        return;
     }
+    Logger.warn('Arena Max: no form ancestor for requestSubmit fallback');
 
-    throw new Error(`Failed to submit prompt (${lastIssue})`);
+    targetTextarea.focus();
+
+    const dispatchEnterSequence = (mods: Pick<KeyboardEventInit, 'ctrlKey' | 'metaKey'> = {}) => {
+        const eventInit: KeyboardEventInit = {
+            key: 'Enter',
+            code: 'Enter',
+            charCode: 13,
+            keyCode: 13,
+            bubbles: true,
+            ...mods
+        };
+        targetTextarea.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+        targetTextarea.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+        targetTextarea.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+    };
+
+    dispatchEnterSequence();
+    dispatchEnterSequence({ ctrlKey: true, metaKey: false });
+    dispatchEnterSequence({ ctrlKey: false, metaKey: true });
 }
 
 /**
@@ -256,9 +344,8 @@ export async function handleArenaMax() {
     Logger.info('Arena Max: Automation triggered.');
 
     try {
-        await injectPrompt(payload);
-
-        await automateRun(payload);
+        const textarea = await injectPrompt(payload);
+        await automateRun(textarea);
 
         Logger.info('Arena Max: Prompt submitted. Continue in this tab.');
     } catch (error) {

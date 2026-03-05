@@ -247,7 +247,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
     archiveUsername?: string,
     timeFieldFallback?: TimeFieldFallbackConfig
 ): Promise<T[]> {
-    let allItems: T[] = [];
+    const allItems: T[] = [];
     const itemIndexById = new Map<string, number>();
     let hasMore = true;
     let currentLimit = INITIAL_PAGE_SIZE;

@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
 import fs from 'fs';
-import path from 'url';
 import { fileURLToPath } from 'url';
 import { default as pathLib } from 'path';
 
@@ -67,19 +66,6 @@ interface SerializedMockData {
     verbose: boolean;
     strictGraphQL: boolean;
 }
-
-const DEFAULT_SCRAPED_REACTIONS = [
-    { name: 'agree', label: 'Agreed', svg: '' },
-    { name: 'insightful', label: 'Insightful', svg: '' },
-    { name: 'thanks', label: 'Thanks', svg: '' },
-    { name: 'laugh', label: 'Haha!', svg: '' },
-    { name: 'disagree', label: 'Disagree', svg: '' },
-    { name: 'important', label: 'Important', svg: '' },
-    { name: 'plus', label: 'Plus One', svg: '' },
-    { name: 'shrug', label: 'Unsure', svg: '' },
-    { name: 'thumbs-up', label: 'Seen', svg: '' },
-    { name: 'thumbs-down', label: 'Seen', svg: '' },
-];
 
 const DEFAULT_CURRENT_USER: MockCurrentUser = {
     _id: 'test-user-id',

@@ -1,7 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupMockEnvironment, initPowerReader } from './helpers/setup';
-
-const scriptContent = `window.__PR_TEST_MODE__ = true;`;
+import { initPowerReader } from './helpers/setup';
 
 test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
 
@@ -109,12 +107,6 @@ test.describe('UI Requirements: Buttons and Sticky Behavior', () => {
         // Add styles to disable transitions for more reliable testing
         await page.addStyleTag({
             content: '* { scroll-behavior: auto !important; transition: none !important; animation: none !important; }'
-        });
-
-        // Get the header reference position before clicking
-        const headerTop = await page.evaluate(() => {
-            const h = document.querySelector('.pr-post[data-id="p1"] .pr-post-header') as HTMLElement;
-            return h.getBoundingClientRect().top + window.pageYOffset;
         });
 
         // Click collapse

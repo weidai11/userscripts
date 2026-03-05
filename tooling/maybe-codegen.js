@@ -1,6 +1,5 @@
 import fs from 'fs';
 import { execSync } from 'child_process';
-import path from 'path';
 
 const inputs = [
   'codegen.ts',
@@ -19,7 +18,7 @@ if (!fs.existsSync(schemaPath)) {
   console.log(`Schema file ${schemaPath} not found. Fetching schema...`);
   try {
     execSync('node src/shared/graphql/fetch_schema.js', { stdio: 'inherit' });
-  } catch (e) {
+  } catch {
     console.error('Failed to fetch schema.');
     process.exit(1);
   }
@@ -36,7 +35,7 @@ function needsCodegen() {
   const latestInputMtime = Math.max(...inputs.map(file => {
     try {
       return fs.statSync(file).mtimeMs;
-    } catch (e) {
+    } catch {
       console.error(`Warning: Could not stat input file ${file}`);
       return 0;
     }
@@ -52,7 +51,7 @@ if (needsCodegen()) {
   try {
     // Run the local graphql-codegen command directly to save a bit of time over npm run
     execSync('npx graphql-codegen --config codegen.ts', { stdio: 'inherit' });
-  } catch (e) {
+  } catch {
     console.error('Codegen failed.');
     process.exit(1);
   }

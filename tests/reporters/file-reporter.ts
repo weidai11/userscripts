@@ -42,12 +42,12 @@ class FileReporter implements Reporter {
                 toDelete.forEach(file => {
                     try {
                         fs.unlinkSync(path.join(logDir, file));
-                    } catch (err) {
+                    } catch {
                         // ignore deletion errors
                     }
                 });
             }
-        } catch (e) {
+        } catch {
             // ignore cleanup errors
         }
     }

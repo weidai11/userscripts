@@ -81,7 +81,7 @@ export const sortSearchDocs = (
     case 'replyTo':
       sorted.sort(compareReplyTo);
       return sorted;
-    case 'relevance':
+    case 'relevance': {
       const precomputedScores = new Map<string, number>();
       sorted.forEach(doc => {
         const signals = relevanceSignalsById.get(doc.id) || EMPTY_SIGNALS;
@@ -98,6 +98,7 @@ export const sortSearchDocs = (
         return a.id.localeCompare(b.id);
       });
       return sorted;
+    }
     case 'date':
     default:
       sorted.sort((a, b) => {

@@ -37,6 +37,7 @@ export { renderReactions };
 import { getPostScoreColor } from './colors';
 import { getAgeInHours, calculateNormalizedScore, clampScore, getFontSizePercent } from './scoring';
 import { getAuthorHandle } from './author';
+import { isLinkpostCategory, normalizeLinkpostUrl } from './linkpost';
 
 /**
  * Calculate header style for a post
@@ -76,6 +77,10 @@ export const renderPostHeader = (
   const metadataHtml = renderMetadata(post, { state, isFullPost });
   const headerStyle = calculatePostHeaderStyle(post);
   const escapedTitle = escapeHtml(post.title);
+  const linkpostUrl = isLinkpostCategory(post.postCategory) ? normalizeLinkpostUrl(post.linkUrl) : null;
+  const linkpostHtml = linkpostUrl
+    ? `<a class="pr-post-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>`
+    : '';
 
 
   const classes = [
@@ -116,7 +121,7 @@ export const renderPostHeader = (
   return `
     <div class="${classes}" data-action="scroll-to-post-top" style="${headerStyle}" data-post-id="${post._id}">
       ${metadataHtml}
-      <h2><span class="pr-post-title" data-post-id="${post._id}"${!isFullPost ? ' data-action="load-post"' : ''}>${escapedTitle}</span></h2>
+      <h2><span class="pr-post-title" data-post-id="${post._id}"${!isFullPost ? ' data-action="load-post"' : ''}>${escapedTitle}</span>${linkpostHtml}</h2>
       <span class="pr-post-actions">
         <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio in a new tab (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
         <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max in a new tab (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>

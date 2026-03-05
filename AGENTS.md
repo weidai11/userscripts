@@ -10,13 +10,16 @@ Userscripts for LessWrong and EA Forum
 3. Run `jj --no-pager diff --git`. Do a quick sanity check on the diff.
 4. Generate the commit message from the actual diff, then set it with `jj desc -m "..."`.
 5. Include relevant requirement IDs in commit messages when applicable (e.g., `PR-UARCH-*`, `PR-PREV-*`).
-6. Run `npm test`
-7. Run `jj bookmark set main`
-8. Run `jj git push` (don't run this without explicit user direction)
+6. Run `npm run lint:changed`
+7. Run `npm run lint:app`
+8. Run `npm test`
+9. Run `jj bookmark set main`
+10. Run `jj git push` (don't run this without explicit user direction)
 
 # Key Commands
 - Build: `npm run build:power-reader`
 - Test: `npm test` (E2E) | `npm run test:sync-emulator` (Firestore integration)
+- Lint: `npm run lint:changed` | `npm run lint:app`
 - Tooling: `npm run codegen` (types) | `update-schema` (latest LW API). `codegen` runs automatically on `dev`/`build`.
 
 # Conventions & Gotchas

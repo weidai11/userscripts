@@ -22,6 +22,7 @@ import {
 } from '../utils/descendantConfirm';
 import { consumeAIPayloadKey, registerAIPayloadKey } from '../utils/aiPayloadStorage';
 import { randomBase36 } from '../utils/random';
+import { isLinkpostCategory, normalizeLinkpostUrl } from '../utils/linkpost';
 
 declare const GM_setValue: ((key: string, value: any) => void) | undefined;
 declare const GM_openInTab: ((url: string, options?: { active?: boolean }) => void) | undefined;
@@ -38,6 +39,8 @@ interface AIContentRef {
 interface AIThreadItem {
   _id: string;
   title?: string | null;
+  linkUrl?: string | null;
+  postCategory?: string | null;
   author?: string | null;
   user?: AIUserRef | null;
   contents?: AIContentRef | null;
@@ -45,6 +48,7 @@ interface AIThreadItem {
   postId?: string | null;
   parentCommentId?: string | null;
   postedAt?: string | null;
+  post?: { linkUrl?: string | null; postCategory?: string | null } | null;
 }
 
 interface AIProviderConfig {
@@ -305,8 +309,16 @@ const toXml = (
   const author = getAuthorHandle(item, 'unknown');
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
   const titleAttr = type === 'post' && item.title ? ` title="${escapeXmlAttr(item.title)}"` : '';
+  const linkUrlTag = type === 'post' && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl)
+    ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>\n`
+    : '';
+  const commentPostLinkTag = type === 'comment' && isLinkpostCategory(item.post?.postCategory) && isNonEmptyText(item.post?.linkUrl)
+    ? `${childIndent}<post_link_url>${escapeXmlText(normalizeLinkpostUrl(item.post!.linkUrl!) || item.post!.linkUrl!)}</post_link_url>\n`
+    : '';
 
   let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ''}${titleAttr}>\n`;
+  xml += linkUrlTag;
+  xml += commentPostLinkTag;
   xml += `${childIndent}<body_markdown>\n${escapeXmlText(md)}\n${childIndent}</body_markdown>\n`;
 
   if (isFocal && descendants.length > 0) {

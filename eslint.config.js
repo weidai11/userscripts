@@ -48,6 +48,7 @@ export default tseslint.config(
     ignores: [
       "dist/*",
       "node_modules/*",
+      "historical/*",
       "src/generated/*",
       "playwright-report/*",
       "test-results/*",

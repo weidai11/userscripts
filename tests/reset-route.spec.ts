@@ -84,7 +84,7 @@ test.describe('Power Reader Reset Route', () => {
         // Inject script - this might throw due to navigation
         try {
             await page.evaluate(scriptContent);
-        } catch (e) {
+        } catch {
             // Navigation expected
         }
 

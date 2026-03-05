@@ -453,6 +453,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        .pr-index-linkpost-url {
+            margin-left: 6px;
+            color: var(--pr-link-color, #0b57d0);
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .pr-index-linkpost-url:hover {
+            text-decoration: underline;
+        }
         .pr-index-meta {
             font-size: 0.85em;
             color: var(--pr-text-tertiary);
@@ -841,7 +850,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       workerClient = createSearchWorkerClient();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Archive search worker unavailable: ${reason}`);
+      throw new Error(`Archive search worker unavailable: ${reason}`, { cause: error });
     }
 
     const searchManager = new ArchiveSearchManager({
@@ -1942,6 +1951,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     // Index view click-to-expand handler
     feedEl?.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+      if (target.closest('a[href]')) return;
 
       // Expand: index row → card
       const expandTarget = target.closest('[data-action="expand-index-item"]');

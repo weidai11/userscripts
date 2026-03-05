@@ -7,7 +7,7 @@
  * Run with: npx playwright test tests/legacy-adapter.unit.spec.ts
  */
 import { test, expect } from '@playwright/test';
-import { adaptForLegacy, buildLegacyQuery, buildLegacyVariables, LEGACY_ADAPTERS } from '../src/shared/graphql/legacyAdapter';
+import { adaptForLegacy, LEGACY_ADAPTERS } from '../src/shared/graphql/legacyAdapter';
 import * as Q from '../src/shared/graphql/queries';
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ test.describe('[PR-DATA-05] Legacy Adapter – pass-through', () => {
     });
 
     test('[PR-DATA-05] GetCurrentUser passes through unchanged', () => {
-        const { query, variables } = adaptForLegacy(Q.GET_CURRENT_USER, {});
+        const { query } = adaptForLegacy(Q.GET_CURRENT_USER, {});
         expect(query).toBe(Q.GET_CURRENT_USER);
     });
 });

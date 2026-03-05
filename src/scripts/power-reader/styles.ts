@@ -307,6 +307,17 @@ export const STYLES = `
     text-decoration: underline;
   }
 
+  .pr-post-header h2 .pr-post-linkpost-url {
+    margin-left: 8px;
+    font-size: 0.85em;
+    color: #0b57d0;
+    text-decoration: none;
+  }
+
+  .pr-post-header h2 .pr-post-linkpost-url:hover {
+    text-decoration: underline;
+  }
+
   .pr-post-actions {
     display: inline-flex;
     gap: 2px;

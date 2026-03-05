@@ -11,12 +11,13 @@ export const isFindParentTraceEnabled = (): boolean => {
 export const logFindParentTrace = (event: string, data: Record<string, unknown>): void => {
     if (!isFindParentTraceEnabled()) return;
 
-    let json = '';
-    try {
-        json = JSON.stringify(data);
-    } catch {
-        json = '[unserializable]';
-    }
+    const json = (() => {
+        try {
+            return JSON.stringify(data);
+        } catch {
+            return '[unserializable]';
+        }
+    })();
 
     Logger.info(`[FindParentTrace] ${event} ${json}`, data);
 };

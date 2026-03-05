@@ -1,6 +1,3 @@
-
-declare const GM_getValue: (key: string, defaultValue: any) => any;
-
 const PREFIX = '[LW Power Reader]';
 
 /**

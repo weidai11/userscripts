@@ -4,7 +4,6 @@ import { initPowerReader } from './helpers/setup';
 test.describe('Status Line Display', () => {
 
     test('[PR-STATUS-01][PR-STATUS-06] Status line shows date range, comment breakdown, post count, user, and sync mode', async ({ page }) => {
-        const now = new Date();
         const comments = [
             {
                 _id: 'c1', postId: 'p1',

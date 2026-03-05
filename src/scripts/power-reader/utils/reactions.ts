@@ -239,7 +239,7 @@ export function parseReactionsFromCode(content: string): ReactionMetadata[] {
                 // Fix abbreviated decimals (e.g. .5 -> 0.5)
                 jsonFilter = jsonFilter.replace(/:(\.\d+)/g, ':0$1');
                 reaction.filter = JSON.parse(jsonFilter);
-            } catch (e) { }
+            } catch { }
         }
 
         if (deprecatedRaw) {
@@ -261,12 +261,12 @@ function parseSectionsFromCode(content: string): Record<string, string[]> {
     const sectionRegex = /(gridPrimary|gridEmotions|gridSectionB|gridSectionC|gridSectionD|listPrimary|listEmotions|listViewSectionB|listViewSectionC|listViewSectionD|likelihoods)[:=](\[[^\]]+\])/g;
     let match;
     while ((match = sectionRegex.exec(content)) !== null) {
-        const [_, name, arrayRaw] = match;
+        const [, name, arrayRaw] = match;
         try {
             // arrayRaw looks like ["agree","disagree"]
             const array = JSON.parse(arrayRaw.replace(/'/g, '"').replace(/,\]/, ']'));
             sections[name] = array;
-        } catch (e) { }
+        } catch { }
     }
     return sections;
 }
@@ -283,7 +283,7 @@ export async function initializeReactions() {
             }
             return;
         }
-    } catch (e) { }
+    } catch { }
 
     Logger.info("Reactions cache missing or expired. Starting scrape...");
 

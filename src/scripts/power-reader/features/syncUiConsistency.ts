@@ -432,9 +432,8 @@ const flushPatchQueues = (): void => {
     lastPruneAtMs = Date.now();
   }
 
-  let budget = MAX_PATCH_NODES_PER_FRAME;
-  budget = processPendingReadItems(budget);
-  budget = processPendingAuthorPatches(budget);
+  const remainingBudget = processPendingReadItems(MAX_PATCH_NODES_PER_FRAME);
+  processPendingAuthorPatches(remainingBudget);
 
   if (pendingUnreadCounterRefresh && pendingReadItemIds.size === 0) {
     refreshUnreadCounter();

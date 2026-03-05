@@ -40,6 +40,8 @@ export const POST_FIELDS_LITE = /* GraphQL */ `
     title
     slug
     pageUrl
+    linkUrl
+    postCategory
     postedAt
     modifiedAt
     baseScore
@@ -500,6 +502,8 @@ export type Post = {
   title: string;
   slug: string;
   pageUrl: string;
+  linkUrl?: string | null;
+  postCategory?: string | null;
   postedAt: string;
   modifiedAt?: string | null;
   baseScore: number;

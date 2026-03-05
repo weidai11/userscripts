@@ -40,12 +40,6 @@ const upsertSignal = (
   return created;
 };
 
-const allOrdinalsSet = (docCount: number): Set<number> => {
-  const output = new Set<number>();
-  for (let i = 0; i < docCount; i++) output.add(i);
-  return output;
-};
-
 const intersectSortedArrays = (a: Uint32Array, b: Uint32Array): Uint32Array => {
   let i = 0;
   let j = 0;
