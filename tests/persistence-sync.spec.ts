@@ -22,12 +22,13 @@ test.describe('Persistence Sync Contracts', () => {
     expect(content).toContain('abTestOverrides');
   });
 
-  test('[PR-SYNC-04][PR-PERSIST-06] sync state machine tracks read/loadFrom/authorPrefs as synced subset', async () => {
+  test('[PR-SYNC-04][PR-PERSIST-06] sync state machine tracks read/loadFrom/authorPrefs/aiStudioPrefix as synced subset', async () => {
     const content = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(content).toContain("dirty: { read: false, loadFrom: false, authorPrefs: false }");
+    expect(content).toContain("dirty: { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false }");
     expect(content).toContain('runtime.meta.dirty.read = true');
     expect(content).toContain('runtime.meta.dirty.loadFrom = true');
     expect(content).toContain('runtime.meta.dirty.authorPrefs = true');
+    expect(content).toContain('runtime.meta.dirty.aiStudioPrefix = true');
   });
 
   test('[PR-PERSIST-17][PR-PERSIST-56] sync debug UI exposes toggle and debug summary controls', async () => {
@@ -45,9 +46,12 @@ test.describe('Persistence Sync Contracts', () => {
     const rules = readRepoFile('firestore.rules');
     const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
     expect(rules).toContain('value <= 1000000000');
+    expect(rules).toContain('validAIStudioPrefixField');
+    expect(rules).toContain("data.fields.keys().hasOnly(['read', 'loadFrom', 'authorPrefs', 'aiStudioPrefix'])");
     expect(rules).toContain('validWriterLabel(value)');
     expect(rules).toContain('value.size() <= 128');
     expect(backend).toContain('const MAX_SYNC_COUNTER = 1_000_000_000;');
+    expect(backend).toContain('const MAX_AI_STUDIO_PREFIX_LENGTH = 8_000;');
     expect(backend).toContain('out-of-range integer');
   });
 
@@ -157,6 +161,15 @@ test.describe('Persistence Sync Contracts', () => {
     expect(sync).toContain('version: incrementSyncCounter(existing?.version || 0)');
   });
 
+  test('[PR-PERSIST-06] aiStudioPrefix merge/reset paths normalize input and keep reset replay idempotent', async () => {
+    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
+    expect(sync).toContain("return normalizeAIStudioPrefixValue(raw) || '';");
+    expect(sync).toContain('const aiStudioPrefix = !!normalizeAIStudioPrefixValue(getAIStudioPrefix());');
+    expect(sync).toContain('const hasPendingResetPrefixClearIntent = !!(');
+    expect(sync).toContain('resetReplayTargetAIStudioPrefixVersion ?? aiStudioPrefixVersion');
+    expect(sync).toContain('aiStudioPrefixValue = undefined;');
+  });
+
   test('[PR-PERSIST-86] uncertain write outcomes reconcile via read before retry', async () => {
     const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
     expect(sync).toContain('isUncertainWriteOutcome(error)');
@@ -262,6 +275,7 @@ test.describe('Persistence Sync Contracts', () => {
     expect(storage).toContain('export function applyExternalReadState');
     expect(storage).toContain('export function applyExternalLoadFrom');
     expect(storage).toContain('export function applyExternalAuthorPrefs');
+    expect(storage).toContain('export function applyExternalAIStudioPrefix');
   });
 
   test('[PR-PERSIST-96][PR-PERSIST-99] persistence listeners use apply-only cross-tab watchers and resume pull via existing pull path', async () => {

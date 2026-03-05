@@ -27,7 +27,7 @@ const STORAGE_KEYS = {
 const DEVICE_ID_MIN_LENGTH = 8;
 const DEVICE_ID_MAX_LENGTH = 96;
 
-export type SyncableField = 'read' | 'loadFrom' | 'authorPrefs';
+export type SyncableField = 'read' | 'loadFrom' | 'authorPrefs' | 'aiStudioPrefix';
 
 export type SyncFieldApplySource = 'local' | 'sync-merge' | 'cross-tab' | 'polling' | 'reset';
 
@@ -69,6 +69,8 @@ let cachedLoadFrom: string | null = null;
 let lastLoadFromFetch: number = 0;
 let cachedAuthorPrefs: AuthorPreferences | null = null;
 let lastAuthorPrefsFetch: number = 0;
+let cachedAIStudioPrefix: string | null = null;
+let lastAIStudioPrefixFetch: number = 0;
 const syncFieldListeners = new Set<(field: SyncableField) => void>();
 const syncFieldAppliedListeners = new Set<(event: SyncFieldAppliedEvent) => void>();
 let syncFieldAppliedSequence = 0;
@@ -119,6 +121,8 @@ if (typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__) {
   lastReadStateFetch = 0;
   cachedAuthorPrefs = null;
   lastAuthorPrefsFetch = 0;
+  cachedAIStudioPrefix = null;
+  lastAIStudioPrefixFetch = 0;
 }
 
 /**
@@ -336,7 +340,7 @@ export function clearReadState(): void {
 }
 
 /**
- * Clear reader-only storage (read/loadFrom/authorPrefs/view width).
+ * Clear reader-only storage (read/loadFrom/authorPrefs/aiStudioPrefix/view width).
  */
 export function clearReaderStorage(options: StorageWriteOptions = {}): void {
   cachedReadState = null;
@@ -345,17 +349,22 @@ export function clearReaderStorage(options: StorageWriteOptions = {}): void {
   lastLoadFromFetch = 0;
   cachedAuthorPrefs = null;
   lastAuthorPrefsFetch = 0;
+  cachedAIStudioPrefix = null;
+  lastAIStudioPrefixFetch = 0;
   GM_setValue(getKey(STORAGE_KEYS.READ), '{}');
   GM_setValue(getKey(STORAGE_KEYS.READ_FROM), '');
   GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), '{}');
+  GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), '');
   GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), '0');
   notifySyncFieldChanged('read', options);
   notifySyncFieldChanged('loadFrom', options);
   notifySyncFieldChanged('authorPrefs', options);
+  notifySyncFieldChanged('aiStudioPrefix', options);
   const source = options.source ?? 'reset';
   notifySyncFieldApplied('read', source);
   notifySyncFieldApplied('loadFrom', source);
   notifySyncFieldApplied('authorPrefs', source);
+  notifySyncFieldApplied('aiStudioPrefix', source);
 }
 
 /**
@@ -363,7 +372,6 @@ export function clearReaderStorage(options: StorageWriteOptions = {}): void {
  */
 export function clearAllStorage(options: StorageWriteOptions = {}): void {
   clearReaderStorage(options);
-  GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), '');
   GM_setValue(getKey(STORAGE_KEYS.SYNC_META), '');
   GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), '');
   GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), '');
@@ -390,14 +398,35 @@ export function setViewWidth(width: number): void {
  * Get AI Studio prompt prefix
  */
 export function getAIStudioPrefix(): string {
-  return GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), '');
+  const now = Date.now();
+  const isTest = typeof window !== 'undefined' && (window as any).__PR_TEST_MODE__;
+  if (!isTest && cachedAIStudioPrefix !== null && (now - lastAIStudioPrefixFetch < 100)) {
+    return cachedAIStudioPrefix;
+  }
+  const raw = GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), '');
+  cachedAIStudioPrefix = raw;
+  lastAIStudioPrefixFetch = now;
+  return raw;
 }
 
 /**
  * Set AI Studio prompt prefix
  */
-export function setAIStudioPrefix(prefix: string): void {
+export function setAIStudioPrefix(prefix: string, options: StorageWriteOptions = {}): void {
+  cachedAIStudioPrefix = prefix;
+  lastAIStudioPrefixFetch = Date.now();
   GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
+  notifySyncFieldChanged('aiStudioPrefix', options);
+  notifySyncFieldApplied('aiStudioPrefix', options.source ?? 'local');
+}
+
+export function applyExternalAIStudioPrefix(
+  prefix: string,
+  source: SyncFieldApplySource = 'cross-tab'
+): void {
+  cachedAIStudioPrefix = prefix;
+  lastAIStudioPrefixFetch = Date.now();
+  notifySyncFieldApplied('aiStudioPrefix', source);
 }
 
 export function getSyncMeta<T = unknown>(): T | null {

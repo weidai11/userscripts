@@ -82,6 +82,15 @@ function buildEnvelopeFields(nowIso: string): Record<string, unknown> {
               },
             },
           },
+          aiStudioPrefix: {
+            mapValue: {
+              fields: {
+                updatedAt: { timestampValue: nowIso },
+                updatedBy: { stringValue: 'emulator-test' },
+                version: { integerValue: '0' },
+              },
+            },
+          },
         },
       },
     },
@@ -461,6 +470,24 @@ async function run(): Promise<void> {
       authorPrefsTooLargeResponse.status,
       200,
       'Envelope with authorPrefs.value > 1000 unexpectedly succeeded'
+    );
+
+    const aiStudioPrefixTooLarge = cloneFields(buildEnvelopeFields(nowIso));
+    (aiStudioPrefixTooLarge.fields as any).mapValue.fields.aiStudioPrefix.mapValue.fields.value = {
+      stringValue: 'x'.repeat(8001),
+    };
+    const aiStudioPrefixTooLargeResponse = await commitOnce(context, {
+      writes: [
+        {
+          update: { name, fields: aiStudioPrefixTooLarge },
+          currentDocument: { updateTime: latestUpdateTime },
+        },
+      ],
+    });
+    assert.notStrictEqual(
+      aiStudioPrefixTooLargeResponse.status,
+      200,
+      'Envelope with aiStudioPrefix.value > 8000 unexpectedly succeeded'
     );
 
     console.log('Firestore emulator integration checks passed.');

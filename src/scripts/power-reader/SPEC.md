@@ -47,7 +47,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-SYNC-02]** Sync identity is derived from `currentUser._id` plus `currentUser.abTestOverrides.pr_sync_secret_v1`; when missing, the script bootstraps the secret via `updateUser`.
 - **[PR-SYNC-02.1]** Security posture for v3 is an accepted convenience tradeoff: `abTestOverrides` is treated as a capability-token store for low-sensitivity sync state, not a hardened secret vault. If the forum session, page JS context, privileged forum tooling, or browser extension environment is compromised, sync node derivation and remote sync state can be compromised too.
 - **[PR-SYNC-03]** Remote state is stored in Firestore at `pr_sync_v1/{site}/nodes/{syncNode}` using REST `documents:commit` with single-write CAS preconditions (`exists=false` or `updateTime`).
-- **[PR-SYNC-04]** Synced subset in v3: `read`, `loadFrom`, and `authorPrefs`, including clear-epoch barriers for durable reset/overflow clears across devices.
+- **[PR-SYNC-04]** Synced subset in v3: `read`, `loadFrom`, `authorPrefs`, and `aiStudioPrefix`. `read/loadFrom/authorPrefs` use clear-epoch barriers for durable reset/overflow clears; `aiStudioPrefix` uses versioned last-write-wins merge.
 - **[PR-SYNC-05]** `/reader/reset` clears local syncable fields immediately and attempts an authoritative remote clear; if identity/secret is unavailable, a pending-reset marker is persisted for replay.
 
 #### Persistence Plan v3 Requirement IDs (`PR-PERSIST-*`)
@@ -56,7 +56,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - [PR-PERSIST-03]: site-scoped sync
 - [PR-PERSIST-04]: startup hydrate before setup gate
 - [PR-PERSIST-05]: reset clears local state + writes remote cleared envelope
-- [PR-PERSIST-06]: synced fields (`read`, `loadFrom`, `authorPrefs`)
+- [PR-PERSIST-06]: synced fields (`read`, `loadFrom`, `authorPrefs`, `aiStudioPrefix`)
 - [PR-PERSIST-07]: anonymous/missing-identity guard
 - PR-PERSIST-08: loadFrom override logging
 - PR-PERSIST-09: Firestore conflict handling (failed `updateTime` precondition path)

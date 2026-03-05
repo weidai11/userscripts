@@ -43,10 +43,11 @@ let lastReadSnapshot: ReadState = {};
 let lastLoadFromSnapshot = '';
 let lastAuthorPrefsSnapshot: AuthorPreferences = {};
 
-const lastAppliedSequenceByField: Record<'read' | 'loadFrom' | 'authorPrefs', number> = {
+const lastAppliedSequenceByField: Record<'read' | 'loadFrom' | 'authorPrefs' | 'aiStudioPrefix', number> = {
   read: 0,
   loadFrom: 0,
   authorPrefs: 0,
+  aiStudioPrefix: 0,
 };
 
 const parseLoadFromMs = (value: string): number | null => {
@@ -464,6 +465,9 @@ const handleAppliedSyncField = (event: SyncFieldAppliedEvent): void => {
     queueLoadFromDelta();
   } else if (event.field === 'authorPrefs') {
     queueAuthorPrefsDelta();
+  } else if (event.field === 'aiStudioPrefix') {
+    // No reader-item class patching is needed for prompt-prefix changes.
+    return;
   }
   schedulePatchFrame();
 };
@@ -582,6 +586,7 @@ export const setupSyncUiConsistencyLayer = (state: ReaderState): void => {
   lastAppliedSequenceByField.read = 0;
   lastAppliedSequenceByField.loadFrom = 0;
   lastAppliedSequenceByField.authorPrefs = 0;
+  lastAppliedSequenceByField.aiStudioPrefix = 0;
   lastPruneAtMs = Date.now();
 
   startDomIndexing();

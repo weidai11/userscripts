@@ -58,6 +58,12 @@ export interface PRSyncEnvelopeV1 {
       clearEpoch: number;
       value: Record<string, AuthorPrefEnvelopeValue>;
     };
+    aiStudioPrefix: {
+      updatedAt: string;
+      updatedBy: string;
+      version: number;
+      value?: string;
+    };
   };
 }
 
@@ -127,6 +133,8 @@ const DEFAULT_HOST = 'firestore.googleapis.com';
 const MAX_SYNC_COUNTER = 1_000_000_000;
 const MAX_EPOCH_MS = 253_402_300_799_999;
 const MAX_WRITER_LABEL_LENGTH = 128;
+// Keep aligned with AI_STUDIO_PREFIX_MAX_LENGTH in utils/ai-studio-prompt.ts.
+const MAX_AI_STUDIO_PREFIX_LENGTH = 8_000;
 
 let testConfigOverride: FirestoreBackendConfig | null = null;
 
@@ -142,6 +150,14 @@ const requireInteger = (value: number, label: string): number => {
 const asMap = (value: FirestoreValue | undefined, label: string): Record<string, FirestoreValue> => {
   if (!value || !('mapValue' in value)) {
     throw new Error(`missing map value: ${label}`);
+  }
+  return value.mapValue.fields || {};
+};
+
+const asOptionalMap = (value: FirestoreValue | undefined, label: string): Record<string, FirestoreValue> | undefined => {
+  if (!value) return undefined;
+  if (!('mapValue' in value)) {
+    throw new Error(`invalid map value: ${label}`);
   }
   return value.mapValue.fields || {};
 };
@@ -310,6 +326,7 @@ const decodeEnvelope = (doc: FirestoreDoc): PRSyncEnvelopeV1 => {
   const readField = asMap(outerFields.read, 'fields.read');
   const loadFromField = asMap(outerFields.loadFrom, 'fields.loadFrom');
   const authorPrefsField = asMap(outerFields.authorPrefs, 'fields.authorPrefs');
+  const aiStudioPrefixField = asOptionalMap(outerFields.aiStudioPrefix, 'fields.aiStudioPrefix');
 
   const readValueRaw = asMap(readField.value, 'fields.read.value');
   const readValue: Record<string, 1> = {};
@@ -344,6 +361,12 @@ const decodeEnvelope = (doc: FirestoreDoc): PRSyncEnvelopeV1 => {
   const loadFromValue = loadFromField.value && 'stringValue' in loadFromField.value
     ? loadFromField.value.stringValue
     : undefined;
+  const aiStudioPrefixValue = aiStudioPrefixField?.value && 'stringValue' in aiStudioPrefixField.value
+    ? aiStudioPrefixField.value.stringValue
+    : undefined;
+  const normalizedAIStudioPrefixValue = aiStudioPrefixValue && aiStudioPrefixValue.length <= MAX_AI_STUDIO_PREFIX_LENGTH
+    ? aiStudioPrefixValue
+    : undefined;
 
   return {
     schemaVersion: 1,
@@ -375,6 +398,21 @@ const decodeEnvelope = (doc: FirestoreDoc): PRSyncEnvelopeV1 => {
         updatedBy: asString(authorPrefsField.updatedBy, 'fields.authorPrefs.updatedBy'),
         clearEpoch: assertSaneCounter(asInteger(authorPrefsField.clearEpoch, 'fields.authorPrefs.clearEpoch'), 'fields.authorPrefs.clearEpoch'),
         value: authorPrefValue,
+      },
+      aiStudioPrefix: {
+        updatedAt: aiStudioPrefixField
+          ? asTimestamp(aiStudioPrefixField.updatedAt, 'fields.aiStudioPrefix.updatedAt')
+          : asTimestamp(loadFromField.updatedAt, 'fields.loadFrom.updatedAt'),
+        updatedBy: aiStudioPrefixField
+          ? asString(aiStudioPrefixField.updatedBy, 'fields.aiStudioPrefix.updatedBy')
+          : asString(loadFromField.updatedBy, 'fields.loadFrom.updatedBy'),
+        version: aiStudioPrefixField
+          ? assertSaneCounter(
+            asInteger(aiStudioPrefixField.version, 'fields.aiStudioPrefix.version'),
+            'fields.aiStudioPrefix.version'
+          )
+          : 0,
+        ...(normalizedAIStudioPrefixValue ? { value: normalizedAIStudioPrefixValue } : {}),
       },
     },
   };
@@ -408,6 +446,19 @@ const encodeEnvelope = (envelope: PRSyncEnvelopeV1): Record<string, FirestoreVal
     loadFromFields.value = fvString(envelope.fields.loadFrom.value);
   }
 
+  const aiStudioPrefixFields: Record<string, FirestoreValue> = {
+    updatedAt: fvTimestamp(envelope.fields.aiStudioPrefix.updatedAt),
+    updatedBy: fvString(envelope.fields.aiStudioPrefix.updatedBy),
+    version: fvInteger(envelope.fields.aiStudioPrefix.version),
+  };
+  const aiStudioPrefixValue = envelope.fields.aiStudioPrefix.value;
+  if (aiStudioPrefixValue && aiStudioPrefixValue.length > MAX_AI_STUDIO_PREFIX_LENGTH) {
+    throw new Error('aiStudioPrefix exceeds maximum supported length');
+  }
+  if (aiStudioPrefixValue) {
+    aiStudioPrefixFields.value = fvString(aiStudioPrefixValue);
+  }
+
   const topLevelFields: Record<string, FirestoreValue> = {
     schemaVersion: fvInteger(1),
     site: fvString(envelope.site),
@@ -428,6 +479,7 @@ const encodeEnvelope = (envelope: PRSyncEnvelopeV1): Record<string, FirestoreVal
         clearEpoch: fvInteger(envelope.fields.authorPrefs.clearEpoch),
         value: fvMap(authorMapFields),
       }),
+      aiStudioPrefix: fvMap(aiStudioPrefixFields),
     }),
   };
   if (envelope.lastPushedAtMs !== undefined) {
@@ -588,6 +640,11 @@ export const defaultEnvelope = (
       updatedBy: writerId,
       clearEpoch: 0,
       value: {},
+    },
+    aiStudioPrefix: {
+      updatedAt: nowIso,
+      updatedBy: writerId,
+      version: 0,
     },
   },
 });

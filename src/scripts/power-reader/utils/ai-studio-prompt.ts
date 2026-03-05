@@ -1,3 +1,5 @@
+export const AI_STUDIO_PREFIX_MAX_LENGTH = 8_000;
+
 export const AI_STUDIO_PROMPT_PREFIX = `* summarize the focal post or comment in this thread at 1/3 length or 5 sentences, whichever is shorter (required, no heading)
 * explain any context for the focal post or comment not already explained in the summary (optional, heading: Context)
 * explain obscure terms or references, inside jokes, etc., but assume familiarity with basic LessWrong/EA knowledge (optional, heading: Clarifications)

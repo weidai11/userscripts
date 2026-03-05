@@ -14,7 +14,7 @@ import {
   isRead,
   setLoadFromAndClearRead,
 } from '../utils/storage';
-import { AI_STUDIO_PROMPT_PREFIX } from '../utils/ai-studio-prompt';
+import { AI_STUDIO_PROMPT_PREFIX, AI_STUDIO_PREFIX_MAX_LENGTH } from '../utils/ai-studio-prompt';
 import { initResizeHandles } from '../utils/resize';
 import { initPreviewSystem, manualPreview } from '../utils/preview';
 import { Logger } from '../utils/logger';
@@ -385,7 +385,7 @@ const renderHelpSection = (showHelp: boolean, syncEnabled: boolean): string => {
         <div class="pr-settings-group">
           <label for="pr-ai-prefix-input"><strong>AI Studio Prompt Prefix:</strong></label>
           <p style="font-size: 0.8em; color: #888; margin-top: 5px;">This text is sent to AI Studio before the thread content. Leave blank to use the default.</p>
-          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
+          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" maxlength="${AI_STUDIO_PREFIX_MAX_LENGTH}" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
           <div style="margin-top: 5px;">
             <button id="pr-save-ai-prefix-btn" class="pr-debug-btn">Save Prefix</button>
             <button id="pr-reset-ai-prefix-btn" class="pr-debug-btn">Reset to Default</button>
@@ -639,7 +639,12 @@ const setupAISettings = (): void => {
     saveBtn.addEventListener('click', (e) => {
       e.preventDefault();
       const val = input.value.trim();
-      setAIStudioPrefix(val);
+      if (val.length > AI_STUDIO_PREFIX_MAX_LENGTH) {
+        alert(`Prefix is too long (max ${AI_STUDIO_PREFIX_MAX_LENGTH} characters).`);
+        return;
+      }
+      const normalized = val === AI_STUDIO_PROMPT_PREFIX.trim() ? '' : val;
+      setAIStudioPrefix(normalized);
       alert('AI Studio prompt prefix saved!');
     });
   }

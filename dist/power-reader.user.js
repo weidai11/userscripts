@@ -2660,6 +2660,8 @@ reset: () => {
   let lastLoadFromFetch = 0;
   let cachedAuthorPrefs = null;
   let lastAuthorPrefsFetch = 0;
+  let cachedAIStudioPrefix = null;
+  let lastAIStudioPrefixFetch = 0;
   const syncFieldListeners = new Set();
   const syncFieldAppliedListeners = new Set();
   let syncFieldAppliedSequence = 0;
@@ -2703,6 +2705,8 @@ reset: () => {
     lastReadStateFetch = 0;
     cachedAuthorPrefs = null;
     lastAuthorPrefsFetch = 0;
+    cachedAIStudioPrefix = null;
+    lastAIStudioPrefixFetch = 0;
   }
   function getReadState() {
     const now = Date.now();
@@ -2836,21 +2840,25 @@ reset: () => {
     lastLoadFromFetch = 0;
     cachedAuthorPrefs = null;
     lastAuthorPrefsFetch = 0;
+    cachedAIStudioPrefix = null;
+    lastAIStudioPrefixFetch = 0;
     GM_setValue(getKey(STORAGE_KEYS.READ), "{}");
     GM_setValue(getKey(STORAGE_KEYS.READ_FROM), "");
     GM_setValue(getKey(STORAGE_KEYS.AUTHOR_PREFS), "{}");
+    GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
     GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), "0");
     notifySyncFieldChanged("read", options);
     notifySyncFieldChanged("loadFrom", options);
     notifySyncFieldChanged("authorPrefs", options);
+    notifySyncFieldChanged("aiStudioPrefix", options);
     const source = options.source ?? "reset";
     notifySyncFieldApplied("read", source);
     notifySyncFieldApplied("loadFrom", source);
     notifySyncFieldApplied("authorPrefs", source);
+    notifySyncFieldApplied("aiStudioPrefix", source);
   }
   function clearAllStorage(options = {}) {
     clearReaderStorage(options);
-    GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
     GM_setValue(getKey(STORAGE_KEYS.SYNC_META), "");
     GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), "");
     GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), "");
@@ -2865,10 +2873,27 @@ reset: () => {
     GM_setValue(getKey(STORAGE_KEYS.VIEW_WIDTH), String(width));
   }
   function getAIStudioPrefix() {
-    return GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
+    const now = Date.now();
+    const isTest = typeof window !== "undefined" && window.__PR_TEST_MODE__;
+    if (!isTest && cachedAIStudioPrefix !== null && now - lastAIStudioPrefixFetch < 100) {
+      return cachedAIStudioPrefix;
+    }
+    const raw = GM_getValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), "");
+    cachedAIStudioPrefix = raw;
+    lastAIStudioPrefixFetch = now;
+    return raw;
   }
-  function setAIStudioPrefix(prefix) {
+  function setAIStudioPrefix(prefix, options = {}) {
+    cachedAIStudioPrefix = prefix;
+    lastAIStudioPrefixFetch = Date.now();
     GM_setValue(getKey(STORAGE_KEYS.AI_STUDIO_PREFIX), prefix);
+    notifySyncFieldChanged("aiStudioPrefix", options);
+    notifySyncFieldApplied("aiStudioPrefix", options.source ?? "local");
+  }
+  function applyExternalAIStudioPrefix(prefix, source = "cross-tab") {
+    cachedAIStudioPrefix = prefix;
+    lastAIStudioPrefixFetch = Date.now();
+    notifySyncFieldApplied("aiStudioPrefix", source);
   }
   function getSyncMeta() {
     const raw = GM_getValue(getKey(STORAGE_KEYS.SYNC_META), "");
@@ -3397,6 +3422,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       }
     }
   };
+  const AI_STUDIO_PREFIX_MAX_LENGTH = 8e3;
   const AI_STUDIO_PROMPT_PREFIX = `* summarize the focal post or comment in this thread at 1/3 length or 5 sentences, whichever is shorter (required, no heading)
 * explain any context for the focal post or comment not already explained in the summary (optional, heading: Context)
 * explain obscure terms or references, inside jokes, etc., but assume familiarity with basic LessWrong/EA knowledge (optional, heading: Clarifications)
@@ -6443,6 +6469,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   const MAX_SYNC_COUNTER$1 = 1e9;
   const MAX_EPOCH_MS = 253402300799999;
   const MAX_WRITER_LABEL_LENGTH = 128;
+  const MAX_AI_STUDIO_PREFIX_LENGTH = 8e3;
   const isInteger = (value) => Number.isFinite(value) && Math.floor(value) === value;
   const requireInteger = (value, label) => {
     if (!isInteger(value)) {
@@ -6453,6 +6480,13 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   const asMap = (value, label) => {
     if (!value || !("mapValue" in value)) {
       throw new Error(`missing map value: ${label}`);
+    }
+    return value.mapValue.fields || {};
+  };
+  const asOptionalMap = (value, label) => {
+    if (!value) return void 0;
+    if (!("mapValue" in value)) {
+      throw new Error(`invalid map value: ${label}`);
     }
     return value.mapValue.fields || {};
   };
@@ -6571,6 +6605,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const readField = asMap(outerFields.read, "fields.read");
     const loadFromField = asMap(outerFields.loadFrom, "fields.loadFrom");
     const authorPrefsField = asMap(outerFields.authorPrefs, "fields.authorPrefs");
+    const aiStudioPrefixField = asOptionalMap(outerFields.aiStudioPrefix, "fields.aiStudioPrefix");
     const readValueRaw = asMap(readField.value, "fields.read.value");
     const readValue = {};
     for (const [key, value] of Object.entries(readValueRaw)) {
@@ -6599,6 +6634,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       }
     }
     const loadFromValue = loadFromField.value && "stringValue" in loadFromField.value ? loadFromField.value.stringValue : void 0;
+    const aiStudioPrefixValue = aiStudioPrefixField?.value && "stringValue" in aiStudioPrefixField.value ? aiStudioPrefixField.value.stringValue : void 0;
+    const normalizedAIStudioPrefixValue = aiStudioPrefixValue && aiStudioPrefixValue.length <= MAX_AI_STUDIO_PREFIX_LENGTH ? aiStudioPrefixValue : void 0;
     return {
       schemaVersion: 1,
       site,
@@ -6629,6 +6666,15 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           updatedBy: asString(authorPrefsField.updatedBy, "fields.authorPrefs.updatedBy"),
           clearEpoch: assertSaneCounter(asInteger(authorPrefsField.clearEpoch, "fields.authorPrefs.clearEpoch"), "fields.authorPrefs.clearEpoch"),
           value: authorPrefValue
+        },
+        aiStudioPrefix: {
+          updatedAt: aiStudioPrefixField ? asTimestamp(aiStudioPrefixField.updatedAt, "fields.aiStudioPrefix.updatedAt") : asTimestamp(loadFromField.updatedAt, "fields.loadFrom.updatedAt"),
+          updatedBy: aiStudioPrefixField ? asString(aiStudioPrefixField.updatedBy, "fields.aiStudioPrefix.updatedBy") : asString(loadFromField.updatedBy, "fields.loadFrom.updatedBy"),
+          version: aiStudioPrefixField ? assertSaneCounter(
+            asInteger(aiStudioPrefixField.version, "fields.aiStudioPrefix.version"),
+            "fields.aiStudioPrefix.version"
+          ) : 0,
+          ...normalizedAIStudioPrefixValue ? { value: normalizedAIStudioPrefixValue } : {}
         }
       }
     };
@@ -6658,6 +6704,18 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     if (envelope.fields.loadFrom.value) {
       loadFromFields.value = fvString(envelope.fields.loadFrom.value);
     }
+    const aiStudioPrefixFields = {
+      updatedAt: fvTimestamp(envelope.fields.aiStudioPrefix.updatedAt),
+      updatedBy: fvString(envelope.fields.aiStudioPrefix.updatedBy),
+      version: fvInteger(envelope.fields.aiStudioPrefix.version)
+    };
+    const aiStudioPrefixValue = envelope.fields.aiStudioPrefix.value;
+    if (aiStudioPrefixValue && aiStudioPrefixValue.length > MAX_AI_STUDIO_PREFIX_LENGTH) {
+      throw new Error("aiStudioPrefix exceeds maximum supported length");
+    }
+    if (aiStudioPrefixValue) {
+      aiStudioPrefixFields.value = fvString(aiStudioPrefixValue);
+    }
     const topLevelFields = {
       schemaVersion: fvInteger(1),
       site: fvString(envelope.site),
@@ -6677,7 +6735,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           updatedBy: fvString(envelope.fields.authorPrefs.updatedBy),
           clearEpoch: fvInteger(envelope.fields.authorPrefs.clearEpoch),
           value: fvMap(authorMapFields)
-        })
+        }),
+        aiStudioPrefix: fvMap(aiStudioPrefixFields)
       })
     };
     if (envelope.lastPushedAtMs !== void 0) {
@@ -6803,6 +6862,11 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         updatedBy: writerId,
         clearEpoch: 0,
         value: {}
+      },
+      aiStudioPrefix: {
+        updatedAt: nowIso2,
+        updatedBy: writerId,
+        version: 0
       }
     }
   });
@@ -6960,10 +7024,11 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   function createDefaultMeta() {
     return {
       version: 1,
-      dirty: { read: false, loadFrom: false, authorPrefs: false },
+      dirty: { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false },
       readClearEpoch: 0,
       loadFrom: { version: 0, clearEpoch: 0 },
       authorPrefsClearEpoch: 0,
+      aiStudioPrefixVersion: 0,
       quotaMode: "normal",
       quotaCooldownLevel: 0,
       quotaNextProbeAtMs: 0
@@ -7023,6 +7088,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       meta.dirty.read = !!base.dirty.read;
       meta.dirty.loadFrom = !!base.dirty.loadFrom;
       meta.dirty.authorPrefs = !!base.dirty.authorPrefs;
+      meta.dirty.aiStudioPrefix = !!base.dirty.aiStudioPrefix;
     }
     if (typeof base.readClearEpoch === "number" && Number.isFinite(base.readClearEpoch)) {
       meta.readClearEpoch = clampSyncCounter(base.readClearEpoch, 0);
@@ -7033,6 +7099,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     if (typeof base.authorPrefsClearEpoch === "number" && Number.isFinite(base.authorPrefsClearEpoch)) {
       meta.authorPrefsClearEpoch = clampSyncCounter(base.authorPrefsClearEpoch, 0);
+    }
+    if (typeof base.aiStudioPrefixVersion === "number" && Number.isFinite(base.aiStudioPrefixVersion)) {
+      meta.aiStudioPrefixVersion = clampSyncCounter(base.aiStudioPrefixVersion, 0);
     }
     if (typeof base.pendingRemoteReset === "boolean") meta.pendingRemoteReset = base.pendingRemoteReset;
     if (typeof base.pendingRemoteResetAt === "string") meta.pendingRemoteResetAt = base.pendingRemoteResetAt;
@@ -7046,7 +7115,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           readClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.readClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.readClearEpoch, 0) : void 0,
           loadFromClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.loadFromClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.loadFromClearEpoch, 0) : void 0,
           loadFromVersion: Number.isFinite(base.pendingRemoteResetTargets.loadFromVersion) ? clampSyncCounter(base.pendingRemoteResetTargets.loadFromVersion, 0) : void 0,
-          authorPrefsClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.authorPrefsClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.authorPrefsClearEpoch, 0) : void 0
+          authorPrefsClearEpoch: Number.isFinite(base.pendingRemoteResetTargets.authorPrefsClearEpoch) ? clampSyncCounter(base.pendingRemoteResetTargets.authorPrefsClearEpoch, 0) : void 0,
+          aiStudioPrefixVersion: Number.isFinite(base.pendingRemoteResetTargets.aiStudioPrefixVersion) ? clampSyncCounter(base.pendingRemoteResetTargets.aiStudioPrefixVersion, 0) : void 0
         };
       }
     }
@@ -7086,6 +7156,11 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     if (value === "__LOAD_RECENT__") return "__LOAD_RECENT__";
     if (!value.includes("T")) return void 0;
     return value;
+  }
+  function normalizeAIStudioPrefixValue(value) {
+    if (!value) return void 0;
+    if (value.length <= AI_STUDIO_PREFIX_MAX_LENGTH) return value;
+    return value.slice(0, AI_STUDIO_PREFIX_MAX_LENGTH);
   }
   function resolveLoadFrom(a, b) {
     const left = normalizeLoadFromValue(a);
@@ -7187,6 +7262,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   function getSyncFieldStorageKey(field) {
     if (field === "read") return getKey(STORAGE_KEY_NAMES.READ);
     if (field === "loadFrom") return getKey(STORAGE_KEY_NAMES.READ_FROM);
+    if (field === "aiStudioPrefix") return getKey(STORAGE_KEY_NAMES.AI_STUDIO_PREFIX);
     return getKey(STORAGE_KEY_NAMES.AUTHOR_PREFS);
   }
   function parseExternalReadStateRaw(raw) {
@@ -7231,6 +7307,10 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     return out;
   }
+  function parseExternalAIStudioPrefixRaw(raw) {
+    if (typeof raw !== "string") return "";
+    return normalizeAIStudioPrefixValue(raw) || "";
+  }
   function applyExternalStorageField(field, raw, source) {
     if (field === "read") {
       applyExternalReadState(parseExternalReadStateRaw(raw), source);
@@ -7240,7 +7320,15 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       applyExternalLoadFrom(parseExternalLoadFromRaw(raw), source);
       return;
     }
+    if (field === "aiStudioPrefix") {
+      applyExternalAIStudioPrefix(parseExternalAIStudioPrefixRaw(raw), source);
+      return;
+    }
     applyExternalAuthorPrefs(parseExternalAuthorPrefsRaw(raw), source);
+  }
+  function getSyncFieldStorageDefault(field) {
+    if (field === "read" || field === "authorPrefs") return "{}";
+    return "";
   }
   function getCrossTabPollIntervalMs() {
     const testOverride = Number(window.PR_SYNC_TEST_POLL_MS);
@@ -7253,7 +7341,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const fieldEntries = [
       { field: "read", key: getSyncFieldStorageKey("read") },
       { field: "loadFrom", key: getSyncFieldStorageKey("loadFrom") },
-      { field: "authorPrefs", key: getSyncFieldStorageKey("authorPrefs") }
+      { field: "authorPrefs", key: getSyncFieldStorageKey("authorPrefs") },
+      { field: "aiStudioPrefix", key: getSyncFieldStorageKey("aiStudioPrefix") }
     ];
     if (typeof GM_addValueChangeListener === "function" && typeof GM_removeValueChangeListener === "function") {
       const listenerIds = [];
@@ -7294,14 +7383,13 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     const lastRawByKey = new Map();
     for (const entry of fieldEntries) {
-      lastRawByKey.set(entry.key, GM_getValue(entry.key, entry.field === "loadFrom" ? "" : "{}"));
+      lastRawByKey.set(entry.key, GM_getValue(entry.key, getSyncFieldStorageDefault(entry.field)));
     }
     const intervalMs = getCrossTabPollIntervalMs();
     const timer = window.setInterval(() => {
       if (!runtime.active) return;
       for (const entry of fieldEntries) {
-        const fallback = entry.field === "loadFrom" ? "" : "{}";
-        const nextRaw = GM_getValue(entry.key, fallback);
+        const nextRaw = GM_getValue(entry.key, getSyncFieldStorageDefault(entry.field));
         const previousRaw = lastRawByKey.get(entry.key);
         if (nextRaw === previousRaw) continue;
         lastRawByKey.set(entry.key, nextRaw);
@@ -7331,14 +7419,15 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     runtime.meta.dirty.read = false;
     runtime.meta.dirty.loadFrom = false;
     runtime.meta.dirty.authorPrefs = false;
+    runtime.meta.dirty.aiStudioPrefix = false;
     runtime.firstDirtyAtMs = null;
     persistMeta();
   }
   function hasAnyDirty(meta = runtime.meta) {
-    return !!(meta.dirty.read || meta.dirty.loadFrom || meta.dirty.authorPrefs);
+    return !!(meta.dirty.read || meta.dirty.loadFrom || meta.dirty.authorPrefs || meta.dirty.aiStudioPrefix);
   }
   function hasOnlyReadDirty(meta = runtime.meta) {
-    return !!(meta.dirty.read && !meta.dirty.loadFrom && !meta.dirty.authorPrefs);
+    return !!(meta.dirty.read && !meta.dirty.loadFrom && !meta.dirty.authorPrefs && !meta.dirty.aiStudioPrefix);
   }
   function currentPushFloorMs(meta = runtime.meta) {
     return hasOnlyReadDirty(meta) ? READ_ONLY_PUSH_FLOOR_MS : PUSH_FLOOR_MS;
@@ -7353,7 +7442,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const read = Object.keys(getReadState()).length > 0;
     const loadFrom = !!normalizeLoadFromValue(getLoadFrom());
     const authorPrefs = Object.keys(getAuthorPreferences()).length > 0;
-    return { read, loadFrom, authorPrefs };
+    const aiStudioPrefix = !!normalizeAIStudioPrefixValue(getAIStudioPrefix());
+    return { read, loadFrom, authorPrefs, aiStudioPrefix };
   }
   function shouldBlockForQuota() {
     const localGate = runtime.meta.quotaDisabledUntilMs || 0;
@@ -7583,7 +7673,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     return null;
   }
-  function applyLocalStateFromMerged(mergedRead, mergedLoadFrom, mergedAuthorEntries) {
+  function applyLocalStateFromMerged(mergedRead, mergedLoadFrom, mergedAuthorEntries, mergedAIStudioPrefix) {
     let changed = false;
     const currentRead = getReadState();
     if (stableJson(currentRead) !== stableJson(mergedRead)) {
@@ -7602,6 +7692,11 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const currentPrefs = getAuthorPreferences();
     if (stableJson(currentPrefs) !== stableJson(nextPrefs)) {
       setAuthorPreferences(nextPrefs, { silent: true, source: "sync-merge" });
+      changed = true;
+    }
+    const nextAIStudioPrefix = mergedAIStudioPrefix || "";
+    if (getAIStudioPrefix() !== nextAIStudioPrefix) {
+      setAIStudioPrefix(nextAIStudioPrefix, { silent: true, source: "sync-merge" });
       changed = true;
     }
     return changed;
@@ -7692,9 +7787,12 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);
     const remoteLoadFrom = normalizeLoadFromValue(remote.fields.loadFrom.value);
     const mergedLoadFrom = normalizeLoadFromValue(merged.loadFromValue);
+    const remoteAIStudioPrefix = normalizeAIStudioPrefixValue(remote.fields.aiStudioPrefix.value);
+    const mergedAIStudioPrefix = normalizeAIStudioPrefixValue(merged.aiStudioPrefixValue);
     const loadFromChanged = mergedLoadFrom !== remoteLoadFrom || merged.loadFromVersion !== remote.fields.loadFrom.version || merged.loadFromClearEpoch !== remote.fields.loadFrom.clearEpoch;
     const readChanged = stableJson(remote.fields.read.value) !== stableJson(merged.read.value) || remote.fields.read.clearEpoch !== merged.read.clearEpoch;
     const authorChanged = stableJson(remote.fields.authorPrefs.value) !== stableJson(merged.authorPrefs.value) || remote.fields.authorPrefs.clearEpoch !== merged.authorPrefs.clearEpoch;
+    const aiStudioPrefixChanged = mergedAIStudioPrefix !== remoteAIStudioPrefix || merged.aiStudioPrefixVersion !== remote.fields.aiStudioPrefix.version;
     return {
       schemaVersion: 1,
       site,
@@ -7720,6 +7818,12 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           updatedBy: authorChanged ? writerId : remoteAuthorUpdatedBy,
           clearEpoch: merged.authorPrefs.clearEpoch,
           value: merged.authorPrefs.value
+        },
+        aiStudioPrefix: {
+          updatedAt: aiStudioPrefixChanged ? now : remote.fields.aiStudioPrefix.updatedAt,
+          updatedBy: aiStudioPrefixChanged ? writerId : normalizeWriterLabel(remote.fields.aiStudioPrefix.updatedBy, writerId),
+          version: merged.aiStudioPrefixVersion,
+          ...mergedAIStudioPrefix ? { value: mergedAIStudioPrefix } : {}
         }
       }
     };
@@ -7729,6 +7833,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const localLoadFromRaw = getLoadFrom();
     const localLoadFrom = normalizeLoadFromValue(localLoadFromRaw);
     const localAuthorPrefs = getAuthorPreferences();
+    const localAIStudioPrefix = normalizeAIStudioPrefixValue(getAIStudioPrefix());
     const mergedRead = mergeReadState(
       localRead,
       remoteEnvelope.fields.read.value,
@@ -7768,6 +7873,24 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       runtime.writerId,
       nowIso()
     );
+    const normalizedRemoteAIStudioPrefix = normalizeAIStudioPrefixValue(remoteEnvelope.fields.aiStudioPrefix.value);
+    let aiStudioPrefixValue = normalizedRemoteAIStudioPrefix;
+    let aiStudioPrefixVersion = Math.max(
+      runtime.meta.aiStudioPrefixVersion,
+      remoteEnvelope.fields.aiStudioPrefix.version
+    );
+    const resetReplayTargetAIStudioPrefixVersion = runtime.meta.pendingRemoteReset ? runtime.meta.pendingRemoteResetTargets?.aiStudioPrefixVersion : void 0;
+    const hasPendingResetPrefixClearIntent = !!(runtime.meta.pendingRemoteReset && runtime.meta.dirty.aiStudioPrefix && localAIStudioPrefix === void 0);
+    if (hasPendingResetPrefixClearIntent) {
+      aiStudioPrefixVersion = Math.max(
+        aiStudioPrefixVersion,
+        resetReplayTargetAIStudioPrefixVersion ?? aiStudioPrefixVersion
+      );
+      aiStudioPrefixValue = void 0;
+    } else if (runtime.meta.dirty.aiStudioPrefix && localAIStudioPrefix !== normalizedRemoteAIStudioPrefix) {
+      aiStudioPrefixVersion = incrementSyncCounter(aiStudioPrefixVersion);
+      aiStudioPrefixValue = localAIStudioPrefix;
+    }
     return {
       mergedRead: mergedRead.value,
       mergedReadEpoch: mergedRead.clearEpoch,
@@ -7775,7 +7898,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       mergedLoadVersion: loadFromVersion,
       mergedLoadClearEpoch,
       mergedAuthorEntries: mergedAuthor.value,
-      mergedAuthorEpoch: mergedAuthor.clearEpoch
+      mergedAuthorEpoch: mergedAuthor.clearEpoch,
+      mergedAIStudioPrefix: aiStudioPrefixValue,
+      mergedAIStudioPrefixVersion: aiStudioPrefixVersion
     };
   }
   function loadRemoteOrDefault(remoteResult) {
@@ -7812,7 +7937,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           authorPrefs: {
             value: merged.mergedAuthorEntries,
             clearEpoch: merged.mergedAuthorEpoch
-          }
+          },
+          aiStudioPrefixValue: merged.mergedAIStudioPrefix,
+          aiStudioPrefixVersion: merged.mergedAIStudioPrefixVersion
         },
         nowIso(),
         runtime.writerId,
@@ -7868,6 +7995,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
         runtime.meta.loadFrom.version = merged.mergedLoadVersion;
         runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
+        runtime.meta.aiStudioPrefixVersion = merged.mergedAIStudioPrefixVersion;
         clearDirty();
         clearQuotaIfRecovered();
         noteSuccessfulPushForLocalBudget();
@@ -7995,7 +8123,16 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
       runtime.meta.loadFrom.version = Math.max(runtime.meta.loadFrom.version, merged.mergedLoadVersion);
       runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
-      const changed = applyLocalStateFromMerged(merged.mergedRead, merged.mergedLoadFrom, merged.mergedAuthorEntries);
+      runtime.meta.aiStudioPrefixVersion = Math.max(
+        runtime.meta.aiStudioPrefixVersion,
+        merged.mergedAIStudioPrefixVersion
+      );
+      const changed = applyLocalStateFromMerged(
+        merged.mergedRead,
+        merged.mergedLoadFrom,
+        merged.mergedAuthorEntries,
+        merged.mergedAIStudioPrefix
+      );
       if (runtime.startupDone && changed) {
         runtime.lateSyncAppliedUntilMs = nowMs() + LATE_SYNC_NOTICE_MS;
         Logger.info("Synced state applied");
@@ -8179,12 +8316,14 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     setReadState({}, { silent: true, source: "reset" });
     setLoadFrom("", { silent: true, source: "reset" });
     setAuthorPreferences({}, { silent: true, source: "reset" });
+    setAIStudioPrefix("", { silent: true, source: "reset" });
     clearFallbackAndResetPointers();
-    runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false };
+    runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false };
     runtime.firstDirtyAtMs = null;
     runtime.meta.readClearEpoch = 0;
     runtime.meta.loadFrom = { version: 0, clearEpoch: 0 };
     runtime.meta.authorPrefsClearEpoch = 0;
+    runtime.meta.aiStudioPrefixVersion = 0;
     runtime.readOverflowNoticeUntilMs = 0;
     runtime.updateTimeByNode.clear();
     persistMeta();
@@ -8205,11 +8344,13 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       readClearEpoch: runtime.meta.readClearEpoch,
       loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch,
       loadFromVersion: runtime.meta.loadFrom.version,
-      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch
+      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch,
+      aiStudioPrefixVersion: runtime.meta.aiStudioPrefixVersion
     };
     runtime.meta.dirty.read = true;
     runtime.meta.dirty.loadFrom = true;
     runtime.meta.dirty.authorPrefs = true;
+    runtime.meta.dirty.aiStudioPrefix = true;
     if (runtime.firstDirtyAtMs === null) {
       runtime.firstDirtyAtMs = nowMs();
     }
@@ -8219,13 +8360,16 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     setReadState({}, { silent: true, source: "reset" });
     setLoadFrom("", { silent: true, source: "reset" });
     setAuthorPreferences({}, { silent: true, source: "reset" });
+    setAIStudioPrefix("", { silent: true, source: "reset" });
     runtime.meta.readClearEpoch = clampSyncCounter(targets.readClearEpoch, runtime.meta.readClearEpoch);
     runtime.meta.loadFrom.clearEpoch = clampSyncCounter(targets.loadFromClearEpoch, runtime.meta.loadFrom.clearEpoch);
     runtime.meta.loadFrom.version = clampSyncCounter(targets.loadFromVersion, runtime.meta.loadFrom.version);
     runtime.meta.authorPrefsClearEpoch = clampSyncCounter(targets.authorPrefsClearEpoch, runtime.meta.authorPrefsClearEpoch);
+    runtime.meta.aiStudioPrefixVersion = clampSyncCounter(targets.aiStudioPrefixVersion, runtime.meta.aiStudioPrefixVersion);
     runtime.meta.dirty.read = true;
     runtime.meta.dirty.loadFrom = true;
     runtime.meta.dirty.authorPrefs = true;
+    runtime.meta.dirty.aiStudioPrefix = true;
     runtime.readOverflowNoticeUntilMs = 0;
     if (runtime.firstDirtyAtMs === null) {
       runtime.firstDirtyAtMs = nowMs();
@@ -8237,7 +8381,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       readClearEpoch: runtime.meta.readClearEpoch + 1,
       loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch + 1,
       loadFromVersion: incrementSyncCounter(runtime.meta.loadFrom.version),
-      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch + 1
+      authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch + 1,
+      aiStudioPrefixVersion: incrementSyncCounter(runtime.meta.aiStudioPrefixVersion)
     });
   }
   async function replayPendingResetIfNeeded() {
@@ -8263,6 +8408,10 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         remoteEnvelope.fields.authorPrefs.clearEpoch,
         pendingTargets?.authorPrefsClearEpoch ?? runtime.meta.authorPrefsClearEpoch
       );
+      const targetAIStudioPrefixVersion = Math.max(
+        remoteEnvelope.fields.aiStudioPrefix.version,
+        pendingTargets?.aiStudioPrefixVersion ?? runtime.meta.aiStudioPrefixVersion
+      );
       runtime.meta.pendingRemoteResetTargets = {
         site: runtime.site,
         syncNode: runtime.syncNode,
@@ -8270,13 +8419,15 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         readClearEpoch: targetReadClearEpoch,
         loadFromClearEpoch: targetLoadFromClearEpoch,
         loadFromVersion: targetLoadFromVersion,
-        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch
+        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch,
+        aiStudioPrefixVersion: targetAIStudioPrefixVersion
       };
       applyResetLocallyToTargets({
         readClearEpoch: targetReadClearEpoch,
         loadFromClearEpoch: targetLoadFromClearEpoch,
         loadFromVersion: targetLoadFromVersion,
-        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch
+        authorPrefsClearEpoch: targetAuthorPrefsClearEpoch,
+        aiStudioPrefixVersion: targetAIStudioPrefixVersion
       });
       const wrote = await writeWithCas(remoteResult, true, runtime.resetGeneration);
       if (wrote) {
@@ -8815,7 +8966,7 @@ currentUserSnapshot: void 0
         <div class="pr-settings-group">
           <label for="pr-ai-prefix-input"><strong>AI Studio Prompt Prefix:</strong></label>
           <p style="font-size: 0.8em; color: #888; margin-top: 5px;">This text is sent to AI Studio before the thread content. Leave blank to use the default.</p>
-          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
+          <textarea id="pr-ai-prefix-input" class="pr-setting-textarea" rows="4" maxlength="${AI_STUDIO_PREFIX_MAX_LENGTH}" style="width: 100%; margin-top: 10px; font-family: monospace; font-size: 0.9em; padding: 5px; border: 1px solid #ccc; border-radius: 4px;"></textarea>
           <div style="margin-top: 5px;">
             <button id="pr-save-ai-prefix-btn" class="pr-debug-btn">Save Prefix</button>
             <button id="pr-reset-ai-prefix-btn" class="pr-debug-btn">Reset to Default</button>
@@ -9011,7 +9162,12 @@ currentUserSnapshot: void 0
       saveBtn.addEventListener("click", (e) => {
         e.preventDefault();
         const val = input.value.trim();
-        setAIStudioPrefix(val);
+        if (val.length > AI_STUDIO_PREFIX_MAX_LENGTH) {
+          alert(`Prefix is too long (max ${AI_STUDIO_PREFIX_MAX_LENGTH} characters).`);
+          return;
+        }
+        const normalized = val === AI_STUDIO_PROMPT_PREFIX.trim() ? "" : val;
+        setAIStudioPrefix(normalized);
         alert("AI Studio prompt prefix saved!");
       });
     }
@@ -17766,7 +17922,8 @@ sortCanonicalItems() {
   const lastAppliedSequenceByField = {
     read: 0,
     loadFrom: 0,
-    authorPrefs: 0
+    authorPrefs: 0,
+    aiStudioPrefix: 0
   };
   const parseLoadFromMs = (value) => {
     if (!value || value === "__LOAD_RECENT__" || !value.includes("T")) return null;
@@ -18118,6 +18275,8 @@ sortCanonicalItems() {
       queueLoadFromDelta();
     } else if (event.field === "authorPrefs") {
       queueAuthorPrefsDelta();
+    } else if (event.field === "aiStudioPrefix") {
+      return;
     }
     schedulePatchFrame();
   };
@@ -18221,6 +18380,7 @@ sortCanonicalItems() {
     lastAppliedSequenceByField.read = 0;
     lastAppliedSequenceByField.loadFrom = 0;
     lastAppliedSequenceByField.authorPrefs = 0;
+    lastAppliedSequenceByField.aiStudioPrefix = 0;
     lastPruneAtMs = Date.now();
     startDomIndexing();
     disposeAppliedListener = onSyncFieldApplied(handleAppliedSyncField);

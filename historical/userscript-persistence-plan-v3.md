@@ -1523,4 +1523,83 @@ This appendix is a UI consistency layer, not a sync-correctness layer. Remote me
 
 - No structural re-render or re-sort from this layer (aligns with `PR-SORT-04`).
 - Counters reflect logical state after patching, even when element order is unchanged.
-- Watchers/fallback monitor only `readState`, `loadFrom`, and `authorPrefs`.
+- UI-consistency watchers/fallback monitor only `readState`, `loadFrom`, and `authorPrefs`; sync-engine cross-tab watchers may include additional non-UI fields.
+
+## Appendix B. Sync AI Prompt Prefix (`aiStudioPrefix`)
+
+### Goal
+
+Synchronize the AI prompt prefix setting across devices through the existing Firestore envelope, while preserving v3 simplicity and compatibility.
+
+### Scope
+
+- Add one new synced scalar field: `fields.aiStudioPrefix`.
+- Keep schema version at `1` (no schema bump).
+- Use existing CAS merge/write path in `persistenceSync.ts` and `firestoreSyncBackend.ts`.
+- Keep reset behavior authoritative: `/reader/reset` clears local prefix and writes remote clear.
+
+### Envelope Shape
+
+Add `fields.aiStudioPrefix` as:
+
+- `updatedAt: timestamp`
+- `updatedBy: string`
+- `version: int` (0..1_000_000_000)
+- optional `value: string` (absent means default prompt prefix)
+
+`value` is omitted for default/empty local state. Non-empty values are user custom prefixes.
+
+### Merge Semantics
+
+- Strategy: last-write-wins via monotonic `version`.
+- Local metadata stores `aiStudioPrefixVersion`.
+- If local field is dirty and normalized local value differs from remote value:
+  - increment `version`
+  - write local value (or omit `value` on clear/default)
+- If not dirty:
+  - adopt remote value/version.
+
+This mirrors existing loadFrom-style versioned conflict handling without adding clear epochs.
+
+### Reset + User-Switch Semantics
+
+- `/reader/reset`:
+  - local prefix is cleared immediately
+  - reset targets include `aiStudioPrefixVersion = max(local, remote) + 1`
+  - reset replay writes cleared `aiStudioPrefix` with bumped version.
+- User switch:
+  - clear local prefix
+  - clear dirty/version state for the field before pull-first for the new user.
+
+### Storage + Cross-Tab
+
+- Extend `SyncableField` with `aiStudioPrefix`.
+- `setAIStudioPrefix` participates in sync dirty/apply channels (with `StorageWriteOptions`).
+- Cross-tab listener/poll fallback includes the new storage key.
+- External apply path updates cache only and does not write GM storage.
+
+### Validation + Rules
+
+- Firestore rules:
+  - include `aiStudioPrefix` in fixed `fields` allowlist.
+  - enforce required children (`updatedAt`, `updatedBy`, `version`) and optional bounded `value`.
+- Backend decode/encode/default:
+  - decode/encode the new field.
+  - preserve omission semantics for default/empty.
+
+### UX / Data-Model Notes
+
+- Keep one shared prefix setting (AI Studio + Arena Max) as today.
+- Empty/default should remain canonicalized as omitted in envelope.
+- Existing local values continue to work; old remote envelopes lacking this field are treated as empty/default and rewritten on next successful push.
+
+### Test Plan
+
+- Contract tests:
+  - synced subset now includes `aiStudioPrefix`.
+  - rules/backend contracts include new field.
+- Emulator integration:
+  - valid envelope with `aiStudioPrefix` passes.
+  - invalid oversized/shape-violating `aiStudioPrefix` fails.
+- Sync behavior:
+  - dirty detection, merge/write, pull-apply, reset replay, and user-switch clearing include the field.

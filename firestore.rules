@@ -74,6 +74,22 @@ service cloud.firestore {
       // key/value validation is enforced by client decode + merge guards.
     }
 
+    function validAIStudioPrefixField(aiStudioPrefixField) {
+      return aiStudioPrefixField is map &&
+        aiStudioPrefixField.keys().hasAll(['updatedAt', 'updatedBy', 'version']) &&
+        aiStudioPrefixField.keys().hasOnly(['updatedAt', 'updatedBy', 'version', 'value']) &&
+        aiStudioPrefixField.updatedAt is timestamp &&
+        validWriterLabel(aiStudioPrefixField.updatedBy) &&
+        validSyncCounter(aiStudioPrefixField.version) &&
+        (
+          !('value' in aiStudioPrefixField) ||
+          (
+            aiStudioPrefixField.value is string &&
+            aiStudioPrefixField.value.size() <= 8000
+          )
+        );
+    }
+
     function validEnvelope(data) {
       return data.keys().hasOnly(['schemaVersion', 'site', 'lastPushedBy', 'lastPushedAt', 'lastPushedAtMs', 'expiresAt', 'fields']) &&
         data.schemaVersion == 1 &&
@@ -83,10 +99,14 @@ service cloud.firestore {
         (!('lastPushedAtMs' in data) || validEpochMs(data.lastPushedAtMs)) &&
         validBoundedTtl(data.expiresAt) &&
         data.fields is map &&
-        data.fields.keys().hasOnly(['read', 'loadFrom', 'authorPrefs']) &&
+        data.fields.keys().hasOnly(['read', 'loadFrom', 'authorPrefs', 'aiStudioPrefix']) &&
         validReadField(data.fields.read) &&
         validLoadFromField(data.fields.loadFrom) &&
-        validAuthorPrefsField(data.fields.authorPrefs);
+        validAuthorPrefsField(data.fields.authorPrefs) &&
+        (
+          !('aiStudioPrefix' in data.fields) ||
+          validAIStudioPrefixField(data.fields.aiStudioPrefix)
+        );
     }
 
     match /pr_sync_v1/{site}/nodes/{syncNode} {

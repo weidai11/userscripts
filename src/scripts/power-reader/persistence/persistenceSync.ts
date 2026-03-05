@@ -3,11 +3,14 @@ import { GET_CURRENT_USER, UPDATE_SYNC_SECRET } from '../../../shared/graphql/qu
 import { Logger } from '../utils/logger';
 import { isEAForumHost } from '../utils/forum';
 import { randomInt, randomUuid } from '../utils/random';
+import { AI_STUDIO_PREFIX_MAX_LENGTH } from '../utils/ai-studio-prompt';
 import {
+  applyExternalAIStudioPrefix,
   applyExternalAuthorPrefs,
   applyExternalLoadFrom,
   applyExternalReadState,
   getAuthorPreferences,
+  getAIStudioPrefix,
   getDeviceId,
   getKey,
   getLoadFrom,
@@ -18,6 +21,7 @@ import {
   getSyncQuotaMeta,
   onSyncFieldChanged,
   setAuthorPreferences,
+  setAIStudioPrefix,
   setLoadFrom,
   setReadState,
   setSyncEnabled,
@@ -108,6 +112,7 @@ interface SyncMetaV1 {
     clearEpoch: number;
   };
   authorPrefsClearEpoch: number;
+  aiStudioPrefixVersion: number;
   pendingRemoteReset?: boolean;
   pendingRemoteResetAt?: string;
   pendingRemoteResetTargets?: {
@@ -118,6 +123,7 @@ interface SyncMetaV1 {
     loadFromClearEpoch?: number;
     loadFromVersion?: number;
     authorPrefsClearEpoch?: number;
+    aiStudioPrefixVersion?: number;
   };
   quotaMode?: 'normal' | 'quota_limited';
   quotaDisabledUntilMs?: number;
@@ -297,10 +303,11 @@ function asOverridesMap(value: unknown): Record<string, unknown> | null {
 function createDefaultMeta(): SyncMetaV1 {
   return {
     version: 1,
-    dirty: { read: false, loadFrom: false, authorPrefs: false },
+    dirty: { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false },
     readClearEpoch: 0,
     loadFrom: { version: 0, clearEpoch: 0 },
     authorPrefsClearEpoch: 0,
+    aiStudioPrefixVersion: 0,
     quotaMode: 'normal',
     quotaCooldownLevel: 0,
     quotaNextProbeAtMs: 0,
@@ -365,6 +372,7 @@ function normalizeMeta(raw: unknown): SyncMetaV1 {
     meta.dirty.read = !!base.dirty.read;
     meta.dirty.loadFrom = !!base.dirty.loadFrom;
     meta.dirty.authorPrefs = !!base.dirty.authorPrefs;
+    meta.dirty.aiStudioPrefix = !!base.dirty.aiStudioPrefix;
   }
   if (typeof base.readClearEpoch === 'number' && Number.isFinite(base.readClearEpoch)) {
     meta.readClearEpoch = clampSyncCounter(base.readClearEpoch, 0);
@@ -375,6 +383,9 @@ function normalizeMeta(raw: unknown): SyncMetaV1 {
   }
   if (typeof base.authorPrefsClearEpoch === 'number' && Number.isFinite(base.authorPrefsClearEpoch)) {
     meta.authorPrefsClearEpoch = clampSyncCounter(base.authorPrefsClearEpoch, 0);
+  }
+  if (typeof base.aiStudioPrefixVersion === 'number' && Number.isFinite(base.aiStudioPrefixVersion)) {
+    meta.aiStudioPrefixVersion = clampSyncCounter(base.aiStudioPrefixVersion, 0);
   }
   if (typeof base.pendingRemoteReset === 'boolean') meta.pendingRemoteReset = base.pendingRemoteReset;
   if (typeof base.pendingRemoteResetAt === 'string') meta.pendingRemoteResetAt = base.pendingRemoteResetAt;
@@ -400,6 +411,9 @@ function normalizeMeta(raw: unknown): SyncMetaV1 {
           : undefined,
         authorPrefsClearEpoch: Number.isFinite((base.pendingRemoteResetTargets as any).authorPrefsClearEpoch)
           ? clampSyncCounter((base.pendingRemoteResetTargets as any).authorPrefsClearEpoch, 0)
+          : undefined,
+        aiStudioPrefixVersion: Number.isFinite((base.pendingRemoteResetTargets as any).aiStudioPrefixVersion)
+          ? clampSyncCounter((base.pendingRemoteResetTargets as any).aiStudioPrefixVersion, 0)
           : undefined,
       };
     }
@@ -445,6 +459,12 @@ function normalizeLoadFromValue(value: string | undefined): '__LOAD_RECENT__' | 
   if (value === '__LOAD_RECENT__') return '__LOAD_RECENT__';
   if (!value.includes('T')) return undefined;
   return value;
+}
+
+function normalizeAIStudioPrefixValue(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (value.length <= AI_STUDIO_PREFIX_MAX_LENGTH) return value;
+  return value.slice(0, AI_STUDIO_PREFIX_MAX_LENGTH);
 }
 
 function resolveLoadFrom(a?: string, b?: string): '__LOAD_RECENT__' | string | undefined {
@@ -571,6 +591,7 @@ function writeCrossTabMs(key: string, value: number): void {
 function getSyncFieldStorageKey(field: SyncableField): string {
   if (field === 'read') return getKey(STORAGE_KEY_NAMES.READ);
   if (field === 'loadFrom') return getKey(STORAGE_KEY_NAMES.READ_FROM);
+  if (field === 'aiStudioPrefix') return getKey(STORAGE_KEY_NAMES.AI_STUDIO_PREFIX);
   return getKey(STORAGE_KEY_NAMES.AUTHOR_PREFS);
 }
 
@@ -619,6 +640,11 @@ function parseExternalAuthorPrefsRaw(raw: unknown): AuthorPreferences {
   return out;
 }
 
+function parseExternalAIStudioPrefixRaw(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return normalizeAIStudioPrefixValue(raw) || '';
+}
+
 function applyExternalStorageField(field: SyncableField, raw: unknown, source: 'cross-tab' | 'polling'): void {
   if (field === 'read') {
     applyExternalReadState(parseExternalReadStateRaw(raw), source);
@@ -628,7 +654,16 @@ function applyExternalStorageField(field: SyncableField, raw: unknown, source: '
     applyExternalLoadFrom(parseExternalLoadFromRaw(raw), source);
     return;
   }
+  if (field === 'aiStudioPrefix') {
+    applyExternalAIStudioPrefix(parseExternalAIStudioPrefixRaw(raw), source);
+    return;
+  }
   applyExternalAuthorPrefs(parseExternalAuthorPrefsRaw(raw), source);
+}
+
+function getSyncFieldStorageDefault(field: SyncableField): string {
+  if (field === 'read' || field === 'authorPrefs') return '{}';
+  return '';
 }
 
 function getCrossTabPollIntervalMs(): number {
@@ -644,6 +679,7 @@ function installCrossTabFieldWatchers(): (() => void) {
     { field: 'read', key: getSyncFieldStorageKey('read') },
     { field: 'loadFrom', key: getSyncFieldStorageKey('loadFrom') },
     { field: 'authorPrefs', key: getSyncFieldStorageKey('authorPrefs') },
+    { field: 'aiStudioPrefix', key: getSyncFieldStorageKey('aiStudioPrefix') },
   ];
 
   if (
@@ -691,15 +727,14 @@ function installCrossTabFieldWatchers(): (() => void) {
 
   const lastRawByKey = new Map<string, string>();
   for (const entry of fieldEntries) {
-    lastRawByKey.set(entry.key, GM_getValue(entry.key, entry.field === 'loadFrom' ? '' : '{}'));
+    lastRawByKey.set(entry.key, GM_getValue(entry.key, getSyncFieldStorageDefault(entry.field)));
   }
 
   const intervalMs = getCrossTabPollIntervalMs();
   const timer = window.setInterval(() => {
     if (!runtime.active) return;
     for (const entry of fieldEntries) {
-      const fallback = entry.field === 'loadFrom' ? '' : '{}';
-      const nextRaw = GM_getValue(entry.key, fallback);
+      const nextRaw = GM_getValue(entry.key, getSyncFieldStorageDefault(entry.field));
       const previousRaw = lastRawByKey.get(entry.key);
       if (nextRaw === previousRaw) continue;
       lastRawByKey.set(entry.key, nextRaw);
@@ -733,16 +768,17 @@ function clearDirty(): void {
   runtime.meta.dirty.read = false;
   runtime.meta.dirty.loadFrom = false;
   runtime.meta.dirty.authorPrefs = false;
+  runtime.meta.dirty.aiStudioPrefix = false;
   runtime.firstDirtyAtMs = null;
   persistMeta();
 }
 
 function hasAnyDirty(meta: SyncMetaV1 = runtime.meta): boolean {
-  return !!(meta.dirty.read || meta.dirty.loadFrom || meta.dirty.authorPrefs);
+  return !!(meta.dirty.read || meta.dirty.loadFrom || meta.dirty.authorPrefs || meta.dirty.aiStudioPrefix);
 }
 
 function hasOnlyReadDirty(meta: SyncMetaV1 = runtime.meta): boolean {
-  return !!(meta.dirty.read && !meta.dirty.loadFrom && !meta.dirty.authorPrefs);
+  return !!(meta.dirty.read && !meta.dirty.loadFrom && !meta.dirty.authorPrefs && !meta.dirty.aiStudioPrefix);
 }
 
 function currentPushFloorMs(meta: SyncMetaV1 = runtime.meta): number {
@@ -760,7 +796,8 @@ function localDataExistsForFirstPush(): DirtyFlags {
   const read = Object.keys(getReadState()).length > 0;
   const loadFrom = !!normalizeLoadFromValue(getLoadFrom());
   const authorPrefs = Object.keys(getAuthorPreferences()).length > 0;
-  return { read, loadFrom, authorPrefs };
+  const aiStudioPrefix = !!normalizeAIStudioPrefixValue(getAIStudioPrefix());
+  return { read, loadFrom, authorPrefs, aiStudioPrefix };
 }
 
 function shouldBlockForQuota(): boolean {
@@ -1050,7 +1087,8 @@ async function bootstrapSyncSecret(site: SyncSite, userId: string): Promise<stri
 function applyLocalStateFromMerged(
   mergedRead: Record<string, 1>,
   mergedLoadFrom: string | undefined,
-  mergedAuthorEntries: Record<string, AuthorPrefEnvelopeValue>
+  mergedAuthorEntries: Record<string, AuthorPrefEnvelopeValue>,
+  mergedAIStudioPrefix: string | undefined
 ): boolean {
   let changed = false;
   const currentRead = getReadState();
@@ -1072,6 +1110,12 @@ function applyLocalStateFromMerged(
   const currentPrefs = getAuthorPreferences();
   if (stableJson(currentPrefs) !== stableJson(nextPrefs)) {
     setAuthorPreferences(nextPrefs, { silent: true, source: 'sync-merge' });
+    changed = true;
+  }
+
+  const nextAIStudioPrefix = mergedAIStudioPrefix || '';
+  if (getAIStudioPrefix() !== nextAIStudioPrefix) {
+    setAIStudioPrefix(nextAIStudioPrefix, { silent: true, source: 'sync-merge' });
     changed = true;
   }
 
@@ -1201,6 +1245,8 @@ function buildEnvelopeFromMerged(
     loadFromVersion: number;
     loadFromClearEpoch: number;
     authorPrefs: { value: Record<string, AuthorPrefEnvelopeValue>; clearEpoch: number };
+    aiStudioPrefixValue?: string;
+    aiStudioPrefixVersion: number;
   },
   now: string,
   writerId: string,
@@ -1213,6 +1259,8 @@ function buildEnvelopeFromMerged(
   const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);
   const remoteLoadFrom = normalizeLoadFromValue(remote.fields.loadFrom.value);
   const mergedLoadFrom = normalizeLoadFromValue(merged.loadFromValue);
+  const remoteAIStudioPrefix = normalizeAIStudioPrefixValue(remote.fields.aiStudioPrefix.value);
+  const mergedAIStudioPrefix = normalizeAIStudioPrefixValue(merged.aiStudioPrefixValue);
   const loadFromChanged = mergedLoadFrom !== remoteLoadFrom ||
     merged.loadFromVersion !== remote.fields.loadFrom.version ||
     merged.loadFromClearEpoch !== remote.fields.loadFrom.clearEpoch;
@@ -1220,6 +1268,8 @@ function buildEnvelopeFromMerged(
     remote.fields.read.clearEpoch !== merged.read.clearEpoch;
   const authorChanged = stableJson(remote.fields.authorPrefs.value) !== stableJson(merged.authorPrefs.value) ||
     remote.fields.authorPrefs.clearEpoch !== merged.authorPrefs.clearEpoch;
+  const aiStudioPrefixChanged = mergedAIStudioPrefix !== remoteAIStudioPrefix ||
+    merged.aiStudioPrefixVersion !== remote.fields.aiStudioPrefix.version;
 
   return {
     schemaVersion: 1,
@@ -1247,6 +1297,12 @@ function buildEnvelopeFromMerged(
         clearEpoch: merged.authorPrefs.clearEpoch,
         value: merged.authorPrefs.value,
       },
+      aiStudioPrefix: {
+        updatedAt: aiStudioPrefixChanged ? now : remote.fields.aiStudioPrefix.updatedAt,
+        updatedBy: aiStudioPrefixChanged ? writerId : normalizeWriterLabel(remote.fields.aiStudioPrefix.updatedBy, writerId),
+        version: merged.aiStudioPrefixVersion,
+        ...(mergedAIStudioPrefix ? { value: mergedAIStudioPrefix } : {}),
+      },
     },
   };
 }
@@ -1259,11 +1315,14 @@ function buildMergedState(remoteEnvelope: PRSyncEnvelopeV1): {
   mergedLoadClearEpoch: number;
   mergedAuthorEntries: Record<string, AuthorPrefEnvelopeValue>;
   mergedAuthorEpoch: number;
+  mergedAIStudioPrefix?: string;
+  mergedAIStudioPrefixVersion: number;
 } {
   const localRead = getReadState();
   const localLoadFromRaw = getLoadFrom();
   const localLoadFrom = normalizeLoadFromValue(localLoadFromRaw);
   const localAuthorPrefs = getAuthorPreferences();
+  const localAIStudioPrefix = normalizeAIStudioPrefixValue(getAIStudioPrefix());
 
   const mergedRead = mergeReadState(
     localRead,
@@ -1309,6 +1368,33 @@ function buildMergedState(remoteEnvelope: PRSyncEnvelopeV1): {
     nowIso()
   );
 
+  const normalizedRemoteAIStudioPrefix = normalizeAIStudioPrefixValue(remoteEnvelope.fields.aiStudioPrefix.value);
+  let aiStudioPrefixValue = normalizedRemoteAIStudioPrefix;
+  let aiStudioPrefixVersion = Math.max(
+    runtime.meta.aiStudioPrefixVersion,
+    remoteEnvelope.fields.aiStudioPrefix.version
+  );
+  const resetReplayTargetAIStudioPrefixVersion = runtime.meta.pendingRemoteReset
+    ? runtime.meta.pendingRemoteResetTargets?.aiStudioPrefixVersion
+    : undefined;
+  const hasPendingResetPrefixClearIntent = !!(
+    runtime.meta.pendingRemoteReset &&
+    runtime.meta.dirty.aiStudioPrefix &&
+    localAIStudioPrefix === undefined
+  );
+  if (hasPendingResetPrefixClearIntent) {
+    // Keep reset replay idempotent: honor the persisted replay target instead of
+    // bumping again on each merge attempt while pending reset is active.
+    aiStudioPrefixVersion = Math.max(
+      aiStudioPrefixVersion,
+      resetReplayTargetAIStudioPrefixVersion ?? aiStudioPrefixVersion
+    );
+    aiStudioPrefixValue = undefined;
+  } else if (runtime.meta.dirty.aiStudioPrefix && localAIStudioPrefix !== normalizedRemoteAIStudioPrefix) {
+    aiStudioPrefixVersion = incrementSyncCounter(aiStudioPrefixVersion);
+    aiStudioPrefixValue = localAIStudioPrefix;
+  }
+
   return {
     mergedRead: mergedRead.value,
     mergedReadEpoch: mergedRead.clearEpoch,
@@ -1317,6 +1403,8 @@ function buildMergedState(remoteEnvelope: PRSyncEnvelopeV1): {
     mergedLoadClearEpoch,
     mergedAuthorEntries: mergedAuthor.value,
     mergedAuthorEpoch: mergedAuthor.clearEpoch,
+    mergedAIStudioPrefix: aiStudioPrefixValue,
+    mergedAIStudioPrefixVersion: aiStudioPrefixVersion,
   };
 }
 
@@ -1366,6 +1454,8 @@ async function writeWithCas(
           value: merged.mergedAuthorEntries,
           clearEpoch: merged.mergedAuthorEpoch,
         },
+        aiStudioPrefixValue: merged.mergedAIStudioPrefix,
+        aiStudioPrefixVersion: merged.mergedAIStudioPrefixVersion,
       },
       nowIso(),
       runtime.writerId,
@@ -1427,6 +1517,7 @@ async function writeWithCas(
       runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
       runtime.meta.loadFrom.version = merged.mergedLoadVersion;
       runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
+      runtime.meta.aiStudioPrefixVersion = merged.mergedAIStudioPrefixVersion;
       clearDirty();
       clearQuotaIfRecovered();
       noteSuccessfulPushForLocalBudget();
@@ -1568,7 +1659,16 @@ async function performPullAndMerge(): Promise<boolean> {
     runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
     runtime.meta.loadFrom.version = Math.max(runtime.meta.loadFrom.version, merged.mergedLoadVersion);
     runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
-    const changed = applyLocalStateFromMerged(merged.mergedRead, merged.mergedLoadFrom, merged.mergedAuthorEntries);
+    runtime.meta.aiStudioPrefixVersion = Math.max(
+      runtime.meta.aiStudioPrefixVersion,
+      merged.mergedAIStudioPrefixVersion
+    );
+    const changed = applyLocalStateFromMerged(
+      merged.mergedRead,
+      merged.mergedLoadFrom,
+      merged.mergedAuthorEntries,
+      merged.mergedAIStudioPrefix
+    );
     if (runtime.startupDone && changed) {
       runtime.lateSyncAppliedUntilMs = nowMs() + LATE_SYNC_NOTICE_MS;
       Logger.info('Synced state applied');
@@ -1763,12 +1863,14 @@ function clearLocalSyncableFieldsForUserSwitch(): void {
   setReadState({}, { silent: true, source: 'reset' });
   setLoadFrom('', { silent: true, source: 'reset' });
   setAuthorPreferences({}, { silent: true, source: 'reset' });
+  setAIStudioPrefix('', { silent: true, source: 'reset' });
   clearFallbackAndResetPointers();
-  runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false };
+  runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false };
   runtime.firstDirtyAtMs = null;
   runtime.meta.readClearEpoch = 0;
   runtime.meta.loadFrom = { version: 0, clearEpoch: 0 };
   runtime.meta.authorPrefsClearEpoch = 0;
+  runtime.meta.aiStudioPrefixVersion = 0;
   runtime.readOverflowNoticeUntilMs = 0;
   runtime.updateTimeByNode.clear();
   persistMeta();
@@ -1792,10 +1894,12 @@ function markPendingRemoteReset(syncNode: string | null): void {
     loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch,
     loadFromVersion: runtime.meta.loadFrom.version,
     authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch,
+    aiStudioPrefixVersion: runtime.meta.aiStudioPrefixVersion,
   };
   runtime.meta.dirty.read = true;
   runtime.meta.dirty.loadFrom = true;
   runtime.meta.dirty.authorPrefs = true;
+  runtime.meta.dirty.aiStudioPrefix = true;
   if (runtime.firstDirtyAtMs === null) {
     runtime.firstDirtyAtMs = nowMs();
   }
@@ -1807,17 +1911,21 @@ function applyResetLocallyToTargets(targets: {
   loadFromClearEpoch: number;
   loadFromVersion: number;
   authorPrefsClearEpoch: number;
+  aiStudioPrefixVersion: number;
 }): void {
   setReadState({}, { silent: true, source: 'reset' });
   setLoadFrom('', { silent: true, source: 'reset' });
   setAuthorPreferences({}, { silent: true, source: 'reset' });
+  setAIStudioPrefix('', { silent: true, source: 'reset' });
   runtime.meta.readClearEpoch = clampSyncCounter(targets.readClearEpoch, runtime.meta.readClearEpoch);
   runtime.meta.loadFrom.clearEpoch = clampSyncCounter(targets.loadFromClearEpoch, runtime.meta.loadFrom.clearEpoch);
   runtime.meta.loadFrom.version = clampSyncCounter(targets.loadFromVersion, runtime.meta.loadFrom.version);
   runtime.meta.authorPrefsClearEpoch = clampSyncCounter(targets.authorPrefsClearEpoch, runtime.meta.authorPrefsClearEpoch);
+  runtime.meta.aiStudioPrefixVersion = clampSyncCounter(targets.aiStudioPrefixVersion, runtime.meta.aiStudioPrefixVersion);
   runtime.meta.dirty.read = true;
   runtime.meta.dirty.loadFrom = true;
   runtime.meta.dirty.authorPrefs = true;
+  runtime.meta.dirty.aiStudioPrefix = true;
   runtime.readOverflowNoticeUntilMs = 0;
   if (runtime.firstDirtyAtMs === null) {
     runtime.firstDirtyAtMs = nowMs();
@@ -1831,6 +1939,7 @@ function applyResetLocallyAndBumpEpochs(): void {
     loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch + 1,
     loadFromVersion: incrementSyncCounter(runtime.meta.loadFrom.version),
     authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch + 1,
+    aiStudioPrefixVersion: incrementSyncCounter(runtime.meta.aiStudioPrefixVersion),
   });
 }
 
@@ -1858,6 +1967,10 @@ async function replayPendingResetIfNeeded(): Promise<void> {
       remoteEnvelope.fields.authorPrefs.clearEpoch,
       pendingTargets?.authorPrefsClearEpoch ?? runtime.meta.authorPrefsClearEpoch
     );
+    const targetAIStudioPrefixVersion = Math.max(
+      remoteEnvelope.fields.aiStudioPrefix.version,
+      pendingTargets?.aiStudioPrefixVersion ?? runtime.meta.aiStudioPrefixVersion
+    );
 
     runtime.meta.pendingRemoteResetTargets = {
       site: runtime.site,
@@ -1867,12 +1980,14 @@ async function replayPendingResetIfNeeded(): Promise<void> {
       loadFromClearEpoch: targetLoadFromClearEpoch,
       loadFromVersion: targetLoadFromVersion,
       authorPrefsClearEpoch: targetAuthorPrefsClearEpoch,
+      aiStudioPrefixVersion: targetAIStudioPrefixVersion,
     };
     applyResetLocallyToTargets({
       readClearEpoch: targetReadClearEpoch,
       loadFromClearEpoch: targetLoadFromClearEpoch,
       loadFromVersion: targetLoadFromVersion,
       authorPrefsClearEpoch: targetAuthorPrefsClearEpoch,
+      aiStudioPrefixVersion: targetAIStudioPrefixVersion,
     });
     const wrote = await writeWithCas(remoteResult, true, runtime.resetGeneration);
     if (wrote) {
