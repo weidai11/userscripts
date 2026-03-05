@@ -1,60 +1,34 @@
 const BASE36_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyz';
 const HEX_DIGITS = '0123456789abcdef';
-const UUID_HEX_LENGTH = 32;
+const RANGE53 = 0x20_0000_0000_0000; // 2^53
+let cachedCryptoApi: Crypto | null = null;
 
-const getCryptoApi = (): Crypto | null => {
-  if (typeof globalThis === 'undefined') return null;
+const getCryptoApi = (): Crypto => {
+  if (cachedCryptoApi) {
+    return cachedCryptoApi;
+  }
+  if (typeof globalThis === 'undefined') {
+    throw new Error('Secure randomness unavailable: globalThis is undefined');
+  }
   const candidate = globalThis.crypto;
-  if (!candidate || typeof candidate.getRandomValues !== 'function') return null;
-  return candidate;
+  if (!candidate || typeof candidate.getRandomValues !== 'function') {
+    throw new Error('Secure randomness unavailable: globalThis.crypto.getRandomValues is required');
+  }
+  cachedCryptoApi = candidate;
+  return cachedCryptoApi;
 };
-
-const mathRandomInt = (maxExclusive: number): number =>
-  Math.floor(Math.random() * maxExclusive);
 
 const byteToHex = (value: number): string =>
   `${HEX_DIGITS[(value >>> 4) & 0x0f]}${HEX_DIGITS[value & 0x0f]}`;
 
-const randomHex = (length: number): string => {
-  const targetLength = Math.max(0, Math.floor(length));
-  if (targetLength === 0) return '';
-  const cryptoApi = getCryptoApi();
-  if (cryptoApi) {
-    const bytes = new Uint8Array(Math.ceil(targetLength / 2));
-    cryptoApi.getRandomValues(bytes);
-    let out = '';
-    for (const byte of bytes) {
-      out += byteToHex(byte);
-    }
-    return out.slice(0, targetLength);
-  }
-
-  const bytes = new Uint8Array(Math.ceil(targetLength / 2));
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = mathRandomInt(256);
-  }
-  let out = '';
-  for (const byte of bytes) {
-    out += byteToHex(byte);
-  }
-  return out.slice(0, targetLength);
-};
-
 export const randomUuid = (): string => {
   const cryptoApi = getCryptoApi();
-  if (cryptoApi && typeof cryptoApi.randomUUID === 'function') {
+  if (typeof cryptoApi.randomUUID === 'function') {
     return cryptoApi.randomUUID();
   }
 
   const bytes = new Uint8Array(16);
-  if (cryptoApi) {
-    cryptoApi.getRandomValues(bytes);
-  } else {
-    const fallbackHex = randomHex(UUID_HEX_LENGTH);
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = Number.parseInt(fallbackHex.slice(i * 2, i * 2 + 2), 16);
-    }
-  }
+  cryptoApi.getRandomValues(bytes);
 
   bytes[6] = (bytes[6] & 0x0f) | 0x40;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -66,9 +40,17 @@ export const randomUuid = (): string => {
 export const randomBase36 = (length: number): string => {
   const targetLength = Math.max(0, Math.floor(length));
   if (targetLength === 0) return '';
+  const cryptoApi = getCryptoApi();
+  const buffer = new Uint8Array(Math.max(16, targetLength * 2));
   let out = '';
-  for (let i = 0; i < targetLength; i++) {
-    out += BASE36_ALPHABET[randomInt(BASE36_ALPHABET.length)];
+  while (out.length < targetLength) {
+    cryptoApi.getRandomValues(buffer);
+    for (let i = 0; i < buffer.length && out.length < targetLength; i++) {
+      const value = buffer[i];
+      // 252 is the largest multiple of 36 below 256; reject to avoid modulo bias.
+      if (value >= 252) continue;
+      out += BASE36_ALPHABET[value % BASE36_ALPHABET.length];
+    }
   }
   return out;
 };
@@ -76,20 +58,17 @@ export const randomBase36 = (length: number): string => {
 export const randomInt = (maxExclusive: number): number => {
   const max = Math.floor(maxExclusive);
   if (!Number.isFinite(max) || max <= 0) return 0;
-
+  const boundedMax = Math.min(max, RANGE53);
   const cryptoApi = getCryptoApi();
-  if (cryptoApi) {
-    const random = new Uint32Array(1);
-    const range = 0x1_0000_0000;
-    if (max >= range) {
-      return mathRandomInt(max);
+  const maxUnbiased = Math.floor(RANGE53 / boundedMax) * boundedMax;
+  const randomWordsBuffer = new Uint32Array(2);
+  while (true) {
+    cryptoApi.getRandomValues(randomWordsBuffer);
+    // Compose an unbiased 53-bit integer from two 32-bit words.
+    const candidate =
+      (randomWordsBuffer[0] & 0x001f_ffff) * 0x1_0000_0000 + randomWordsBuffer[1];
+    if (candidate < maxUnbiased) {
+      return candidate % boundedMax;
     }
-    const maxUnbiased = Math.floor(range / max) * max;
-    do {
-      cryptoApi.getRandomValues(random);
-    } while (random[0] >= maxUnbiased);
-    return random[0] % max;
   }
-
-  return mathRandomInt(max);
 };

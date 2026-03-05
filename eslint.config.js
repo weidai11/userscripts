@@ -8,7 +8,15 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
-      "no-empty": ["error", { "allowEmptyCatch": true }]
+      "no-empty": ["error", { "allowEmptyCatch": true }],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "Math",
+          property: "random",
+          message: "Use secure randomness helpers instead of Math.random()."
+        }
+      ]
     },
     languageOptions: {
       globals: {

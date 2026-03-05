@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.709
+// @version    1.2.710
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1862,7 +1862,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.709"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.710"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2574,52 +2574,30 @@ reset: () => {
   const getForumMeta = () => isEAForumHost() ? { forumLabel: "EA Forum", forumHomeUrl: "https://forum.effectivealtruism.org/" } : { forumLabel: "Less Wrong", forumHomeUrl: "https://www.lesswrong.com/" };
   const BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
   const HEX_DIGITS = "0123456789abcdef";
-  const UUID_HEX_LENGTH = 32;
+  const RANGE53 = 9007199254740992;
+  let cachedCryptoApi = null;
   const getCryptoApi = () => {
-    if (typeof globalThis === "undefined") return null;
+    if (cachedCryptoApi) {
+      return cachedCryptoApi;
+    }
+    if (typeof globalThis === "undefined") {
+      throw new Error("Secure randomness unavailable: globalThis is undefined");
+    }
     const candidate = globalThis.crypto;
-    if (!candidate || typeof candidate.getRandomValues !== "function") return null;
-    return candidate;
+    if (!candidate || typeof candidate.getRandomValues !== "function") {
+      throw new Error("Secure randomness unavailable: globalThis.crypto.getRandomValues is required");
+    }
+    cachedCryptoApi = candidate;
+    return cachedCryptoApi;
   };
-  const mathRandomInt = (maxExclusive) => Math.floor(Math.random() * maxExclusive);
   const byteToHex = (value) => `${HEX_DIGITS[value >>> 4 & 15]}${HEX_DIGITS[value & 15]}`;
-  const randomHex = (length) => {
-    const targetLength = Math.max(0, Math.floor(length));
-    if (targetLength === 0) return "";
-    const cryptoApi = getCryptoApi();
-    if (cryptoApi) {
-      const bytes2 = new Uint8Array(Math.ceil(targetLength / 2));
-      cryptoApi.getRandomValues(bytes2);
-      let out2 = "";
-      for (const byte of bytes2) {
-        out2 += byteToHex(byte);
-      }
-      return out2.slice(0, targetLength);
-    }
-    const bytes = new Uint8Array(Math.ceil(targetLength / 2));
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = mathRandomInt(256);
-    }
-    let out = "";
-    for (const byte of bytes) {
-      out += byteToHex(byte);
-    }
-    return out.slice(0, targetLength);
-  };
   const randomUuid = () => {
     const cryptoApi = getCryptoApi();
-    if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    if (typeof cryptoApi.randomUUID === "function") {
       return cryptoApi.randomUUID();
     }
     const bytes = new Uint8Array(16);
-    if (cryptoApi) {
-      cryptoApi.getRandomValues(bytes);
-    } else {
-      const fallbackHex = randomHex(UUID_HEX_LENGTH);
-      for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = Number.parseInt(fallbackHex.slice(i * 2, i * 2 + 2), 16);
-      }
-    }
+    cryptoApi.getRandomValues(bytes);
     bytes[6] = bytes[6] & 15 | 64;
     bytes[8] = bytes[8] & 63 | 128;
     const hex = Array.from(bytes, byteToHex).join("");
@@ -2628,29 +2606,33 @@ reset: () => {
   const randomBase36 = (length) => {
     const targetLength = Math.max(0, Math.floor(length));
     if (targetLength === 0) return "";
+    const cryptoApi = getCryptoApi();
+    const buffer = new Uint8Array(Math.max(16, targetLength * 2));
     let out = "";
-    for (let i = 0; i < targetLength; i++) {
-      out += BASE36_ALPHABET[randomInt(BASE36_ALPHABET.length)];
+    while (out.length < targetLength) {
+      cryptoApi.getRandomValues(buffer);
+      for (let i = 0; i < buffer.length && out.length < targetLength; i++) {
+        const value = buffer[i];
+        if (value >= 252) continue;
+        out += BASE36_ALPHABET[value % BASE36_ALPHABET.length];
+      }
     }
     return out;
   };
   const randomInt = (maxExclusive) => {
     const max = Math.floor(maxExclusive);
     if (!Number.isFinite(max) || max <= 0) return 0;
+    const boundedMax = Math.min(max, RANGE53);
     const cryptoApi = getCryptoApi();
-    if (cryptoApi) {
-      const random = new Uint32Array(1);
-      const range = 4294967296;
-      if (max >= range) {
-        return mathRandomInt(max);
+    const maxUnbiased = Math.floor(RANGE53 / boundedMax) * boundedMax;
+    const randomWordsBuffer = new Uint32Array(2);
+    while (true) {
+      cryptoApi.getRandomValues(randomWordsBuffer);
+      const candidate = (randomWordsBuffer[0] & 2097151) * 4294967296 + randomWordsBuffer[1];
+      if (candidate < maxUnbiased) {
+        return candidate % boundedMax;
       }
-      const maxUnbiased = Math.floor(range / max) * max;
-      do {
-        cryptoApi.getRandomValues(random);
-      } while (random[0] >= maxUnbiased);
-      return random[0] % max;
     }
-    return mathRandomInt(max);
   };
   const STORAGE_KEYS = {
     READ: "power-reader-read",
@@ -8875,7 +8857,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.709"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9050,7 +9032,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.709"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -16254,7 +16236,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.709"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -18339,7 +18321,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.709"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
