@@ -43,6 +43,7 @@ export const LEGACY_ADAPTERS: Record<string, LegacyAdapter> = {
     GetNewPostsLite: { type: 'multi', collection: 'posts', inputType: 'MultiPostInput', view: 'new' },
     GetNewPostsFull: { type: 'multi', collection: 'posts', inputType: 'MultiPostInput', view: 'new' },
     GetUserPosts: { type: 'multi', collection: 'posts', inputType: 'MultiPostInput', view: 'userPosts', inlineTerms: { sortedBy: 'oldest' } },
+    GetTagPreviewBySlug: { type: 'multi', collection: 'tags', inputType: 'MultiTagInput', view: 'tagBySlug' },
     GetSubscriptions: { type: 'multi', collection: 'subscriptions', inputType: 'MultiSubscriptionInput', view: 'subscriptionState', inlineTerms: { collectionName: 'Users' } },
     GetPost: { type: 'single', collection: 'post', inputType: 'SinglePostInput', idVar: 'id' },
     GetComment: { type: 'single', collection: 'comment', inputType: 'SingleCommentInput', idVar: 'id' },

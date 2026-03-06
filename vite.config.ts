@@ -49,7 +49,6 @@ export default defineConfig({
                 namespace: 'npm/vite-plugin-monkey',
                 match: config.match,
                 author: 'Wei Dai',
-                require: ['https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js'],
                 grant: [
                     'GM_addStyle',
                     'GM_xmlhttpRequest',

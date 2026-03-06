@@ -242,6 +242,8 @@ test.describe('Persistence Sync Contracts', () => {
     expect(sync).toContain('pushDisabledReason: runtime.pushDisabledReason,');
     expect(sync).toContain('pushDisabledMeta: runtime.pushDisabledMeta,');
     expect(sync).toContain('lastPushAttempt: runtime.lastPushAttemptDebug,');
+    expect(sync).toContain('response: toDebugSummaryValue(error.details),');
+    expect(sync).toContain('error: errorDebug,');
     expect(sync).toContain('backendTarget,');
   });
 

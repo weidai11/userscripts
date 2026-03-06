@@ -12,6 +12,7 @@ A fast, context-first reader for LessWrong and the EA Forum, designed to make hi
 - **Keyboard-First Workflow**: Hotkeys for post/comment actions, including fallback from hovered comments to parent post actions.
 - **AI Integration**: Send posts or comment threads to **Google AI Studio** (`g` / `Shift+G`) or **Arena.ai Max** (`m` / `Shift+M`) from both `/reader` and native LW/EAF post pages, with customizable prompt prefix for AI Studio (synced via reader sync when enabled); results are viewed directly in the opened provider tab.
 - **Rich Voting & Reactions**: Karma voting on posts/comments, LW comment-only agreement axis, EAF agree/disagree reaction chips (including posts), reaction picker, and inline quote reactions with highlighted quoted text.
+- **Forum HTML Compatibility**: Treats LW/EAF API HTML (`htmlBody`, tag preview HTML, `htmlBio`) as server-sanitized content and renders it directly.
 - **Smart Prioritization**: Sorts by "most important unread content first" using <abbr title="Prioritizes posts/threads by the highest-karma unread item within them.">tree-karma sorting</abbr> and can apply <abbr title="Hides threads once the post and relevant comments are all read.">fully read thread hiding</abbr>.
 - **Personalization**: Author preference controls, read tracking, and saved layout/settings in browser storage.
 - **Site-wide Entry Point**: Accessible from any forum page via an injected "POWER Reader" header link.

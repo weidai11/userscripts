@@ -484,6 +484,29 @@ export const GET_USER_BY_SLUG = /* GraphQL */ `
   }
 `;
 
+export const GET_TAG_PREVIEW_BY_SLUG = /* GraphQL */ `
+  query GetTagPreviewBySlug($slug: String!, $limit: Int) {
+    tags(
+      selector: {
+        tagBySlug: {
+          slug: $slug
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        _id
+        name
+        slug
+        description {
+          _id
+          htmlHighlight
+        }
+      }
+    }
+  }
+`;
+
 export const GET_POST_BY_ID = GET_POST;
 
 export const GET_COMMENT = /* GraphQL */ `

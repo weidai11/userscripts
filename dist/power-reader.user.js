@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.710
+// @version    1.2.711
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
 // @match      https://aistudio.google.com/*
 // @match      https://arena.ai/*
 // @match      https://www.arena.ai/*
-// @require    https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js
 // @connect    lesswrong.com
 // @connect    forum.effectivealtruism.org
 // @connect    arena.ai
@@ -1862,7 +1861,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.710"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.711"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -1902,6 +1901,7 @@ reset: () => {
     GetNewPostsLite: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "new" },
     GetNewPostsFull: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "new" },
     GetUserPosts: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "userPosts", inlineTerms: { sortedBy: "oldest" } },
+    GetTagPreviewBySlug: { type: "multi", collection: "tags", inputType: "MultiTagInput", view: "tagBySlug" },
     GetSubscriptions: { type: "multi", collection: "subscriptions", inputType: "MultiSubscriptionInput", view: "subscriptionState", inlineTerms: { collectionName: "Users" } },
     GetPost: { type: "single", collection: "post", inputType: "SinglePostInput", idVar: "id" },
     GetComment: { type: "single", collection: "comment", inputType: "SingleCommentInput", idVar: "id" },
@@ -2546,6 +2546,30 @@ reset: () => {
       slug
       karma
       htmlBio
+    }
+  }
+`
+  );
+  const GET_TAG_PREVIEW_BY_SLUG = (
+`
+  query GetTagPreviewBySlug($slug: String!, $limit: Int) {
+    tags(
+      selector: {
+        tagBySlug: {
+          slug: $slug
+        }
+      },
+      limit: $limit
+    ) {
+      results {
+        _id
+        name
+        slug
+        description {
+          _id
+          htmlHighlight
+        }
+      }
     }
   }
 `
@@ -3521,131 +3545,6 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       rightHandle.style.left = `${Math.min(window.innerWidth - 8, rect.right - 4)}px`;
     }
   }
-  const BLOCKED_TAGS = new Set([
-    "SCRIPT",
-    "STYLE",
-    "IFRAME",
-    "OBJECT",
-    "EMBED",
-    "FORM",
-    "INPUT",
-    "BUTTON",
-    "TEXTAREA",
-    "SELECT",
-    "META",
-    "LINK"
-  ]);
-  const UNSAFE_STYLE_PATTERNS = [
-    /expression\s*\(/i,
-    /@import/i,
-    /-moz-binding/i,
-    /behavior\s*:/i,
-    /url\s*\(\s*(['"]?)\s*(javascript:|vbscript:|data:(?!image\/))/i
-  ];
-  const BLOCKED_STYLE_PROPERTIES = new Set([
-    "position",
-    "z-index",
-    "top",
-    "left",
-    "right",
-    "bottom",
-    "inset"
-  ]);
-  const isSafeStyleDeclaration = (property, value) => {
-    const normalizedProperty = property.trim().toLowerCase();
-    if (!normalizedProperty) return false;
-    const isCssVariable = normalizedProperty.startsWith("--");
-    if (!isCssVariable && !/^[a-z-]+$/.test(normalizedProperty)) {
-      return false;
-    }
-    if (!isCssVariable && BLOCKED_STYLE_PROPERTIES.has(normalizedProperty)) {
-      return false;
-    }
-    const normalizedValue = value.trim();
-    if (!normalizedValue) return false;
-    return !UNSAFE_STYLE_PATTERNS.some((pattern) => pattern.test(normalizedValue));
-  };
-  const sanitizeInlineStyle = (styleValue) => {
-    const declarations = styleValue.split(";");
-    const safeDeclarations = [];
-    for (const declaration of declarations) {
-      const separatorIndex = declaration.indexOf(":");
-      if (separatorIndex <= 0) continue;
-      const property = declaration.slice(0, separatorIndex).trim();
-      const value = declaration.slice(separatorIndex + 1).trim();
-      if (!isSafeStyleDeclaration(property, value)) continue;
-      safeDeclarations.push(`${property}: ${value}`);
-    }
-    return safeDeclarations.join("; ");
-  };
-  const isSafeUrl = (value) => {
-    const trimmed = value.trim();
-    if (!trimmed) return false;
-    const lowered = trimmed.toLowerCase();
-    if (lowered.startsWith("#") || lowered.startsWith("/") || lowered.startsWith("./") || lowered.startsWith("../")) {
-      return true;
-    }
-    if (lowered.startsWith("data:image/")) return true;
-    try {
-      const url = new URL(trimmed, window.location.origin);
-      return url.protocol === "http:" || url.protocol === "https:" || url.protocol === "mailto:" || url.protocol === "tel:";
-    } catch {
-      return false;
-    }
-  };
-  const isSafeSrcset = (value) => {
-    const candidates = value.split(",");
-    for (const candidate of candidates) {
-      const part = candidate.trim();
-      if (!part) return false;
-      const urlPart = part.split(/\s+/)[0];
-      if (!isSafeUrl(urlPart)) return false;
-    }
-    return true;
-  };
-  const sanitizeHtml = (html) => {
-    const domPurify = globalThis.DOMPurify;
-    if (!domPurify || typeof domPurify.sanitize !== "function") {
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      const elements = Array.from(template.content.querySelectorAll("*"));
-      for (const element of elements) {
-        if (BLOCKED_TAGS.has(element.tagName)) {
-          element.remove();
-          continue;
-        }
-        const attrs = Array.from(element.attributes);
-        for (const attr of attrs) {
-          const name = attr.name.toLowerCase();
-          const value = attr.value;
-          if (name.startsWith("on") || name === "srcdoc") {
-            element.removeAttribute(attr.name);
-            continue;
-          }
-          if (name === "style") {
-            const safeStyle = sanitizeInlineStyle(value);
-            if (safeStyle) {
-              element.setAttribute("style", safeStyle);
-            } else {
-              element.removeAttribute(attr.name);
-            }
-            continue;
-          }
-          if ((name === "href" || name === "src" || name === "xlink:href") && !isSafeUrl(value)) {
-            element.removeAttribute(attr.name);
-            continue;
-          }
-          if (name === "srcset" && !isSafeSrcset(value)) {
-            element.removeAttribute(attr.name);
-          }
-        }
-      }
-      return template.innerHTML;
-    }
-    return domPurify.sanitize(html, {
-      USE_PROFILES: { html: true }
-    });
-  };
   const getStickyViewportTop = () => {
     const stickyHeader2 = document.getElementById("pr-sticky-header");
     if (!stickyHeader2) return 0;
@@ -4041,7 +3940,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         </span>
       </div>
       <div class="pr-preview-content">
-        ${sanitizeHtml(post.htmlBody || "<i>(No content)</i>")}
+        ${post.htmlBody || "<i>(No content)</i>"}
       </div>
     `;
     };
@@ -4071,7 +3970,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       </span>
     </div>
     <div class="pr-preview-content">
-      ${sanitizeHtml(comment.htmlBody || "")}
+      ${comment.htmlBody || "<i>(No content)</i>"}
     </div>
   `;
   }
@@ -4184,17 +4083,17 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   }
   function createWikiPreviewFetcher(slug) {
     return async () => {
-      const forumOrigin = parseForumUrl(window.location.href)?.origin || "https://www.lesswrong.com";
-      const url = new URL(`/tag/${slug}`, forumOrigin).toString();
       try {
-        const response = await fetch(url);
-        const html = await response.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-        const contentEl = doc.querySelector(".TagPage-description, .ContentStyles-base, .tagDescription");
-        const titleEl = doc.querySelector("h1, .TagPage-title");
-        const title = titleEl?.textContent || slug;
-        const content = sanitizeHtml(contentEl?.innerHTML || "<i>(Unable to load wiki content)</i>");
+        const response = await queryGraphQL(
+          GET_TAG_PREVIEW_BY_SLUG,
+          { slug, limit: 1 }
+        );
+        const tag = response.tags?.results?.[0];
+        if (!tag) {
+          return `<div class="pr-preview-loading">Wiki tag "${escapeHtml$1(slug)}" not found</div>`;
+        }
+        const title = tag.name || slug;
+        const content = tag.description?.htmlHighlight || "<i>(No wiki description)</i>";
         return `
         <div class="pr-preview-header">
           <strong>Wiki: ${escapeHtml$1(title)}</strong>
@@ -4204,8 +4103,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         </div>
       `;
       } catch (e) {
-        Logger.error("Wiki fetch failed:", e);
-        return `<i>Failed to load wiki page for: ${escapeHtml$1(slug)}</i>`;
+        Logger.error("Wiki GraphQL fetch failed:", e);
+        return `<i>Failed to load wiki preview for: ${escapeHtml$1(slug)}</i>`;
       }
     };
   }
@@ -4232,7 +4131,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   function renderUserPreview(user) {
     const archiveTarget = user.slug || user.username || "";
     const archiveLink = `/archive?username=${encodeURIComponent(archiveTarget)}`;
-    const safeBio = sanitizeHtml(user.htmlBio || "<i>(No bio provided)</i>");
+    const bio = user.htmlBio || "<i>(No bio provided)</i>";
     return `
     <div class="pr-preview-header">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -4250,7 +4149,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       </div>
     </div>
     <div class="pr-preview-content">
-      ${safeBio}
+      ${bio}
     </div>
   `;
   }
@@ -5205,26 +5104,33 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     return tooltipByQuote;
   };
   const highlightQuotes = (html, extendedScore) => {
-    const safeHtml = sanitizeHtml(html);
-    if (!extendedScore || !extendedScore.reacts) return safeHtml;
+    const bodyHtml = html;
+    if (!extendedScore || !extendedScore.reacts) return bodyHtml;
     const tooltipByQuote = buildQuoteTooltipData(extendedScore);
     const quotesToHighlight = Array.from(tooltipByQuote.keys());
-    if (quotesToHighlight.length === 0) return safeHtml;
-    const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(safeHtml, "text/html");
+    if (quotesToHighlight.length === 0) return bodyHtml;
+    const uniqueQuotes = quotesToHighlight.sort((a, b) => b.length - a.length);
+    const template = document.createElement("template");
+    template.innerHTML = bodyHtml;
+    const root = template.content;
+    const isNonContentTextNode = (textNode) => {
+      const parent = textNode.parentElement;
+      if (!parent) return true;
+      if (parent.classList.contains("pr-highlight")) return true;
+      return Boolean(parent.closest("style, script, noscript, template"));
+    };
     const replaceTextNode = (node, quote) => {
       const text = node.nodeValue || "";
       if (!text.includes(quote)) return;
       const parts = text.split(quote);
       if (parts.length <= 1) return;
-      const fragment = doc.createDocumentFragment();
+      const fragment = document.createDocumentFragment();
       parts.forEach((part, index) => {
         if (part) {
-          fragment.appendChild(doc.createTextNode(part));
+          fragment.appendChild(document.createTextNode(part));
         }
         if (index < parts.length - 1) {
-          const span = doc.createElement("span");
+          const span = document.createElement("span");
           span.className = "pr-highlight pr-tooltip-target";
           span.textContent = quote;
           const tooltip = tooltipByQuote.get(quote);
@@ -5256,19 +5162,19 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       node.parentNode?.replaceChild(fragment, node);
     };
     uniqueQuotes.forEach((quote) => {
-      const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       const nodes = [];
       let node = walker.nextNode();
       while (node) {
         const textNode = node;
-        if (!textNode.parentElement?.classList.contains("pr-highlight")) {
+        if (!isNonContentTextNode(textNode)) {
           nodes.push(textNode);
         }
         node = walker.nextNode();
       }
       nodes.forEach((textNode) => replaceTextNode(textNode, quote));
     });
-    return doc.body.innerHTML;
+    return template.innerHTML;
   };
   const renderBody = (html, extendedScore) => {
     const content = html || "<i>(No content)</i>";
@@ -6975,6 +6881,79 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     return out;
   };
   const stableJson = (value) => JSON.stringify(stableCloneSorted(value));
+  const MAX_DEBUG_SUMMARY_ERROR_DEPTH = 4;
+  const MAX_DEBUG_SUMMARY_ARRAY_ITEMS = 20;
+  const MAX_DEBUG_SUMMARY_OBJECT_KEYS = 40;
+  const MAX_DEBUG_SUMMARY_STRING_LENGTH = 4e3;
+  const truncateDebugString = (value) => {
+    if (value.length <= MAX_DEBUG_SUMMARY_STRING_LENGTH) return value;
+    let truncated = value.slice(0, MAX_DEBUG_SUMMARY_STRING_LENGTH);
+    const lastChar = truncated.charCodeAt(truncated.length - 1);
+    if (lastChar >= 55296 && lastChar <= 56319) {
+      truncated = truncated.slice(0, -1);
+    } else if (lastChar >= 56320 && lastChar <= 57343) {
+      const prevChar = truncated.charCodeAt(truncated.length - 2);
+      const hasMatchingHigh = prevChar >= 55296 && prevChar <= 56319;
+      if (!hasMatchingHigh) {
+        truncated = truncated.slice(0, -1);
+      }
+    }
+    return `${truncated}...[truncated]`;
+  };
+  const toDebugSummaryValue = (value, depth = 0, seen) => {
+    if (value === null || value === void 0) return value;
+    if (typeof value === "string") return truncateDebugString(value);
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return String(value);
+    if (depth >= MAX_DEBUG_SUMMARY_ERROR_DEPTH) return "[max-depth]";
+    if (typeof value !== "object") return String(value);
+    const objectValue = value;
+    const seenSet = seen ?? new WeakSet();
+    if (seenSet.has(objectValue)) return "[circular]";
+    seenSet.add(objectValue);
+    if (Array.isArray(value)) {
+      return value.slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, seenSet));
+    }
+    if (value instanceof Map) {
+      const entries2 = Array.from(value.entries()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS);
+      return entries2.map(([entryKey, entryValue]) => [
+        toDebugSummaryValue(entryKey, depth + 1, seenSet),
+        toDebugSummaryValue(entryValue, depth + 1, seenSet)
+      ]);
+    }
+    if (value instanceof Set) {
+      return Array.from(value.values()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, seenSet));
+    }
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      return value instanceof Date ? value.toISOString() : String(value);
+    }
+    const entries = Object.entries(value).slice(0, MAX_DEBUG_SUMMARY_OBJECT_KEYS);
+    const out = {};
+    for (const [key, entryValue] of entries) {
+      out[key] = toDebugSummaryValue(entryValue, depth + 1, seenSet);
+    }
+    return out;
+  };
+  const getBackendErrorDebug = (error) => {
+    if (error instanceof FirestoreBackendError) {
+      return {
+        name: error.name,
+        status: error.status,
+        code: error.code,
+        message: error.message,
+        transient: error.transient,
+        response: toDebugSummaryValue(error.details)
+      };
+    }
+    if (error instanceof Error) {
+      return {
+        name: error.name,
+        message: error.message
+      };
+    }
+    return null;
+  };
   function normalizeWriterLabel(label, fallback) {
     const normalized = typeof label === "string" ? label.trim() : "";
     if (normalized.length > 0 && normalized.length <= 128) return normalized;
@@ -6993,7 +6972,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         context,
         code: error.code,
         status: error.status,
+        transient: error.transient,
         message: error.message,
+        response: toDebugSummaryValue(error.details),
         atIso: nowIso()
       };
       return;
@@ -8005,6 +7986,11 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         persistMeta();
         return true;
       } catch (error) {
+        const errorDebug = getBackendErrorDebug(error);
+        runtime.lastPushAttemptDebug = {
+          ...runtime.lastPushAttemptDebug || {},
+          error: errorDebug
+        };
         classifyAndSetQuota(error);
         runtime.connectivityBlocked = isConnectivityBlocked(error);
         if (isCreateRace(error)) {
@@ -9008,7 +8994,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9188,7 +9174,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11712,6 +11698,11 @@ currentCommentId = null;
   const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
   const makeIndent = (depth) => "  ".repeat(Math.max(0, depth));
+  const getAuthorLabelForAI = (item, fallback = "unknown") => {
+    const displayName = item.user?.displayName;
+    if (isNonEmptyText(displayName)) return displayName.trim();
+    return getAuthorHandle(item, fallback);
+  };
   const toXml = (items, focalId, descendants = [], depth = 0) => {
     if (items.length === 0) return "";
     const item = items[0];
@@ -11720,7 +11711,7 @@ currentCommentId = null;
     const childIndent = makeIndent(depth + 1);
     const isFocal = item._id === focalId;
     const type = typeof item.title === "string" ? "post" : "comment";
-    const author = getAuthorHandle(item, "unknown");
+    const author = getAuthorLabelForAI(item, "unknown");
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
     const titleAttr = type === "post" && item.title ? ` title="${escapeXmlAttr(item.title)}"` : "";
     const linkUrlTag = type === "post" && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl) ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>
@@ -11766,7 +11757,7 @@ ${childIndent}</body_markdown>
     const indent = makeIndent(depth);
     const childIndent = makeIndent(depth + 1);
     return children.map((child) => {
-      const author = getAuthorHandle(child, "unknown");
+      const author = getAuthorLabelForAI(child, "unknown");
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
       let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
@@ -16392,7 +16383,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -18481,7 +18472,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.710"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

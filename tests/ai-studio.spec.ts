@@ -8,7 +8,7 @@ test.describe('Power Reader AI Studio Integration', () => {
             {
                 _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
                 htmlBody: '<p>AI Target Comment</p>', baseScore: 10,
-                user: { _id: 'u1', username: 'Author', karma: 100 },
+                user: { _id: 'u1', username: 'Author', displayName: 'Author Full Name', karma: 100 },
                 post: { _id: 'p1', title: 'Post 1', baseScore: 10, user: { karma: 100 } },
                 contents: { markdown: 'AI Target Comment Markdown' }
             }
@@ -64,6 +64,7 @@ test.describe('Power Reader AI Studio Integration', () => {
 
         const payload = await page.evaluate(() => (window as any)._lastAiPayload);
         expect(payload).toContain('AI Target Comment');
+        expect(payload).toContain('author="Author Full Name"');
 
         // Verify highlight
         await expect(comment).toHaveClass(/being-summarized/);

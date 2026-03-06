@@ -30,6 +30,7 @@ declare const GM_deleteValue: ((key: string) => void) | undefined;
 
 interface AIUserRef {
   username?: string | null;
+  displayName?: string | null;
 }
 
 interface AIContentRef {
@@ -292,6 +293,12 @@ const escapeXmlAttr = (value: string): string =>
 
 const makeIndent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
+const getAuthorLabelForAI = (item: AIThreadItem, fallback: string = 'unknown'): string => {
+  const displayName = item.user?.displayName;
+  if (isNonEmptyText(displayName)) return displayName.trim();
+  return getAuthorHandle(item, fallback);
+};
+
 const toXml = (
   items: AIThreadItem[],
   focalId: string,
@@ -306,7 +313,7 @@ const toXml = (
 
   const isFocal = item._id === focalId;
   const type: 'post' | 'comment' = typeof item.title === 'string' ? 'post' : 'comment';
-  const author = getAuthorHandle(item, 'unknown');
+  const author = getAuthorLabelForAI(item, 'unknown');
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
   const titleAttr = type === 'post' && item.title ? ` title="${escapeXmlAttr(item.title)}"` : '';
   const linkUrlTag = type === 'post' && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl)
@@ -357,7 +364,7 @@ const descendantsToXmlWithIndex = (
   const childIndent = makeIndent(depth + 1);
 
   return children.map(child => {
-    const author = getAuthorHandle(child, 'unknown');
+    const author = getAuthorLabelForAI(child, 'unknown');
     const md = child.contents?.markdown || child.htmlBody || '(no content)';
     let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
     xml += `${childIndent}<body_markdown>\n${escapeXmlText(md)}\n${childIndent}</body_markdown>\n`;

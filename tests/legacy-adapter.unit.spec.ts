@@ -99,6 +99,17 @@ test.describe('[PR-DATA-05] Legacy Adapter – variable transformation', () => {
         });
     });
 
+    test('[PR-DATA-05] multi: view mapping for tag-by-slug preview', () => {
+        const { query, variables } = adaptForLegacy(Q.GET_TAG_PREVIEW_BY_SLUG, { slug: 'alignment', limit: 1 });
+        expect(query).toContain('$input: MultiTagInput');
+        expect(query).toContain('tags(input: $input) {');
+        expect(variables.input.terms).toMatchObject({
+            view: 'tagBySlug',
+            slug: 'alignment',
+            limit: 1,
+        });
+    });
+
     test('[PR-DATA-05] multi: omits view for default view (GetCommentsByIds)', () => {
         const { variables } = adaptForLegacy(Q.GET_COMMENTS_BY_IDS, { commentIds: ['a', 'b'] });
         expect(variables.input.terms.view).toBeUndefined();

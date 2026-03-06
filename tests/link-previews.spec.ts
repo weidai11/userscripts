@@ -178,7 +178,7 @@ test.describe('Link Previews in Comment Bodies', () => {
         expect(calls).toBe(0);
     });
 
-    test('[PR-PREV-10] Wiki preview fetch uses current forum origin', async ({ page }) => {
+    test('[PR-PREV-10] Wiki preview uses GraphQL tag-by-slug query', async ({ page }) => {
         const scriptContent = getScriptContent();
         const comments = [
             {
@@ -199,17 +199,30 @@ test.describe('Link Previews in Comment Bodies', () => {
             testMode: true,
             verbose: true,
             appVerbose: true,
+            onGraphQL: `
+                if (query.includes('GetTagPreviewBySlug')) {
+                    window.__TAG_PREVIEW_CALLS = window.__TAG_PREVIEW_CALLS || [];
+                    window.__TAG_PREVIEW_CALLS.push({ variables });
+                    return {
+                        data: {
+                            tags: {
+                                results: [
+                                    {
+                                        _id: 'tag1',
+                                        name: 'Alignment',
+                                        slug: 'alignment',
+                                        description: { _id: 'rev1', htmlHighlight: '<p>Wiki content</p>' }
+                                    }
+                                ]
+                            }
+                        }
+                    };
+                }
+                return null;
+            `,
             onInit: `
                 console.log('POWER READER TEST INIT');
-                window.__FETCH_URLS = [];
-                window.fetch = (input) => {
-                    const url = typeof input === 'string' ? input : (input && input.url) || '';
-                    window.__FETCH_URLS.push(url);
-                    return Promise.resolve(new Response(
-                        '<html><body><h1>Alignment</h1><div class="TagPage-description"><p>Wiki content</p></div></body></html>',
-                        { status: 200, headers: { 'Content-Type': 'text/html' } }
-                    ));
-                };
+                window.__TAG_PREVIEW_CALLS = [];
             `,
         });
 
@@ -224,9 +237,11 @@ test.describe('Link Previews in Comment Bodies', () => {
         const preview = page.locator('.pr-preview-overlay.wiki-preview');
         await expect(preview).toBeVisible({ timeout: 10000 });
         await expect(preview).toContainText('Alignment');
+        await expect(preview).toContainText('Wiki content');
 
-        const urls = await page.evaluate(() => (window as any).__FETCH_URLS || []);
-        expect(urls.length).toBeGreaterThan(0);
-        expect(urls[0]).toContain('https://forum.effectivealtruism.org/tag/alignment');
+        const calls = await page.evaluate(() => (window as any).__TAG_PREVIEW_CALLS || []);
+        expect(calls.length).toBeGreaterThan(0);
+        const slug = calls[0]?.variables?.slug ?? calls[0]?.variables?.input?.terms?.slug;
+        expect(slug).toBe('alignment');
     });
 });

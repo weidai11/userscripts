@@ -5,11 +5,10 @@
 
 /* eslint-disable no-useless-assignment */
 import { Logger } from './logger';
-import { sanitizeHtml } from './sanitize';
 import { getCommentVisibilityTarget, getStickyViewportTop } from './commentVisibility';
 import { getAuthorHandle } from './author';
 import { queryGraphQL } from '../../../shared/graphql/client';
-import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG } from '../../../shared/graphql/queries';
+import { GET_POST, GET_COMMENT, GET_USER, GET_USER_BY_SLUG, GET_TAG_PREVIEW_BY_SLUG } from '../../../shared/graphql/queries';
 import type { Comment } from '../../../shared/graphql/queries';
 import type {
   GetPostQuery,
@@ -19,7 +18,9 @@ import type {
   GetUserQuery,
   GetUserQueryVariables,
   GetUserBySlugQuery,
-  GetUserBySlugQueryVariables
+  GetUserBySlugQueryVariables,
+  GetTagPreviewBySlugQuery,
+  GetTagPreviewBySlugQueryVariables
 } from '../../../generated/graphql';
 
 const HOVER_DELAY = 300; // ms
@@ -615,7 +616,7 @@ export function createPostPreviewFetcher(postId: string): () => Promise<string> 
         </span>
       </div>
       <div class="pr-preview-content">
-        ${sanitizeHtml(post.htmlBody || '<i>(No content)</i>')}
+        ${post.htmlBody || '<i>(No content)</i>'}
       </div>
     `;
   };
@@ -663,7 +664,7 @@ function formatCommentPreview(comment: Comment): string {
       </span>
     </div>
     <div class="pr-preview-content">
-      ${sanitizeHtml(comment.htmlBody || '')}
+      ${comment.htmlBody || '<i>(No content)</i>'}
     </div>
   `;
 }
@@ -910,26 +911,21 @@ export function extractWikiSlugFromUrl(url: string): string | null {
 }
 
 /**
- * Create wiki preview fetcher (fetches HTML content from wiki page)
+ * Create wiki preview fetcher (fetches wiki preview HTML via GraphQL API)
  */
 export function createWikiPreviewFetcher(slug: string): () => Promise<string> {
   return async () => {
-    const forumOrigin = parseForumUrl(window.location.href)?.origin || 'https://www.lesswrong.com';
-    const url = new URL(`/tag/${slug}`, forumOrigin).toString();
     try {
-      const response = await fetch(url);
-      const html = await response.text();
-
-      // Extract the main content from the wiki page
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-
-      // Try to find the tag description content
-      const contentEl = doc.querySelector('.TagPage-description, .ContentStyles-base, .tagDescription');
-      const titleEl = doc.querySelector('h1, .TagPage-title');
-
-      const title = titleEl?.textContent || slug;
-      const content = sanitizeHtml(contentEl?.innerHTML || '<i>(Unable to load wiki content)</i>');
+      const response = await queryGraphQL<GetTagPreviewBySlugQuery, GetTagPreviewBySlugQueryVariables>(
+        GET_TAG_PREVIEW_BY_SLUG,
+        { slug, limit: 1 }
+      );
+      const tag = response.tags?.results?.[0];
+      if (!tag) {
+        return `<div class="pr-preview-loading">Wiki tag "${escapeHtml(slug)}" not found</div>`;
+      }
+      const title = tag.name || slug;
+      const content = tag.description?.htmlHighlight || '<i>(No wiki description)</i>';
 
       return `
         <div class="pr-preview-header">
@@ -940,8 +936,8 @@ export function createWikiPreviewFetcher(slug: string): () => Promise<string> {
         </div>
       `;
     } catch (e) {
-      Logger.error('Wiki fetch failed:', e);
-      return `<i>Failed to load wiki page for: ${escapeHtml(slug)}</i>`;
+      Logger.error('Wiki GraphQL fetch failed:', e);
+      return `<i>Failed to load wiki preview for: ${escapeHtml(slug)}</i>`;
     }
   };
 }
@@ -984,7 +980,7 @@ export function createAuthorBySlugPreviewFetcher(slug: string): () => Promise<st
 function renderUserPreview(user: UserPreviewData): string {
   const archiveTarget = user.slug || user.username || '';
   const archiveLink = `/archive?username=${encodeURIComponent(archiveTarget)}`;
-  const safeBio = sanitizeHtml(user.htmlBio || '<i>(No bio provided)</i>');
+  const bio = user.htmlBio || '<i>(No bio provided)</i>';
   return `
     <div class="pr-preview-header">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
@@ -1002,7 +998,7 @@ function renderUserPreview(user: UserPreviewData): string {
       </div>
     </div>
     <div class="pr-preview-content">
-      ${safeBio}
+      ${bio}
     </div>
   `;
 }

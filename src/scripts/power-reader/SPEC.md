@@ -40,6 +40,8 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-DATA-03.2]** **Bulk-Read Tolerance Only**: Tolerated partial-success behavior is limited to bulk read paths (archive fetches and recent-comments list/polling fetches). Interactive and mutation paths (votes, reactions, navigation actions) MUST remain strict.
 - **[PR-DATA-04]** **UI Fallbacks**: Rendering components MUST handle missing or null field values (like `pageUrl`) gracefully, providing sensible fallbacks (e.g., `'#'` for links) to prevent UI crashes or broken interactions when the server fails to resolve specific fields.
 - **[PR-DATA-05]** **Cross-Site Query Compatibility**: Queries are written in the modern `selector`/top-level-args syntax (for codegen type safety on LW). A runtime adapter in the GraphQL client automatically rewrites them to the legacy `input`/`terms` syntax when running on EA Forum. Every query using `selector` MUST be registered in `LEGACY_ADAPTERS` (`src/shared/graphql/legacyAdapter.ts`) so it works on EAF.
+- **[PR-DATA-06]** **Server-Sanitized Content Contract**: Forum HTML fields from LW/EAF GraphQL resolvers are treated as server-sanitized content, including post/comment `htmlBody`, user `htmlBio`, and revision/tag `htmlHighlight` (for previews such as wiki/tag descriptions).
+- **[PR-DATA-06.1]** **Direct API HTML Rendering**: Client rendering of these API-provided forum HTML fields is pass-through (no client sanitizer layer). Security for these fields depends on server-side sanitization in forum resolvers.
 
 ### Reader Persistence Sync (Firestore)
 
@@ -580,7 +582,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-PREV-07]** Detects comment URLs in body and shows full content preview.
 - **[PR-PREV-08]** Detects post URLs in comment body and shows preview.
 - **[PR-PREV-09]** Detects author URLs in comment body and shows preview.
-- [PR-PREV-10] **Wiki Tag Fetch Origin**: Wiki tag previews (e.g. `/tag/alignment`) MUST fetch content from the current forum's origin (`forum.effectivealtruism.org` or `lesswrong.com`) to ensure consistency and correct content resolution.
+- [PR-PREV-10] **Wiki Tag Preview via GraphQL**: Wiki/tag previews (e.g. `/tag/alignment`) MUST load preview HTML via GraphQL (`tags` with `tagBySlug`) on the current forum endpoint (with EAF legacy adapter compatibility), not by scraping full page HTML.
 
 ---
 
@@ -778,7 +780,6 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 // @match        https://www.lesswrong.com/*
 // @match        https://forum.effectivealtruism.org/*
 // @match        https://aistudio.google.com/*
-// @require      https://cdn.jsdelivr.net/npm/dompurify@3.3.1/dist/purify.min.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue

@@ -2,7 +2,6 @@
  * Shared body components (Content, Quoted Highlights)
  */
 
-import { sanitizeHtml } from '../../utils/sanitize';
 import type { NamesAttachedReactionsScore, ReactionUser } from '../../../../shared/graphql/queries';
 import { CONFIG } from '../../config';
 import { readQuoteText } from '../../utils/rendering';
@@ -127,19 +126,26 @@ const buildQuoteTooltipData = (extendedScore: NamesAttachedReactionsScore): Map<
  * Highlight quotes in the HTML body based on reactions
  */
 export const highlightQuotes = (html: string, extendedScore: NamesAttachedReactionsScore | null): string => {
-    const safeHtml = sanitizeHtml(html);
-    if (!extendedScore || !extendedScore.reacts) return safeHtml;
+    const bodyHtml = html;
+    if (!extendedScore || !extendedScore.reacts) return bodyHtml;
     const tooltipByQuote = buildQuoteTooltipData(extendedScore);
 
     const quotesToHighlight = Array.from(tooltipByQuote.keys());
 
-    if (quotesToHighlight.length === 0) return safeHtml;
+    if (quotesToHighlight.length === 0) return bodyHtml;
 
-    // Sort quotes by length descending to process longest first
-    const uniqueQuotes = [...new Set(quotesToHighlight)].sort((a, b) => b.length - a.length);
+    // Keys from Map are unique already; process longest first to avoid nested partial matches.
+    const uniqueQuotes = quotesToHighlight.sort((a, b) => b.length - a.length);
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(safeHtml, 'text/html');
+    const template = document.createElement('template');
+    template.innerHTML = bodyHtml;
+    const root = template.content;
+    const isNonContentTextNode = (textNode: Text): boolean => {
+        const parent = textNode.parentElement;
+        if (!parent) return true;
+        if (parent.classList.contains('pr-highlight')) return true;
+        return Boolean(parent.closest('style, script, noscript, template'));
+    };
 
     const replaceTextNode = (node: Text, quote: string): void => {
         const text = node.nodeValue || '';
@@ -148,13 +154,13 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
         const parts = text.split(quote);
         if (parts.length <= 1) return;
 
-        const fragment = doc.createDocumentFragment();
+        const fragment = document.createDocumentFragment();
         parts.forEach((part, index) => {
             if (part) {
-                fragment.appendChild(doc.createTextNode(part));
+                fragment.appendChild(document.createTextNode(part));
             }
             if (index < parts.length - 1) {
-                const span = doc.createElement('span');
+                const span = document.createElement('span');
                 span.className = 'pr-highlight pr-tooltip-target';
                 span.textContent = quote;
                 const tooltip = tooltipByQuote.get(quote);
@@ -193,12 +199,12 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
     };
 
     uniqueQuotes.forEach((quote) => {
-        const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         const nodes: Text[] = [];
         let node = walker.nextNode();
         while (node) {
             const textNode = node as Text;
-            if (!textNode.parentElement?.classList.contains('pr-highlight')) {
+            if (!isNonContentTextNode(textNode)) {
                 nodes.push(textNode);
             }
             node = walker.nextNode();
@@ -207,7 +213,7 @@ export const highlightQuotes = (html: string, extendedScore: NamesAttachedReacti
         nodes.forEach(textNode => replaceTextNode(textNode, quote));
     });
 
-    return doc.body.innerHTML;
+    return template.innerHTML;
 };
 
 /**
