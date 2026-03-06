@@ -506,9 +506,16 @@ export const createAIProviderFeature = (config: AIProviderConfig): AIProviderFea
       const lineage: AIThreadItem[] = [];
       let currentId: string | null = id;
       let currentIsPost = isPost;
+      const visitedLineageIds = new Set<string>();
 
-      while (currentId && lineage.length < 8) {
+      while (currentId) {
         ensureOperationActive(options);
+        if (visitedLineageIds.has(currentId)) {
+          Logger.warn(`${config.name}: Detected lineage cycle at ${currentId}; stopping parent traversal.`);
+          break;
+        }
+        visitedLineageIds.add(currentId);
+
         const item = await fetchItemMarkdown(currentId, currentIsPost, state, config.name, options);
         ensureOperationActive(options);
         if (!item) break;

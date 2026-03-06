@@ -367,6 +367,18 @@ const decodeEnvelope = (doc: FirestoreDoc): PRSyncEnvelopeV1 => {
   const normalizedAIStudioPrefixValue = aiStudioPrefixValue && aiStudioPrefixValue.length <= MAX_AI_STUDIO_PREFIX_LENGTH
     ? aiStudioPrefixValue
     : undefined;
+  const aiStudioPrefixUpdatedAt = aiStudioPrefixField?.updatedAt && 'timestampValue' in aiStudioPrefixField.updatedAt
+    ? aiStudioPrefixField.updatedAt.timestampValue
+    : undefined;
+  const aiStudioPrefixUpdatedBy = aiStudioPrefixField?.updatedBy && 'stringValue' in aiStudioPrefixField.updatedBy
+    ? aiStudioPrefixField.updatedBy.stringValue
+    : undefined;
+  const aiStudioPrefixVersion = aiStudioPrefixField?.version && 'integerValue' in aiStudioPrefixField.version
+    ? (() => {
+      const parsed = Number.parseInt(aiStudioPrefixField.version.integerValue, 10);
+      return isInteger(parsed) ? parsed : undefined;
+    })()
+    : undefined;
 
   return {
     schemaVersion: 1,
@@ -400,17 +412,14 @@ const decodeEnvelope = (doc: FirestoreDoc): PRSyncEnvelopeV1 => {
         value: authorPrefValue,
       },
       aiStudioPrefix: {
-        updatedAt: aiStudioPrefixField
-          ? asTimestamp(aiStudioPrefixField.updatedAt, 'fields.aiStudioPrefix.updatedAt')
+        updatedAt: aiStudioPrefixUpdatedAt
+          ? aiStudioPrefixUpdatedAt
           : asTimestamp(loadFromField.updatedAt, 'fields.loadFrom.updatedAt'),
-        updatedBy: aiStudioPrefixField
-          ? asString(aiStudioPrefixField.updatedBy, 'fields.aiStudioPrefix.updatedBy')
+        updatedBy: aiStudioPrefixUpdatedBy
+          ? aiStudioPrefixUpdatedBy
           : asString(loadFromField.updatedBy, 'fields.loadFrom.updatedBy'),
-        version: aiStudioPrefixField
-          ? assertSaneCounter(
-            asInteger(aiStudioPrefixField.version, 'fields.aiStudioPrefix.version'),
-            'fields.aiStudioPrefix.version'
-          )
+        version: aiStudioPrefixVersion !== undefined
+          ? assertSaneCounter(aiStudioPrefixVersion, 'fields.aiStudioPrefix.version')
           : 0,
         ...(normalizedAIStudioPrefixValue ? { value: normalizedAIStudioPrefixValue } : {}),
       },

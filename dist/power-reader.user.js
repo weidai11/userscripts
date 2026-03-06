@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.711
+// @version    1.2.713
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1861,7 +1861,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.711"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.713"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6542,6 +6542,12 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const loadFromValue = loadFromField.value && "stringValue" in loadFromField.value ? loadFromField.value.stringValue : void 0;
     const aiStudioPrefixValue = aiStudioPrefixField?.value && "stringValue" in aiStudioPrefixField.value ? aiStudioPrefixField.value.stringValue : void 0;
     const normalizedAIStudioPrefixValue = aiStudioPrefixValue && aiStudioPrefixValue.length <= MAX_AI_STUDIO_PREFIX_LENGTH ? aiStudioPrefixValue : void 0;
+    const aiStudioPrefixUpdatedAt = aiStudioPrefixField?.updatedAt && "timestampValue" in aiStudioPrefixField.updatedAt ? aiStudioPrefixField.updatedAt.timestampValue : void 0;
+    const aiStudioPrefixUpdatedBy = aiStudioPrefixField?.updatedBy && "stringValue" in aiStudioPrefixField.updatedBy ? aiStudioPrefixField.updatedBy.stringValue : void 0;
+    const aiStudioPrefixVersion = aiStudioPrefixField?.version && "integerValue" in aiStudioPrefixField.version ? (() => {
+      const parsed = Number.parseInt(aiStudioPrefixField.version.integerValue, 10);
+      return isInteger(parsed) ? parsed : void 0;
+    })() : void 0;
     return {
       schemaVersion: 1,
       site,
@@ -6574,12 +6580,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           value: authorPrefValue
         },
         aiStudioPrefix: {
-          updatedAt: aiStudioPrefixField ? asTimestamp(aiStudioPrefixField.updatedAt, "fields.aiStudioPrefix.updatedAt") : asTimestamp(loadFromField.updatedAt, "fields.loadFrom.updatedAt"),
-          updatedBy: aiStudioPrefixField ? asString(aiStudioPrefixField.updatedBy, "fields.aiStudioPrefix.updatedBy") : asString(loadFromField.updatedBy, "fields.loadFrom.updatedBy"),
-          version: aiStudioPrefixField ? assertSaneCounter(
-            asInteger(aiStudioPrefixField.version, "fields.aiStudioPrefix.version"),
-            "fields.aiStudioPrefix.version"
-          ) : 0,
+          updatedAt: aiStudioPrefixUpdatedAt ? aiStudioPrefixUpdatedAt : asTimestamp(loadFromField.updatedAt, "fields.loadFrom.updatedAt"),
+          updatedBy: aiStudioPrefixUpdatedBy ? aiStudioPrefixUpdatedBy : asString(loadFromField.updatedBy, "fields.loadFrom.updatedBy"),
+          version: aiStudioPrefixVersion !== void 0 ? assertSaneCounter(aiStudioPrefixVersion, "fields.aiStudioPrefix.version") : 0,
           ...normalizedAIStudioPrefixValue ? { value: normalizedAIStudioPrefixValue } : {}
         }
       }
@@ -6800,6 +6803,92 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     Logger.warn(`${context}: unknown error`, error);
   };
+  const MAX_DEBUG_SUMMARY_ERROR_DEPTH = 4;
+  const MAX_DEBUG_SUMMARY_ARRAY_ITEMS = 20;
+  const MAX_DEBUG_SUMMARY_OBJECT_KEYS = 40;
+  const MAX_DEBUG_SUMMARY_STRING_LENGTH = 4e3;
+  const truncateDebugString = (value) => {
+    if (value.length <= MAX_DEBUG_SUMMARY_STRING_LENGTH) return value;
+    let truncated = value.slice(0, MAX_DEBUG_SUMMARY_STRING_LENGTH);
+    const lastChar = truncated.charCodeAt(truncated.length - 1);
+    if (lastChar >= 55296 && lastChar <= 56319) {
+      truncated = truncated.slice(0, -1);
+    } else if (lastChar >= 56320 && lastChar <= 57343) {
+      const prevChar = truncated.length >= 2 ? truncated.charCodeAt(truncated.length - 2) : 0;
+      const hasMatchingHigh = prevChar >= 55296 && prevChar <= 56319;
+      if (!hasMatchingHigh) {
+        truncated = truncated.slice(0, -1);
+      }
+    }
+    return `${truncated}...[truncated]`;
+  };
+  const toDebugSummaryValue = (value, depth = 0, activeStack) => {
+    if (value === null || value === void 0) return value;
+    if (typeof value === "string") return truncateDebugString(value);
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return String(value);
+    if (depth >= MAX_DEBUG_SUMMARY_ERROR_DEPTH) return "[max-depth]";
+    if (typeof value !== "object") return String(value);
+    const objectValue = value;
+    const stack = activeStack ?? new WeakSet();
+    if (stack.has(objectValue)) return "[circular]";
+    stack.add(objectValue);
+    try {
+      if (Array.isArray(value)) {
+        return value.slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, stack));
+      }
+      if (value instanceof Map) {
+        const entries2 = Array.from(value.entries()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS);
+        return entries2.map(([entryKey, entryValue]) => [
+          toDebugSummaryValue(entryKey, depth + 1, stack),
+          toDebugSummaryValue(entryValue, depth + 1, stack)
+        ]);
+      }
+      if (value instanceof Set) {
+        return Array.from(value.values()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, stack));
+      }
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        return value instanceof Date ? value.toISOString() : String(value);
+      }
+      const entries = Object.entries(value).slice(0, MAX_DEBUG_SUMMARY_OBJECT_KEYS);
+      const out = {};
+      for (const [key, entryValue] of entries) {
+        out[key] = toDebugSummaryValue(entryValue, depth + 1, stack);
+      }
+      return out;
+    } finally {
+      stack.delete(objectValue);
+    }
+  };
+  const SYNCABLE_FIELDS = ["read", "loadFrom", "authorPrefs", "aiStudioPrefix"];
+  const createDirtySequence = () => ({
+    read: 0,
+    loadFrom: 0,
+    authorPrefs: 0,
+    aiStudioPrefix: 0
+  });
+  const snapshotDirtyState = (dirty, sequence) => ({
+    dirty: { ...dirty },
+    sequence: { ...sequence }
+  });
+  const clearCommittedDirtyFlags = (currentDirty, currentSequence, snapshot) => {
+    const nextDirty = { ...currentDirty };
+    for (const field of SYNCABLE_FIELDS) {
+      if (!snapshot.dirty[field]) continue;
+      if (!nextDirty[field]) continue;
+      if (currentSequence[field] !== snapshot.sequence[field]) continue;
+      nextDirty[field] = false;
+    }
+    return nextDirty;
+  };
+  const mergeCommittedSyncMetadata = (current, committed) => ({
+    readClearEpoch: Math.max(current.readClearEpoch, committed.readClearEpoch),
+    loadFromClearEpoch: Math.max(current.loadFromClearEpoch, committed.loadFromClearEpoch),
+    loadFromVersion: Math.max(current.loadFromVersion, committed.loadFromVersion),
+    authorPrefsClearEpoch: Math.max(current.authorPrefsClearEpoch, committed.authorPrefsClearEpoch),
+    aiStudioPrefixVersion: Math.max(current.aiStudioPrefixVersion, committed.aiStudioPrefixVersion)
+  });
   const SYNC_SECRET_KEY = "pr_sync_secret_v1";
   const SYNC_META_VERSION = 1;
   const SYNC_TTL_FALLBACK_MS = 170 * 24 * 60 * 60 * 1e3;
@@ -6861,7 +6950,8 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     localBudgetMeta: createDefaultQuotaMeta(),
     resetGeneration: 0,
     firstDirtyAtMs: null,
-    readOverflowNoticeUntilMs: 0
+    readOverflowNoticeUntilMs: 0,
+    dirtySequence: createDirtySequence()
   };
   const nowIso = () => ( new Date()).toISOString();
   const nowMs = () => Date.now();
@@ -6881,60 +6971,6 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     return out;
   };
   const stableJson = (value) => JSON.stringify(stableCloneSorted(value));
-  const MAX_DEBUG_SUMMARY_ERROR_DEPTH = 4;
-  const MAX_DEBUG_SUMMARY_ARRAY_ITEMS = 20;
-  const MAX_DEBUG_SUMMARY_OBJECT_KEYS = 40;
-  const MAX_DEBUG_SUMMARY_STRING_LENGTH = 4e3;
-  const truncateDebugString = (value) => {
-    if (value.length <= MAX_DEBUG_SUMMARY_STRING_LENGTH) return value;
-    let truncated = value.slice(0, MAX_DEBUG_SUMMARY_STRING_LENGTH);
-    const lastChar = truncated.charCodeAt(truncated.length - 1);
-    if (lastChar >= 55296 && lastChar <= 56319) {
-      truncated = truncated.slice(0, -1);
-    } else if (lastChar >= 56320 && lastChar <= 57343) {
-      const prevChar = truncated.charCodeAt(truncated.length - 2);
-      const hasMatchingHigh = prevChar >= 55296 && prevChar <= 56319;
-      if (!hasMatchingHigh) {
-        truncated = truncated.slice(0, -1);
-      }
-    }
-    return `${truncated}...[truncated]`;
-  };
-  const toDebugSummaryValue = (value, depth = 0, seen) => {
-    if (value === null || value === void 0) return value;
-    if (typeof value === "string") return truncateDebugString(value);
-    if (typeof value === "number" || typeof value === "boolean") return value;
-    if (typeof value === "bigint") return String(value);
-    if (depth >= MAX_DEBUG_SUMMARY_ERROR_DEPTH) return "[max-depth]";
-    if (typeof value !== "object") return String(value);
-    const objectValue = value;
-    const seenSet = seen ?? new WeakSet();
-    if (seenSet.has(objectValue)) return "[circular]";
-    seenSet.add(objectValue);
-    if (Array.isArray(value)) {
-      return value.slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, seenSet));
-    }
-    if (value instanceof Map) {
-      const entries2 = Array.from(value.entries()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS);
-      return entries2.map(([entryKey, entryValue]) => [
-        toDebugSummaryValue(entryKey, depth + 1, seenSet),
-        toDebugSummaryValue(entryValue, depth + 1, seenSet)
-      ]);
-    }
-    if (value instanceof Set) {
-      return Array.from(value.values()).slice(0, MAX_DEBUG_SUMMARY_ARRAY_ITEMS).map((entry) => toDebugSummaryValue(entry, depth + 1, seenSet));
-    }
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) {
-      return value instanceof Date ? value.toISOString() : String(value);
-    }
-    const entries = Object.entries(value).slice(0, MAX_DEBUG_SUMMARY_OBJECT_KEYS);
-    const out = {};
-    for (const [key, entryValue] of entries) {
-      out[key] = toDebugSummaryValue(entryValue, depth + 1, seenSet);
-    }
-    return out;
-  };
   const getBackendErrorDebug = (error) => {
     if (error instanceof FirestoreBackendError) {
       return {
@@ -7390,18 +7426,32 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   }
   function setDirty(field) {
     const hadDirty = hasAnyDirty();
+    runtime.dirtySequence[field] += 1;
     runtime.meta.dirty[field] = true;
     if (!hadDirty) {
       runtime.firstDirtyAtMs = nowMs();
     }
     persistMeta();
   }
-  function clearDirty() {
-    runtime.meta.dirty.read = false;
-    runtime.meta.dirty.loadFrom = false;
-    runtime.meta.dirty.authorPrefs = false;
-    runtime.meta.dirty.aiStudioPrefix = false;
-    runtime.firstDirtyAtMs = null;
+  function clearDirty(snapshot) {
+    const hadDirtyBefore = hasAnyDirty();
+    if (snapshot) {
+      runtime.meta.dirty = clearCommittedDirtyFlags(
+        runtime.meta.dirty,
+        runtime.dirtySequence,
+        snapshot
+      );
+    } else {
+      runtime.meta.dirty.read = false;
+      runtime.meta.dirty.loadFrom = false;
+      runtime.meta.dirty.authorPrefs = false;
+      runtime.meta.dirty.aiStudioPrefix = false;
+    }
+    if (!hasAnyDirty()) {
+      runtime.firstDirtyAtMs = null;
+    } else if (!hadDirtyBefore) {
+      runtime.firstDirtyAtMs = nowMs();
+    }
     persistMeta();
   }
   function hasAnyDirty(meta = runtime.meta) {
@@ -7893,12 +7943,20 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   }
   async function writeWithCas(remoteResult, force, expectedResetGeneration) {
     if (!runtime.config || !runtime.syncNode) return false;
+    const activeConfig = runtime.config;
+    const activeSite = runtime.site;
+    const activeSyncNode = runtime.syncNode;
     if (runtime.readOnly || runtime.pushDisabled) return false;
     if (!force && !hasAnyDirty()) return false;
     if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) return false;
+    const isStillCurrentContext = () => {
+      if (expectedResetGeneration !== void 0 && runtime.resetGeneration !== expectedResetGeneration) return false;
+      return runtime.syncNode === activeSyncNode;
+    };
     let readResult = remoteResult;
     let permissionRetryWithConservativeTtl = false;
     for (let attempt = 0; attempt <= CAS_RETRY_LIMIT; attempt++) {
+      if (!isStillCurrentContext()) return false;
       const remoteEnvelope = loadRemoteOrDefault(readResult);
       if (remoteEnvelope.schemaVersion !== 1) {
         runtime.readOnly = true;
@@ -7906,6 +7964,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         return false;
       }
       const merged = buildMergedState(remoteEnvelope);
+      const dirtySnapshot = snapshotDirtyState(runtime.meta.dirty, runtime.dirtySequence);
       const expiresAtStrategy = permissionRetryWithConservativeTtl ? "conservative-now-retry" : "server-anchor";
       const expiresAtOverride = permissionRetryWithConservativeTtl ? computeExpiresAt(void 0, { fallbackTtlMs: PUSH_PERMISSION_RETRY_TTL_MS }) : void 0;
       const envelopeToWrite = buildEnvelopeFromMerged(
@@ -7924,7 +7983,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         },
         nowIso(),
         runtime.writerId,
-        runtime.site,
+        activeSite,
         runtime.lastServerAnchorIso,
         expiresAtOverride
       );
@@ -7937,7 +7996,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           return false;
         }
         try {
-          readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+          readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
           continue;
         } catch (readError) {
           logBackendError("sync CAS token re-read failed", readError);
@@ -7948,40 +8007,57 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       runtime.lastPushAttemptDebug = {
         atIso: nowIso(),
         attempt,
-        site: runtime.site,
-        syncNodeSuffix: runtime.syncNode.slice(-8),
-        projectId: runtime.config.projectId,
-        host: runtime.config.host || "firestore.googleapis.com",
-        documentPath: buildFirestorePath(runtime.site, runtime.syncNode),
+        site: activeSite,
+        syncNodeSuffix: activeSyncNode.slice(-8),
+        projectId: activeConfig.projectId,
+        host: activeConfig.host || "firestore.googleapis.com",
+        documentPath: buildFirestorePath(activeSite, activeSyncNode),
         expiresAtStrategy,
         commitOptions: readResult.kind === "missing" ? { mode: "create-if-missing" } : { mode: "cas-update", expectedUpdateTime: readResult.updateTime },
         envelope: envelopeToWrite
       };
       try {
         const commitResult = await commitEnvelope(
-          runtime.config,
-          runtime.site,
-          runtime.syncNode,
+          activeConfig,
+          activeSite,
+          activeSyncNode,
           envelopeToWrite,
           commitOptions
         );
-        runtime.updateTimeByNode.set(runtime.syncNode, commitResult.updateTime);
+        if (!isStillCurrentContext()) return false;
+        runtime.updateTimeByNode.set(activeSyncNode, commitResult.updateTime);
         runtime.lastServerAnchorIso = commitResult.updateTime;
         runtime.lastPushAtMs = nowMs();
         runtime.connectivityBlocked = false;
         if (runtime.userId) {
-          writeCrossTabMs(getCrossTabPushKey(runtime.site, runtime.userId), runtime.lastPushAtMs);
+          writeCrossTabMs(getCrossTabPushKey(activeSite, runtime.userId), runtime.lastPushAtMs);
         }
-        runtime.meta.readClearEpoch = merged.mergedReadEpoch;
-        runtime.meta.loadFrom.clearEpoch = merged.mergedLoadClearEpoch;
-        runtime.meta.loadFrom.version = merged.mergedLoadVersion;
-        runtime.meta.authorPrefsClearEpoch = merged.mergedAuthorEpoch;
-        runtime.meta.aiStudioPrefixVersion = merged.mergedAIStudioPrefixVersion;
-        clearDirty();
+        const committedSyncMetadata = mergeCommittedSyncMetadata(
+          {
+            readClearEpoch: runtime.meta.readClearEpoch,
+            loadFromClearEpoch: runtime.meta.loadFrom.clearEpoch,
+            loadFromVersion: runtime.meta.loadFrom.version,
+            authorPrefsClearEpoch: runtime.meta.authorPrefsClearEpoch,
+            aiStudioPrefixVersion: runtime.meta.aiStudioPrefixVersion
+          },
+          {
+            readClearEpoch: merged.mergedReadEpoch,
+            loadFromClearEpoch: merged.mergedLoadClearEpoch,
+            loadFromVersion: merged.mergedLoadVersion,
+            authorPrefsClearEpoch: merged.mergedAuthorEpoch,
+            aiStudioPrefixVersion: merged.mergedAIStudioPrefixVersion
+          }
+        );
+        runtime.meta.readClearEpoch = committedSyncMetadata.readClearEpoch;
+        runtime.meta.loadFrom.clearEpoch = committedSyncMetadata.loadFromClearEpoch;
+        runtime.meta.loadFrom.version = committedSyncMetadata.loadFromVersion;
+        runtime.meta.authorPrefsClearEpoch = committedSyncMetadata.authorPrefsClearEpoch;
+        runtime.meta.aiStudioPrefixVersion = committedSyncMetadata.aiStudioPrefixVersion;
+        clearDirty(dirtySnapshot);
         clearQuotaIfRecovered();
         noteSuccessfulPushForLocalBudget();
-        if (runtime.syncNode) {
-          runtime.meta.lastSyncNode = runtime.syncNode;
+        if (runtime.syncNode === activeSyncNode) {
+          runtime.meta.lastSyncNode = activeSyncNode;
         }
         persistMeta();
         return true;
@@ -7994,7 +8070,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         classifyAndSetQuota(error);
         runtime.connectivityBlocked = isConnectivityBlocked(error);
         if (isCreateRace(error)) {
-          readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+          readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
           continue;
         }
         if (isUncertainWriteOutcome(error)) {
@@ -8004,7 +8080,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           }
           await withRetryJitter(attempt);
           try {
-            readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+            readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
             continue;
           } catch (readError) {
             logBackendError("sync uncertain write reconcile failed", readError);
@@ -8018,7 +8094,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           }
           await withRetryJitter(attempt);
           try {
-            readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+            readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
             continue;
           } catch (readError) {
             logBackendError("sync CAS re-read failed", readError);
@@ -8030,7 +8106,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
             permissionRetryWithConservativeTtl = true;
             Logger.warn("sync push permission denied; retrying with conservative expiresAt");
             try {
-              readResult = await readEnvelope(runtime.config, runtime.site, runtime.syncNode);
+              readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
             } catch (readError) {
               logBackendError("sync push permission-denied retry read failed", readError);
             }
@@ -8048,7 +8124,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         if (isQuotaExceeded(error)) {
           if (runtime.userId) {
             writeCrossTabMs(
-              getCrossTabQuotaKey(runtime.site, runtime.userId),
+              getCrossTabQuotaKey(activeSite, runtime.userId),
               runtime.meta.quotaDisabledUntilMs || runtime.quotaDisabledUntilMs || 0
             );
           }
@@ -8305,6 +8381,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     setAIStudioPrefix("", { silent: true, source: "reset" });
     clearFallbackAndResetPointers();
     runtime.meta.dirty = { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false };
+    runtime.dirtySequence = createDirtySequence();
     runtime.firstDirtyAtMs = null;
     runtime.meta.readClearEpoch = 0;
     runtime.meta.loadFrom = { version: 0, clearEpoch: 0 };
@@ -8337,6 +8414,10 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     runtime.meta.dirty.loadFrom = true;
     runtime.meta.dirty.authorPrefs = true;
     runtime.meta.dirty.aiStudioPrefix = true;
+    runtime.dirtySequence.read += 1;
+    runtime.dirtySequence.loadFrom += 1;
+    runtime.dirtySequence.authorPrefs += 1;
+    runtime.dirtySequence.aiStudioPrefix += 1;
     if (runtime.firstDirtyAtMs === null) {
       runtime.firstDirtyAtMs = nowMs();
     }
@@ -8356,6 +8437,10 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     runtime.meta.dirty.loadFrom = true;
     runtime.meta.dirty.authorPrefs = true;
     runtime.meta.dirty.aiStudioPrefix = true;
+    runtime.dirtySequence.read += 1;
+    runtime.dirtySequence.loadFrom += 1;
+    runtime.dirtySequence.authorPrefs += 1;
+    runtime.dirtySequence.aiStudioPrefix += 1;
     runtime.readOverflowNoticeUntilMs = 0;
     if (runtime.firstDirtyAtMs === null) {
       runtime.firstDirtyAtMs = nowMs();
@@ -8490,6 +8575,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       runtime.startupTimedOut = false;
       runtime.firstDirtyAtMs = null;
       runtime.readOverflowNoticeUntilMs = 0;
+      runtime.dirtySequence = createDirtySequence();
       return {
         resetHandled: options.isResetRoute,
 
@@ -8512,6 +8598,7 @@ currentUserSnapshot: void 0
     runtime.startupDone = false;
     runtime.startupTimedOut = false;
     runtime.readOverflowNoticeUntilMs = 0;
+    runtime.dirtySequence = createDirtySequence();
     runtime.currentUser = null;
     runtime.userId = null;
     runtime.writerId = makeWriterId();
@@ -8994,7 +9081,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9174,7 +9261,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11872,8 +11959,14 @@ ${childIndent}</body_markdown>
         const lineage = [];
         let currentId = id;
         let currentIsPost = isPost2;
-        while (currentId && lineage.length < 8) {
+        const visitedLineageIds = new Set();
+        while (currentId) {
           ensureOperationActive(options);
+          if (visitedLineageIds.has(currentId)) {
+            Logger.warn(`${config.name}: Detected lineage cycle at ${currentId}; stopping parent traversal.`);
+            break;
+          }
+          visitedLineageIds.add(currentId);
           const item = await fetchItemMarkdown(currentId, currentIsPost, state2, config.name, options);
           ensureOperationActive(options);
           if (!item) break;
@@ -16383,7 +16476,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -18472,7 +18565,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.711"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

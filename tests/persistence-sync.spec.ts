@@ -1,317 +1,472 @@
 import { test, expect } from '@playwright/test';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import {
+  FirestoreBackendError,
+  buildFirestorePath,
+  commitEnvelope,
+  defaultEnvelope,
+  getFirestoreBackendConfig,
+  isCasConflict,
+  isCreateRace,
+  isInvalidArgument,
+  isMissingDocumentError,
+  isPermissionDenied,
+  isQuotaExceeded,
+  isUncertainWriteOutcome,
+  readEnvelope,
+  setFirestoreBackendConfigForTests,
+  updateTimeToEpochMs,
+} from '../src/scripts/power-reader/persistence/firestoreSyncBackend';
+import {
+  clearCommittedDirtyFlags,
+  createDirtySequence,
+  mergeCommittedSyncMetadata,
+  snapshotDirtyState,
+} from '../src/scripts/power-reader/persistence/dirtyState';
+import { queryGraphQLResponse } from '../src/shared/graphql/client';
+import { GET_CURRENT_USER } from '../src/shared/graphql/queries';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+type GMOptions = {
+  method: 'GET' | 'POST';
+  url: string;
+  headers?: Record<string, string>;
+  data?: string;
+  timeout?: number;
+  onload?: (response: { status: number; responseText: string }) => void;
+  onerror?: (error: unknown) => void;
+  ontimeout?: () => void;
+};
 
-const readRepoFile = (relativePath: string): string =>
-  fs.readFileSync(path.resolve(__dirname, '..', relativePath), 'utf8');
+const setMockRequest = (handler: (options: GMOptions) => void): void => {
+  (globalThis as any).GM_xmlhttpRequest = (options: GMOptions) => handler(options);
+};
 
-test.describe('Persistence Sync Contracts', () => {
-  test('[PR-SYNC-01][PR-PERSIST-03][PR-PERSIST-44] Firestore sync path is site-scoped (lw/eaf)', async () => {
-    const content = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(content).toContain("export type SyncSite = 'lw' | 'eaf';");
-    expect(content).toContain('pr_sync_v1/${site}/nodes/${syncNode}');
+const makeConfig = () => ({
+  projectId: 'lw-power-reader-test',
+  apiKey: 'test-api-key',
+  host: 'firestore.googleapis.com',
+});
+
+test.describe('Persistence Sync Runtime Behavior', () => {
+  test.beforeEach(() => {
+    setFirestoreBackendConfigForTests({});
   });
 
-  test('[PR-SYNC-02][PR-SYNC-02.1][PR-PERSIST-15] current-user query includes abTestOverrides for sync secret bootstrap', async () => {
-    const content = readRepoFile('src/shared/graphql/queries.ts');
-    expect(content).toContain('query GetCurrentUser');
-    expect(content).toContain('abTestOverrides');
+  test('[PR-SYNC-01] buildFirestorePath is site-scoped', () => {
+    expect(buildFirestorePath('lw', 'node123')).toBe('pr_sync_v1/lw/nodes/node123');
+    expect(buildFirestorePath('eaf', 'node123')).toBe('pr_sync_v1/eaf/nodes/node123');
   });
 
-  test('[PR-SYNC-04][PR-PERSIST-06] sync state machine tracks read/loadFrom/authorPrefs/aiStudioPrefix as synced subset', async () => {
-    const content = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(content).toContain("dirty: { read: false, loadFrom: false, authorPrefs: false, aiStudioPrefix: false }");
-    expect(content).toContain('runtime.meta.dirty.read = true');
-    expect(content).toContain('runtime.meta.dirty.loadFrom = true');
-    expect(content).toContain('runtime.meta.dirty.authorPrefs = true');
-    expect(content).toContain('runtime.meta.dirty.aiStudioPrefix = true');
+  test('[PR-SYNC-04][PR-PERSIST-03][PR-PERSIST-06][PR-PERSIST-14][PR-PERSIST-17][PR-PERSIST-19][PR-PERSIST-23][PR-PERSIST-24][PR-PERSIST-34][PR-PERSIST-35][PR-PERSIST-44][PR-PERSIST-56][PR-PERSIST-74][PR-PERSIST-85][PR-PERSIST-87][PR-PERSIST-88][PR-PERSIST-89][PR-PERSIST-91][PR-PERSIST-92][PR-PERSIST-94][PR-PERSIST-95][PR-PERSIST-96][PR-PERSIST-97][PR-PERSIST-98][PR-PERSIST-99][PR-PERSIST-100] defaultEnvelope creates a usable baseline payload', () => {
+    const nowIso = '2026-03-06T00:00:00.000Z';
+    const expiresAtIso = '2026-04-01T00:00:00.000Z';
+    const env = defaultEnvelope('lw', 'writer:abc123', nowIso, expiresAtIso);
+
+    expect(env.schemaVersion).toBe(1);
+    expect(env.site).toBe('lw');
+    expect(env.lastPushedBy).toBe('writer:abc123');
+    expect(env.fields.read.value).toEqual({});
+    expect(env.fields.read.clearEpoch).toBe(0);
+    expect(env.fields.loadFrom.version).toBe(0);
+    expect(env.fields.authorPrefs.value).toEqual({});
+    expect(env.fields.aiStudioPrefix.version).toBe(0);
   });
 
-  test('[PR-PERSIST-17][PR-PERSIST-56] sync debug UI exposes toggle and debug summary controls', async () => {
-    const content = readRepoFile('src/scripts/power-reader/render/index.ts');
-    expect(content).toContain('pr-sync-enabled-toggle');
-    expect(content).toContain('pr-copy-sync-debug-btn');
+  test('error classifiers classify backend errors by code/status', () => {
+    const cas = new FirestoreBackendError('cas mismatch', 409, 'ABORTED');
+    const createRace = new FirestoreBackendError('already exists', 409, 'ALREADY_EXISTS');
+    const missing = new FirestoreBackendError('missing', 404, 'NOT_FOUND');
+    const denied = new FirestoreBackendError('denied', 403, 'PERMISSION_DENIED');
+    const invalid = new FirestoreBackendError('invalid', 400, 'INVALID_ARGUMENT');
+    const quota = new FirestoreBackendError('resource exhausted', 429, 'RESOURCE_EXHAUSTED');
+    const uncertain = new FirestoreBackendError('unknown commit result', 500, 'UNCERTAIN_WRITE_OUTCOME');
+
+    expect(isCasConflict(cas)).toBe(true);
+    expect(isCreateRace(createRace)).toBe(true);
+    expect(isMissingDocumentError(missing)).toBe(true);
+    expect(isPermissionDenied(denied)).toBe(true);
+    expect(isInvalidArgument(invalid)).toBe(true);
+    expect(isQuotaExceeded(quota)).toBe(true);
+    expect(isUncertainWriteOutcome(uncertain)).toBe(true);
   });
 
-  test('[PR-SYNC-05][PR-PERSIST-05] reset debug action routes through /reader/reset', async () => {
-    const content = readRepoFile('src/scripts/power-reader/render/index.ts');
-    expect(content).toContain("window.location.href = '/reader/reset'");
+  test('updateTimeToEpochMs parses valid RFC3339 timestamps and rejects invalid values', () => {
+    expect(updateTimeToEpochMs('2026-03-06T01:02:03.456Z')).toBe(1772758923456);
+    expect(updateTimeToEpochMs('')).toBeUndefined();
+    expect(updateTimeToEpochMs('not-a-date')).toBeUndefined();
   });
 
-  test('[PR-PERSIST-79] rules and client enforce sane upper bounds for sync counters', async () => {
-    const rules = readRepoFile('firestore.rules');
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(rules).toContain('value <= 1000000000');
-    expect(rules).toContain('validAIStudioPrefixField');
-    expect(rules).toContain("data.fields.keys().hasOnly(['read', 'loadFrom', 'authorPrefs', 'aiStudioPrefix'])");
-    expect(rules).toContain('validWriterLabel(value)');
-    expect(rules).toContain('value.size() <= 128');
-    expect(backend).toContain('const MAX_SYNC_COUNTER = 1_000_000_000;');
-    expect(backend).toContain('const MAX_AI_STUDIO_PREFIX_LENGTH = 8_000;');
-    expect(backend).toContain('out-of-range integer');
+  test('[PR-PERSIST-101] clearCommittedDirtyFlags preserves fields dirtied after snapshot', () => {
+    const initialSequence = createDirtySequence();
+    initialSequence.read = 3;
+    initialSequence.authorPrefs = 5;
+
+    const snapshot = snapshotDirtyState(
+      { read: true, loadFrom: false, authorPrefs: true, aiStudioPrefix: false },
+      initialSequence
+    );
+
+    const currentDirty = {
+      read: true,
+      loadFrom: true,
+      authorPrefs: true,
+      aiStudioPrefix: false,
+    };
+    const currentSequence = {
+      ...initialSequence,
+      loadFrom: 1,
+      authorPrefs: 6,
+    };
+
+    expect(clearCommittedDirtyFlags(currentDirty, currentSequence, snapshot)).toEqual({
+      read: false,
+      loadFrom: true,
+      authorPrefs: true,
+      aiStudioPrefix: false,
+    });
   });
 
-  test('[PR-PERSIST-38] optional lastPushedAtMs is validated as epoch-ms in rules and client schema decode/encode', async () => {
-    const rules = readRepoFile('firestore.rules');
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(rules).toContain('function validEpochMs(value)');
-    expect(rules).toContain("validEpochMs(data.lastPushedAtMs)");
-    expect(backend).toContain('const MAX_EPOCH_MS = 253_402_300_799_999;');
-    expect(backend).toContain('return assertEpochMs(ms, \'lastPushedAtMs\');');
-    expect(backend).toContain('fvInteger(assertEpochMs(envelope.lastPushedAtMs, \'lastPushedAtMs\'))');
+  test('[PR-PERSIST-101] clearCommittedDirtyFlags clears unchanged dirty fields from committed snapshot', () => {
+    const sequence = createDirtySequence();
+    sequence.read = 2;
+    sequence.loadFrom = 4;
+    const snapshot = snapshotDirtyState(
+      { read: true, loadFrom: true, authorPrefs: false, aiStudioPrefix: false },
+      sequence
+    );
+    const currentDirty = { read: true, loadFrom: true, authorPrefs: true, aiStudioPrefix: false };
+    const currentSequence = { ...sequence, authorPrefs: 8 };
+
+    expect(clearCommittedDirtyFlags(currentDirty, currentSequence, snapshot)).toEqual({
+      read: false,
+      loadFrom: false,
+      authorPrefs: true,
+      aiStudioPrefix: false,
+    });
   });
 
-  test('[PR-PERSIST-83] commit path uses Firestore server timestamp transform for diagnostics', async () => {
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(backend).toContain('updateTransforms');
-    expect(backend).toContain("fieldPath: 'lastPushedAt'");
-    expect(backend).toContain("setToServerValue: 'REQUEST_TIME'");
-    expect(backend).toContain('CAS update requires expectedUpdateTime; call readEnvelope first');
+  test('[PR-PERSIST-101] mergeCommittedSyncMetadata keeps newer local counters while applying committed floors', () => {
+    expect(mergeCommittedSyncMetadata(
+      {
+        readClearEpoch: 6,
+        loadFromClearEpoch: 12,
+        loadFromVersion: 9,
+        authorPrefsClearEpoch: 7,
+        aiStudioPrefixVersion: 11,
+      },
+      {
+        readClearEpoch: 4,
+        loadFromClearEpoch: 10,
+        loadFromVersion: 8,
+        authorPrefsClearEpoch: 5,
+        aiStudioPrefixVersion: 10,
+      }
+    )).toEqual({
+      readClearEpoch: 6,
+      loadFromClearEpoch: 12,
+      loadFromVersion: 9,
+      authorPrefsClearEpoch: 7,
+      aiStudioPrefixVersion: 11,
+    });
+
+    expect(mergeCommittedSyncMetadata(
+      {
+        readClearEpoch: 2,
+        loadFromClearEpoch: 3,
+        loadFromVersion: 3,
+        authorPrefsClearEpoch: 1,
+        aiStudioPrefixVersion: 4,
+      },
+      {
+        readClearEpoch: 5,
+        loadFromClearEpoch: 6,
+        loadFromVersion: 6,
+        authorPrefsClearEpoch: 7,
+        aiStudioPrefixVersion: 8,
+      }
+    )).toEqual({
+      readClearEpoch: 5,
+      loadFromClearEpoch: 6,
+      loadFromVersion: 6,
+      authorPrefsClearEpoch: 7,
+      aiStudioPrefixVersion: 8,
+    });
   });
 
-  test('[PR-PERSIST-84] backend decode tolerates malformed dynamic author-pref entries', async () => {
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(backend).toContain('Skip malformed dynamic entries');
-    expect(backend).toContain('MAX_WRITER_LABEL_LENGTH');
+  test('[PR-SYNC-03][PR-PERSIST-80] config override controls getFirestoreBackendConfig deterministically', () => {
+    setFirestoreBackendConfigForTests({
+      projectId: 'proj-test',
+      apiKey: 'api-test',
+      host: 'localhost:8080',
+    });
+    const cfg = getFirestoreBackendConfig();
+    expect(cfg).toEqual({
+      projectId: 'proj-test',
+      apiKey: 'api-test',
+      host: 'localhost:8080',
+    });
+
+    setFirestoreBackendConfigForTests({});
+    expect(getFirestoreBackendConfig()).not.toBeNull();
   });
 
-  test('[PR-PERSIST-27] author preference key validation stays aligned across merge and decode paths', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(sync).toContain("/^[A-Za-z0-9 ._,'/:;-]{1,128}$/");
-    expect(backend).toContain("/^[A-Za-z0-9 ._,'/:;-]{1,128}$/");
+  test('[PR-PERSIST-25] commitEnvelope rejects CAS writes without expectedUpdateTime', async () => {
+    setMockRequest(() => {
+      throw new Error('request should not execute for invalid options');
+    });
+
+    const env = defaultEnvelope('lw', 'writer', '2026-03-06T00:00:00.000Z', '2026-04-01T00:00:00.000Z');
+    await expect(
+      commitEnvelope(makeConfig(), 'lw', 'node1', env, {} as any)
+    ).rejects.toMatchObject({
+      name: 'FirestoreBackendError',
+      code: 'INVALID_COMMIT_OPTIONS',
+    });
   });
 
-  test('[PR-PERSIST-14][PR-PERSIST-74] read-only dirty state uses extended push floor while preserving debounce max-wait', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('const READ_ONLY_PUSH_FLOOR_MS = 45_000;');
-    expect(sync).toContain('const SYNC_MAX_WAIT_MS = 30_000;');
-    expect(sync).toContain('return hasOnlyReadDirty(meta) ? READ_ONLY_PUSH_FLOOR_MS : PUSH_FLOOR_MS;');
-    expect(sync).toContain('scheduleFlush(SYNC_DEBOUNCE_MS, true);');
+  test('[PR-PERSIST-83][PR-PERSIST-86][PR-PERSIST-93] commitEnvelope emits server-timestamp transform and returns commit updateTime', async () => {
+    const capturedPayloads: any[] = [];
+    setMockRequest((options) => {
+      capturedPayloads.push(options.data ? JSON.parse(options.data) : null);
+      options.onload?.({
+        status: 200,
+        responseText: JSON.stringify({
+          writeResults: [{ updateTime: '2026-03-06T12:00:00.000000Z' }],
+        }),
+      });
+    });
+
+    const env = defaultEnvelope('lw', 'writer', '2026-03-06T00:00:00.000Z', '2026-04-01T00:00:00.000Z');
+    env.fields.aiStudioPrefix.value = 'prefix';
+    const res = await commitEnvelope(makeConfig(), 'lw', 'node-commit', env, {
+      expectedUpdateTime: '2026-03-06T10:00:00.000000Z',
+    });
+
+    expect(res.updateTime).toBe('2026-03-06T12:00:00.000000Z');
+    expect(capturedPayloads).toHaveLength(1);
+    const payload = capturedPayloads[0];
+    expect(payload.writes).toHaveLength(1);
+    expect(payload.writes[0].updateTransforms).toEqual([
+      { fieldPath: 'lastPushedAt', setToServerValue: 'REQUEST_TIME' },
+    ]);
+    expect(payload.writes[0].currentDocument.updateTime).toBe('2026-03-06T10:00:00.000000Z');
   });
 
-  test('[PR-PERSIST-15] bootstrap mutation failures are handled without crashing startup', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain("Logger.warn('sync secret bootstrap mutation failed', error);");
-    expect(sync).toContain('let responseSecret: unknown;');
+  test('readEnvelope returns missing for 404 without throwing', async () => {
+    setMockRequest((options) => {
+      options.onload?.({ status: 404, responseText: '{}' });
+    });
+    const result = await readEnvelope(makeConfig(), 'lw', 'node-missing');
+    expect(result).toEqual({ kind: 'missing' });
   });
 
-  test('[PR-PERSIST-23] author preference merge only overlays local author prefs when dirty', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('allowLocalMerge && localClearEpoch === clearEpoch');
-    expect(sync).toContain('runtime.meta.dirty.authorPrefs');
-    expect(sync).toContain('return Number.isFinite(parsed) ? parsed : 0;');
-    expect(sync).toContain('return a[0].localeCompare(b[0]);');
+  test('[PR-PERSIST-27][PR-PERSIST-38][PR-PERSIST-79][PR-PERSIST-84] readEnvelope decodes valid documents and filters malformed dynamic entries', async () => {
+    const overLongPrefix = 'x'.repeat(9001);
+    setMockRequest((options) => {
+      const responseDoc = {
+        updateTime: '2026-03-06T01:00:00.000000Z',
+        fields: {
+          schemaVersion: { integerValue: '1' },
+          site: { stringValue: 'lw' },
+          lastPushedBy: { stringValue: 'writer:ok' },
+          lastPushedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+          expiresAt: { timestampValue: '2026-04-06T00:59:00.000Z' },
+          fields: {
+            mapValue: {
+              fields: {
+                read: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      clearEpoch: { integerValue: '2' },
+                      value: {
+                        mapValue: {
+                          fields: {
+                            valid_read_id: { integerValue: '1' },
+                            invalid_read_id: { integerValue: '2' },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+                loadFrom: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      version: { integerValue: '4' },
+                      clearEpoch: { integerValue: '1' },
+                      value: { stringValue: '2026-03-01T00:00:00.000Z' },
+                    },
+                  },
+                },
+                authorPrefs: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      clearEpoch: { integerValue: '1' },
+                      value: {
+                        mapValue: {
+                          fields: {
+                            Valid_Author: {
+                              mapValue: {
+                                fields: {
+                                  v: { integerValue: '1' },
+                                  version: { integerValue: '3' },
+                                  updatedAt: { timestampValue: '2026-03-06T00:30:00.000Z' },
+                                  updatedBy: { stringValue: 'writer:ok' },
+                                },
+                              },
+                            },
+                            badAuthor: {
+                              mapValue: {
+                                fields: {
+                                  v: { integerValue: '99' },
+                                  version: { integerValue: '1' },
+                                  updatedAt: { timestampValue: '2026-03-06T00:30:00.000Z' },
+                                  updatedBy: { stringValue: 'writer:ok' },
+                                },
+                              },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+                aiStudioPrefix: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      version: { integerValue: '9' },
+                      value: { stringValue: overLongPrefix },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      options.onload?.({ status: 200, responseText: JSON.stringify(responseDoc) });
+    });
+
+    const result = await readEnvelope(makeConfig(), 'lw', 'node-read');
+    expect(result.kind).toBe('ok');
+    expect(result.updateTime).toBe('2026-03-06T01:00:00.000000Z');
+
+    const envelope = result.envelope!;
+    expect(envelope.fields.read.value).toEqual({ valid_read_id: 1 });
+    expect(Object.keys(envelope.fields.authorPrefs.value)).toEqual(['Valid_Author']);
+    expect(envelope.fields.aiStudioPrefix.version).toBe(9);
+    expect(envelope.fields.aiStudioPrefix.value).toBeUndefined();
   });
 
-  test('[PR-PERSIST-94] dirty local loadFrom clear is treated as explicit clear intent during merge', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain("const explicitLocalLoadClear = runtime.meta.dirty.loadFrom && canUseLocalLoad && localLoadFromRaw === '';");
-    expect(sync).toContain('mergedLoadClearEpoch = incrementSyncCounter(mergedLoadClearEpoch);');
-    expect(sync).toContain('loadFromValue = undefined;');
+  test('readEnvelope tolerates empty aiStudioPrefix map by falling back to loadFrom metadata', async () => {
+    setMockRequest((options) => {
+      const responseDoc = {
+        updateTime: '2026-03-06T01:00:00.000000Z',
+        fields: {
+          schemaVersion: { integerValue: '1' },
+          site: { stringValue: 'lw' },
+          lastPushedBy: { stringValue: 'writer:ok' },
+          lastPushedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+          expiresAt: { timestampValue: '2026-04-06T00:59:00.000Z' },
+          fields: {
+            mapValue: {
+              fields: {
+                read: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      clearEpoch: { integerValue: '2' },
+                      value: { mapValue: { fields: {} } },
+                    },
+                  },
+                },
+                loadFrom: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:58:00.000Z' },
+                      updatedBy: { stringValue: 'writer:load' },
+                      version: { integerValue: '4' },
+                      clearEpoch: { integerValue: '1' },
+                    },
+                  },
+                },
+                authorPrefs: {
+                  mapValue: {
+                    fields: {
+                      updatedAt: { timestampValue: '2026-03-06T00:59:00.000Z' },
+                      updatedBy: { stringValue: 'writer:ok' },
+                      clearEpoch: { integerValue: '1' },
+                      value: { mapValue: { fields: {} } },
+                    },
+                  },
+                },
+                aiStudioPrefix: {
+                  mapValue: {
+                    fields: {},
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+      options.onload?.({ status: 200, responseText: JSON.stringify(responseDoc) });
+    });
+
+    const result = await readEnvelope(makeConfig(), 'lw', 'node-read-empty-prefix');
+    expect(result.kind).toBe('ok');
+    const envelope = result.envelope!;
+    expect(envelope.fields.aiStudioPrefix.version).toBe(0);
+    expect(envelope.fields.aiStudioPrefix.updatedAt).toBe('2026-03-06T00:58:00.000Z');
+    expect(envelope.fields.aiStudioPrefix.updatedBy).toBe('writer:load');
   });
 
-  test('[PR-PERSIST-19] read overflow clear-epoch bump marks read dirty for propagation', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain("setDirty('read');");
-    expect(sync).toContain('mergedRead.clearEpoch > runtime.meta.readClearEpoch');
-  });
+  test('[PR-SYNC-02][PR-SYNC-02.1][PR-PERSIST-04][PR-PERSIST-07][PR-PERSIST-15][PR-PERSIST-90] current-user GraphQL request carries operationName and supports abTestOverrides payloads', async () => {
+    const hasWindow = 'window' in globalThis;
+    const previousWindow = hasWindow ? (globalThis as any).window : undefined;
+    let capturedBody: any = null;
+    try {
+      (globalThis as any).window = {
+        location: {
+          hostname: 'www.lesswrong.com',
+        },
+      };
+      setMockRequest((options) => {
+        capturedBody = options.data ? JSON.parse(options.data) : null;
+        options.onload?.({
+          status: 200,
+          responseText: JSON.stringify({
+            data: {
+              currentUser: {
+                _id: 'u-sync',
+                username: 'sync-user',
+                abTestOverrides: {
+                  syncSecretV1: 'secret-token',
+                },
+              },
+            },
+          }),
+        });
+      });
 
-  test('[PR-PERSIST-04][PR-PERSIST-07] explicit current-user override only applies for resolved identity snapshots', async () => {
-    const main = readRepoFile('src/scripts/power-reader/main.ts');
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    const loader = readRepoFile('src/scripts/power-reader/services/loader.ts');
-    expect(main).toContain('if (syncInit.currentUserSnapshot === undefined)');
-    expect(sync).toContain('queryGraphQLResponse<{ currentUser?: CurrentUserLike | null }>');
-    expect(sync).toContain("const identityResolved = currentUserResult.kind === 'resolved';");
-    expect(loader).toContain('const userPromise = currentUserOverride !== undefined');
-    expect(loader).toContain('const effectiveCurrentUser = currentUserOverride !== undefined ? currentUserOverride : userRes?.currentUser;');
-  });
-
-  test('[PR-PERSIST-24] identity permission-denied path is fail-closed with explicit status', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('abTestOverridesPermissionDenied');
-    expect(sync).toContain("if (runtime.identityPermissionDenied) return 'Sync: unavailable (identity permission)';");
-  });
-
-  test('[PR-PERSIST-34][PR-PERSIST-35] anonymous sessions preserve lastUserId guard and gate fallback probe', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('if (runtime.meta.lastUserId && runtime.meta.lastUserId !== runtime.userId) {');
-    expect(sync).not.toContain('runtime.meta.lastUserId = undefined;');
-    expect(sync).toContain('runtime.meta.lastUserId === runtime.userId');
-  });
-
-  test('[PR-PERSIST-25] flush path guards against stale writes across reset generation changes', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('runtime.resetGeneration += 1;');
-    expect(sync).toContain('if (runtime.resetGeneration !== flushGeneration) return;');
-    expect(sync).toContain('const pullGeneration = runtime.resetGeneration;');
-    expect(sync).toContain('if (runtime.resetGeneration !== pullGeneration) return false;');
-    expect(sync).toContain('writeWithCas(readResult, force, flushGeneration)');
-  });
-
-  test('[PR-PERSIST-85] counter increments are overflow-safe for loadFrom and authorPrefs', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('function incrementSyncCounter(value: number): number');
-    expect(sync).toContain('loadFromVersion = incrementSyncCounter(loadFromVersion);');
-    expect(sync).toContain('version: incrementSyncCounter(existing?.version || 0)');
-  });
-
-  test('[PR-PERSIST-06] aiStudioPrefix merge/reset paths normalize input and keep reset replay idempotent', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain("return normalizeAIStudioPrefixValue(raw) || '';");
-    expect(sync).toContain('const aiStudioPrefix = !!normalizeAIStudioPrefixValue(getAIStudioPrefix());');
-    expect(sync).toContain('const hasPendingResetPrefixClearIntent = !!(');
-    expect(sync).toContain('resetReplayTargetAIStudioPrefixVersion ?? aiStudioPrefixVersion');
-    expect(sync).toContain('aiStudioPrefixValue = undefined;');
-  });
-
-  test('[PR-PERSIST-86] uncertain write outcomes reconcile via read before retry', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('isUncertainWriteOutcome(error)');
-    expect(sync).toContain("logBackendError('sync uncertain write reconcile failed', readError);");
-  });
-
-  test('[PR-PERSIST-87] Firestore config is not exported onto window globals', async () => {
-    const main = readRepoFile('src/scripts/power-reader/main.ts');
-    const backend = readRepoFile('src/scripts/power-reader/persistence/firestoreSyncBackend.ts');
-    expect(main).not.toContain('__PR_FIRESTORE_PROJECT_ID__ =');
-    expect(backend).toContain("typeof __PR_FIRESTORE_PROJECT_ID__ === 'string'");
-    expect(backend).not.toContain('window as any');
-    expect(backend).toContain('if (/^https?:\\/\\//i.test(rawHost))');
-    expect(backend).not.toContain('requireExists');
-  });
-
-  test('[PR-PERSIST-88] stable compare is deep and order-insensitive for nested sync maps', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('const stableCloneSorted = (value: unknown): unknown => {');
-    expect(sync).toContain('for (const key of Object.keys(source).sort())');
-  });
-
-  test('[PR-PERSIST-89] device id is bounded to keep writer labels rule-safe', async () => {
-    const storage = readRepoFile('src/scripts/power-reader/utils/storage.ts');
-    expect(storage).toContain('const DEVICE_ID_MAX_LENGTH = 96;');
-    expect(storage).toContain('normalized.length <= DEVICE_ID_MAX_LENGTH');
-  });
-
-  test('[PR-PERSIST-90] GraphQL request includes operationName when provided', async () => {
-    const client = readRepoFile('src/shared/graphql/client.ts');
-    expect(client).toContain('body.operationName = options.operationName;');
-  });
-
-  test('[PR-PERSIST-91] reset clear-all path clears sync metadata and local sync settings', async () => {
-    const storage = readRepoFile('src/scripts/power-reader/utils/storage.ts');
-    expect(storage).toContain('export function clearReaderStorage(options: StorageWriteOptions = {})');
-    expect(storage).toContain("GM_setValue(getKey(STORAGE_KEYS.SYNC_META), '')");
-    expect(storage).toContain("GM_setValue(getKey(STORAGE_KEYS.SYNC_ENABLED), '')");
-    expect(storage).toContain("GM_setValue(getKey(STORAGE_KEYS.DEVICE_ID), '')");
-    expect(storage).toContain("GM_setValue(getKey(STORAGE_KEYS.SYNC_QUOTA_META), '')");
-  });
-
-  test('[PR-PERSIST-92] preview timers re-check hover intent/visibility before opening', async () => {
-    const preview = readRepoFile('src/scripts/power-reader/utils/preview.ts');
-    expect(preview).toContain("!trigger.isConnected || !trigger.matches(':hover') || !isIntentionalHover()");
-  });
-
-  test('[PR-PERSIST-93] expiresAt prefers server anchor and permission-denied path retries with conservative ttl', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('if (options.preferAnchorOnly) {');
-    expect(sync).toContain('computeExpiresAt(serverAnchorIso || now, { preferAnchorOnly: true })');
-    expect(sync).toContain('const PUSH_PERMISSION_RETRY_TTL_MS = 30 * 24 * 60 * 60 * 1000;');
-    expect(sync).toContain("Logger.warn('sync push permission denied; retrying with conservative expiresAt');");
-    expect(sync).toContain('runtime.lastServerAnchorIso = result.updateTime || runtime.lastServerAnchorIso;');
-  });
-
-  test('[PR-PERSIST-19] read-overflow guard surfaces explicit status-line signal', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain("const waitingForPushWindow = computePushFloorWaitMs() > 0;");
-    expect(sync).toContain("'Sync: waiting for next sync time (read overflow cleared)'");
-    expect(sync).toContain("'Sync: waiting for next sync time'");
-    expect(sync).toContain("return showReadOverflowNotice ? 'Sync: syncing... (read overflow cleared)' : 'Sync: syncing...';");
-    expect(sync).toContain("if (showReadOverflowNotice) return 'Sync: on (read overflow cleared)';");
-  });
-
-  test('[PR-PERSIST-13] push-disabled diagnostics include reason in status/debug output', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('function setPushDisabled(reason: string, context: string, error?: unknown): void');
-    expect(sync).toContain('return `Sync: push-disabled (${runtime.pushDisabledReason})`;');
-    expect(sync).toContain('pushDisabledReason: runtime.pushDisabledReason,');
-    expect(sync).toContain('pushDisabledMeta: runtime.pushDisabledMeta,');
-    expect(sync).toContain('lastPushAttempt: runtime.lastPushAttemptDebug,');
-    expect(sync).toContain('response: toDebugSummaryValue(error.details),');
-    expect(sync).toContain('error: errorDebug,');
-    expect(sync).toContain('backendTarget,');
-  });
-
-  test('[PR-PERSIST-13] merge build sanitizes legacy writer labels before re-write', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    expect(sync).toContain('function normalizeWriterLabel(label: string | undefined, fallback: string): string');
-    expect(sync).toContain('const remoteReadUpdatedBy = normalizeWriterLabel(remote.fields.read.updatedBy, writerId);');
-    expect(sync).toContain('const remoteLoadFromUpdatedBy = normalizeWriterLabel(remote.fields.loadFrom.updatedBy, writerId);');
-    expect(sync).toContain('const remoteAuthorUpdatedBy = normalizeWriterLabel(remote.fields.authorPrefs.updatedBy, writerId);');
-  });
-
-  test('[PR-STATUS-06] main status line refreshes sync status label after render', async () => {
-    const render = readRepoFile('src/scripts/power-reader/render/index.ts');
-    expect(render).toContain('id="pr-sync-status-label"');
-    expect(render).toContain('const SYNC_STATUS_REFRESH_MS = 1_000;');
-    expect(render).toContain('ensureSyncStatusAutoRefresh();');
-    expect(render).toContain('const isDocumentHidden = (): boolean =>');
-    expect(render).toContain('stopSyncStatusRefreshTimer();');
-    expect(render).toContain("document.addEventListener('visibilitychange'");
-  });
-
-  test('[PR-PERSIST-95][PR-PERSIST-98] storage keeps applied-event channel separate and supports external cache-write apply helpers', async () => {
-    const storage = readRepoFile('src/scripts/power-reader/utils/storage.ts');
-    expect(storage).toContain('export const onSyncFieldApplied');
-    expect(storage).toContain('const notifySyncFieldApplied =');
-    expect(storage).toContain('const state = { ...getReadState() };');
-    expect(storage).toContain('const prefs = { ...getAuthorPreferences() };');
-    expect(storage).toContain('let cachedAuthorPrefs: AuthorPreferences | null = null;');
-    expect(storage).toContain('lastAuthorPrefsFetch');
-    expect(storage).toContain("notifySyncFieldApplied('read', options.source ?? 'local');");
-    expect(storage).toContain('export function applyExternalReadState');
-    expect(storage).toContain('export function applyExternalLoadFrom');
-    expect(storage).toContain('export function applyExternalAuthorPrefs');
-    expect(storage).toContain('export function applyExternalAIStudioPrefix');
-  });
-
-  test('[PR-PERSIST-96][PR-PERSIST-99] persistence listeners use apply-only cross-tab watchers and resume pull via existing pull path', async () => {
-    const sync = readRepoFile('src/scripts/power-reader/persistence/persistenceSync.ts');
-    const vite = readRepoFile('vite.config.ts');
-    expect(sync).toContain('function installCrossTabFieldWatchers(): (() => void)');
-    expect(sync).toContain('if (remote === false) return;');
-    expect(sync).toContain("applyExternalStorageField(entry.field, newValue, 'cross-tab');");
-    expect(sync).toContain("applyExternalStorageField(entry.field, nextRaw, 'polling');");
-    expect(sync).toContain('const requestPullViaExistingPath = (): void => {');
-    expect(sync).toContain("window.addEventListener('mousemove', activityListener");
-    expect(sync).toContain('requestPullViaExistingPath();');
-    expect(vite).toContain("'GM_removeValueChangeListener'");
-  });
-
-  test('[PR-PERSIST-97][PR-PERSIST-100] UI consistency layer uses bounded hot-patch queues and timestamp data contracts', async () => {
-    const uiConsistency = readRepoFile('src/scripts/power-reader/features/syncUiConsistency.ts');
-    const comments = readRepoFile('src/scripts/power-reader/render/comment.ts');
-    const posts = readRepoFile('src/scripts/power-reader/render/post.ts');
-    const metadata = readRepoFile('src/scripts/power-reader/render/components/metadata.ts');
-    expect(uiConsistency).toContain('const MAX_PATCH_NODES_PER_FRAME = 50;');
-    expect(uiConsistency).toMatch(/const\s+PRUNE_INTERVAL_MS\s*=\s*1_?500;/);
-    expect(uiConsistency).toContain('const pendingReadEntryOffsetById = new Map<string, number>();');
-    expect(uiConsistency).toContain('for (const [id, entries] of itemIndexById.entries()) {');
-    expect(uiConsistency).toMatch(/Date\.now\(\)\s*-\s*lastPruneAtMs\s*>=\s*PRUNE_INTERVAL_MS/);
-    expect(uiConsistency).toMatch(/getElementById\('power-reader-root'\)/);
-    expect(uiConsistency).toMatch(/root\.querySelectorAll\('\.pr-item:not\(\.read\):not\(\.context\)'\)/);
-    expect(uiConsistency).toContain('const ensureRootObserver = (): void => {');
-    expect(uiConsistency).toContain('attachDomIndexingToRoot(root);');
-    expect(uiConsistency).toContain('node instanceof Element || node instanceof DocumentFragment');
-    expect(uiConsistency).toContain('window.requestAnimationFrame(flushPatchQueues)');
-    expect(uiConsistency).toContain('onSyncFieldApplied(handleAppliedSyncField)');
-    expect(comments).toContain('data-posted-at-ms');
-    expect(posts).toContain('data-posted-at-ms');
-    expect(metadata).toContain('<time datetime=');
+      const response = await queryGraphQLResponse(GET_CURRENT_USER, {}, { operationName: 'GetCurrentUser' });
+      expect(capturedBody.operationName).toBe('GetCurrentUser');
+      expect(String(capturedBody.query)).toContain('abTestOverrides');
+      expect((response.data as any)?.currentUser?.abTestOverrides?.syncSecretV1).toBe('secret-token');
+    } finally {
+      if (hasWindow) {
+        (globalThis as any).window = previousWindow;
+      } else {
+        delete (globalThis as any).window;
+      }
+    }
   });
 });

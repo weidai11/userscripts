@@ -153,6 +153,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - [PR-PERSIST-98]: external read/loadFrom applies update in-memory read/loadFrom caches directly (no forced GM re-read)
 - [PR-PERSIST-99]: idle/visibility resume pull requests route through existing `performPullAndMerge()` gating (quota + cross-tab `lastPull`)
 - [PR-PERSIST-100]: hot-patch timestamps prefer `data-posted-at-ms`, fallback to `time[datetime]`, and avoid unread downgrades when timestamps are missing/invalid
+- [PR-PERSIST-101]: successful CAS writes must clear dirty flags only for fields unchanged since commit start; local edits that occur during an in-flight commit remain dirty for the next flush
 
 ---
 
@@ -630,7 +631,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-AI-02]** **Automation**: Opens the respective AI site, injects thread XML and prompt, and submits it in-page.
 - **[PR-AI-03]** **Handoff-Only Output**: The reader MUST NOT render provider responses in-page. Output is viewed directly in the opened AI Studio/Arena tab.
 - **[PR-AI-04]** **Descendant Mode**: Shift-triggered AI actions (`Shift+G`, `Shift+M`, and Shift-click variants) include descendants in the payload, with the large-descendant confirmation policy applied.
-- **[PR-AI-05]** **Depth**: Recursively fetches parent comments (up to 7 levels).
+- **[PR-AI-05]** **Depth**: Recursively fetches parent comments up to the root (no fixed depth cap), with cycle-safe traversal to avoid infinite loops on malformed parent links.
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
 - **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
