@@ -13,7 +13,14 @@ export type { VoteResponse, UserVoteOnSingleReaction, CurrentUserExtendedVote };
 
 // Vote types
 export type KarmaVote = 'smallUpvote' | 'smallDownvote' | 'bigUpvote' | 'bigDownvote' | 'neutral';
-export type AgreementVote = 'agree' | 'disagree' | 'neutral';
+export type AgreementVote =
+  | 'agree'
+  | 'disagree'
+  | 'smallUpvote'
+  | 'smallDownvote'
+  | 'bigUpvote'
+  | 'bigDownvote'
+  | 'neutral';
 
 const LOGIN_URL = `${window.location.origin}/login`;
 const isEAFAgreementReaction = (reactionName: string): boolean =>
@@ -95,9 +102,11 @@ export async function castAgreementVote(
   documentType: 'comment' | 'post' = 'comment'
 ): Promise<VoteResponse | null> {
   // Agreement votes use the extendedVote argument with standard vote type strings
-  const agreementValue = voteType === 'agree' ? 'smallUpvote' :
-    voteType === 'disagree' ? 'smallDownvote' :
-      'neutral';
+  const agreementValue = voteType === 'agree'
+    ? 'smallUpvote'
+    : voteType === 'disagree'
+      ? 'smallDownvote'
+      : voteType;
   const eafDebug = isEAForumHost() && documentType === 'comment';
   const agreementPayload = { agreement: agreementValue };
 
@@ -340,30 +349,6 @@ export function calculateNextVoteState(
     return small; // Neutral -(click)-> Small
   }
 }
-
-/**
- * Toggle karma vote (click same button again to remove)
- * @deprecated Use calculateNextVoteState
- */
-export function toggleKarmaVote(
-  currentVote: KarmaVote | null,
-  direction: 'up' | 'down'
-): KarmaVote {
-  return calculateNextVoteState(currentVote, direction, false) as KarmaVote;
-}
-
-/**
- * Toggle agreement vote
- * @deprecated Use calculateNextVoteState
- */
-export function toggleAgreementVote(
-  currentVote: AgreementVote | null,
-  direction: 'agree' | 'disagree'
-): AgreementVote {
-  return calculateNextVoteState(currentVote, direction, false) as AgreementVote;
-}
-
-
 
 /**
  * Update vote UI after a vote is cast

@@ -139,14 +139,10 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     !c.parentCommentId || !commentSet.has(c.parentCommentId)
   );
 
-  const isImplicitlyRead = (item: { postedAt?: string }) => {
-    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
-  };
-
   const treeKarmaCache = new Map<string, number>();
   const treeKarmaById = new Map<string, number>();
   rootComments.forEach(c => {
-    const isItemRead = !state.isArchiveMode && (readState[c._id] === 1 || isImplicitlyRead(c));
+    const isItemRead = !state.isArchiveMode && isRead(c._id, readState, c.postedAt, cutoff);
     const treeKarma = calculateTreeKarma(
       c._id,
       c.baseScore || 0,
@@ -168,7 +164,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
   });
 
-  const descendantMetrics = buildRenderDescendantMetrics(state, commentSet, readState, !state.isArchiveMode);
+  const descendantMetrics = buildRenderDescendantMetrics(state, commentSet, readState, !state.isArchiveMode, cutoff);
   const readTracking = { readState, cutoff };
 
   const commentsHtml = rootComments.map(c =>
@@ -198,7 +194,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     Logger.warn(`renderPostGroup: fullPost missing for ${group.postId}, using fallback`);
   }
 
-  const isReadPost = !state.isArchiveMode && isRead(group.postId, readState, postToRender.postedAt);
+  const isReadPost = !state.isArchiveMode && isRead(group.postId, readState, postToRender.postedAt, cutoff);
 
   // Detect current expansion state if element already exists in DOM
   const existingEl = document.querySelector(`.pr-post[data-id="${group.postId}"]`);

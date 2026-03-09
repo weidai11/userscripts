@@ -3,10 +3,11 @@
  */
 
 const normalizeHost = (hostname: string): string => hostname.trim().toLowerCase();
+const EA_FORUM_HOST = 'forum.effectivealtruism.org';
 
 export const isEAForumHostname = (hostname: string): boolean => {
   const host = normalizeHost(hostname);
-  return host === 'effectivealtruism.org' || host.endsWith('.effectivealtruism.org');
+  return host === EA_FORUM_HOST || host.endsWith(`.${EA_FORUM_HOST}`);
 };
 
 export const isLocalhostHostname = (hostname: string): boolean =>

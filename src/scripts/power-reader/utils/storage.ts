@@ -160,25 +160,39 @@ export function setReadState(state: ReadState, options: StorageWriteOptions = {}
 /**
  * Check if a comment is read
  */
-export function isRead(id: string, state?: ReadState, postedAt?: string | null): boolean {
+export function isRead(
+  id: string,
+  state?: ReadState,
+  postedAt?: string | null,
+  cutoffOverride?: string
+): boolean {
   // 1. Explicitly marked read in storage
   const readMap = state || getReadState();
   if (readMap[id] === 1) return true;
 
   // 2. Implicitly read (older than session loadFrom boundary)
-  if (postedAt) {
-    const cutoff = getLoadFrom();
-    if (cutoff && cutoff.includes('T')) {
-      const postTime = new Date(postedAt).getTime();
-      const cutoffTime = new Date(cutoff).getTime();
-      if (!isNaN(postTime) && !isNaN(cutoffTime) && postTime < cutoffTime) {
-        return true;
-      }
-    }
+  if (isImplicitlyReadByCutoff(postedAt, cutoffOverride || getLoadFrom())) {
+    return true;
   }
 
   return false;
 }
+
+/**
+ * Check whether an item should be implicitly considered read by loadFrom cutoff.
+ */
+export const isImplicitlyReadByCutoff = (
+  postedAt: string | undefined | null,
+  cutoff: string | undefined | null
+): boolean => {
+  if (!cutoff || cutoff === '__LOAD_RECENT__' || !cutoff.includes('T') || !postedAt) {
+    return false;
+  }
+
+  const postTime = new Date(postedAt).getTime();
+  const cutoffTime = new Date(cutoff).getTime();
+  return Number.isFinite(postTime) && Number.isFinite(cutoffTime) && postTime < cutoffTime;
+};
 
 /**
  * Mark a comment as read

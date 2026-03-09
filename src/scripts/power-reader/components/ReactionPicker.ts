@@ -34,6 +34,9 @@ export class ReactionPicker {
     private currentSearch: string = '';
     private viewMode: string = 'grid';
     private tooltipElement: HTMLElement | null = null;
+    private activeReactions: ReactionMetadata[] = [];
+    private reactionByName: Map<string, ReactionMetadata> = new Map();
+    private closeHandler: ((e: MouseEvent) => void) | null = null;
 
     constructor(
         commentsGetter: () => Comment[],
@@ -59,17 +62,32 @@ export class ReactionPicker {
         const existing = document.getElementById('pr-global-reaction-picker');
         if (existing && this.activeTriggerButton === button) {
             existing.remove();
+            if (this.closeHandler) {
+                document.removeEventListener('mousedown', this.closeHandler);
+                this.closeHandler = null;
+            }
             this.activeTriggerButton = null;
+            this.currentCommentId = null;
+            this.activeReactions = [];
+            this.reactionByName.clear();
             return;
         }
 
         // Remove existing picker if any (from another button)
-        if (existing) existing.remove();
+        if (existing) {
+            existing.remove();
+            if (this.closeHandler) {
+                document.removeEventListener('mousedown', this.closeHandler);
+                this.closeHandler = null;
+            }
+        }
 
         this.activeTriggerButton = button;
         this.currentCommentId = commentId;
         this.currentSearch = initialSearchText;
         this.viewMode = GM_getValue('pickerViewMode', this.currentUserPaletteStyle || 'grid');
+        this.activeReactions = getReactions();
+        this.reactionByName = new Map(this.activeReactions.map((reaction) => [reaction.name, reaction]));
 
         const picker = document.createElement('div');
         picker.id = 'pr-global-reaction-picker';
@@ -103,20 +121,28 @@ export class ReactionPicker {
 
         const comment = this.commentsGetter().find(c => c._id === this.currentCommentId);
         const userVotes = comment?.currentUserExtendedVote?.reacts || [];
-        const allReactions = getReactions();
+        const allReactions = this.activeReactions;
 
         const getReactionsFromList = (names: string[] | undefined): ReactionMetadata[] => {
             if (!names) return [];
-            return names.map(name => allReactions.find(r => r.name === name)).filter(r => r && !r.deprecated) as ReactionMetadata[];
+            return names
+                .map((name) => this.reactionByName.get(name))
+                .filter((reaction): reaction is ReactionMetadata => Boolean(reaction && !reaction.deprecated));
         };
 
         const renderSectionTitle = (title: string) => `<div class="pr-picker-section-title">${title}</div>`;
 
         const renderPickerItem = (reaction: ReactionMetadata, mode: 'grid' | 'list') => {
             let voted = userVotes.some(v => v.react === reaction.name);
+            const currentExtendedVote = comment?.currentUserExtendedVote as Record<string, unknown> | undefined;
             
             // Also check top-level keys for EA Forum style votes
-            if (!voted && comment?.currentUserExtendedVote && (comment.currentUserExtendedVote as any)[reaction.name]) {
+            if (
+                !voted
+                && currentExtendedVote
+                && Object.prototype.hasOwnProperty.call(currentExtendedVote, reaction.name)
+                && Boolean(currentExtendedVote[reaction.name])
+            ) {
                 voted = true;
             }
 
@@ -158,9 +184,10 @@ export class ReactionPicker {
         const normalizedSearch = this.currentSearch.toLowerCase();
         const filtered = allReactions.filter(r => {
             if (!this.currentSearch) return !r.deprecated;
-            return r.name.toLowerCase().includes(normalizedSearch) ||
+            const matches = r.name.toLowerCase().includes(normalizedSearch) ||
                 r.label.toLowerCase().includes(normalizedSearch) ||
                 r.searchTerms?.some(t => t.toLowerCase().includes(normalizedSearch));
+            return Boolean(matches && !r.deprecated);
         });
 
         const renderGridSection = (list: string[] | undefined) => {
@@ -364,23 +391,35 @@ export class ReactionPicker {
         if (input) input.focus();
 
         // Close Handler
-        const closeHandler = (e: MouseEvent) => {
-            if (!button.contains(e.target as Node)) {
+        if (this.closeHandler) {
+            document.removeEventListener('mousedown', this.closeHandler);
+            this.closeHandler = null;
+        }
+
+        this.closeHandler = (e: MouseEvent) => {
+            if (!button.contains(e.target as Node) && !picker.contains(e.target as Node)) {
                 picker?.classList.remove('visible');
                 if (picker) {
                     picker.style.display = 'none';
                     picker.style.visibility = 'hidden';
                 }
                 this._hideTooltip();
-                document.removeEventListener('mousedown', closeHandler);
+                if (this.closeHandler) {
+                    document.removeEventListener('mousedown', this.closeHandler);
+                    this.closeHandler = null;
+                }
                 this.currentSelection = null;
                 this.activeTriggerButton = null;
                 this.currentCommentId = null;
+                this.activeReactions = [];
+                this.reactionByName.clear();
             }
         };
 
         setTimeout(() => {
-            document.addEventListener('mousedown', closeHandler);
+            if (this.closeHandler) {
+                document.addEventListener('mousedown', this.closeHandler);
+            }
         }, 50);
     }
 

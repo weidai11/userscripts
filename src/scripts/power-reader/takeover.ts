@@ -21,19 +21,41 @@ export const executeTakeover = (): void => {
 
   // 2. Block dynamically added scripts
   const originalCreateElement = document.createElement.bind(document);
+  const originalCreateElementNS = document.createElementNS.bind(document);
+  const isScriptTag = (tagName: string): boolean =>
+    tagName.toLowerCase() === 'script' || tagName.toLowerCase().endsWith(':script');
+
+  const createBlockedScriptPlaceholder = (namespaceURI: string | null = null): Element => {
+    Logger.warn('Blocking script creation attempt');
+    const placeholder = namespaceURI === 'http://www.w3.org/2000/svg'
+      ? originalCreateElementNS(namespaceURI, 'g')
+      : originalCreateElement('div');
+    placeholder.setAttribute('data-pr-blocked-script', 'true');
+    return placeholder;
+  };
+
   document.createElement = function (tagName: string, options?: ElementCreationOptions): HTMLElement {
-    if (tagName.toLowerCase() === 'script') {
-      Logger.warn('Blocking script creation attempt');
-      // Return a dummy div instead of a script to prevent errors in site code but block execution
-      return originalCreateElement('div');
+    if (isScriptTag(tagName)) {
+      return createBlockedScriptPlaceholder() as HTMLElement;
     }
     return originalCreateElement(tagName, options);
+  };
+
+  document.createElementNS = function (
+    namespaceURI: string | null,
+    qualifiedName: string,
+    options?: ElementCreationOptions
+  ): Element {
+    if (isScriptTag(qualifiedName)) {
+      return createBlockedScriptPlaceholder(namespaceURI);
+    }
+    return originalCreateElementNS(namespaceURI, qualifiedName, options);
   };
 
   const scriptObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       mutation.addedNodes.forEach((node) => {
-        if (node instanceof HTMLScriptElement) {
+        if (node instanceof Element && isScriptTag(node.tagName)) {
           node.remove();
         }
       });

@@ -3,7 +3,7 @@
  * Implements the karma/age-based scoring from old implementation
  */
 
-import { getAuthorPreferences } from './storage';
+import { getAuthorPreferences, isImplicitlyReadByCutoff } from './storage';
 
 /**
  * Calculate the age of a comment in hours
@@ -126,10 +126,8 @@ export function calculateTreeKarma(
 
     const descendants = nodeChildren ?? childrenByParentId.get(nodeId) ?? [];
     for (const child of descendants) {
-      let childIsRead = readState[child._id] === 1;
-      if (!childIsRead && cutoffDate && cutoffDate !== '__LOAD_RECENT__' && child.postedAt < cutoffDate) {
-        childIsRead = true;
-      }
+      const childIsRead = readState[child._id] === 1
+        || isImplicitlyReadByCutoff(child.postedAt, cutoffDate);
 
       const childKarma = computeNodeTreeKarma(
         child._id,

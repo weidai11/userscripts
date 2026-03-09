@@ -7,7 +7,7 @@ import type { Comment, NamesAttachedReactionsScore } from '../../../shared/graph
 import type { ReaderState } from '../state';
 import { CONFIG } from '../config';
 import { getScoreColor, getRecencyColor } from '../utils/colors';
-import { isRead, getReadTrackingInputs } from '../utils/storage';
+import { isRead, getReadTrackingInputs, type ReadTrackingInputs } from '../utils/storage';
 import { calculateTreeKarma, getAgeInHours, calculateNormalizedScore, shouldAutoHide, getFontSizePercent, clampScore } from '../utils/scoring';
 import { escapeHtml } from '../utils/rendering';
 import { getAuthorHandle } from '../utils/author';
@@ -35,10 +35,7 @@ const renderMissingParentPlaceholder = (comment: Comment, repliesHtml: string = 
   `;
 };
 
-export type RenderReadTracking = {
-  readState: Record<string, 1>;
-  cutoff: string | undefined;
-};
+export type RenderReadTracking = ReadTrackingInputs;
 
 export type RenderDescendantMetrics = {
   allDescendantsLoadedById: Map<string, boolean>;
@@ -49,7 +46,8 @@ export const buildRenderDescendantMetrics = (
   state: ReaderState,
   commentIds: Iterable<string>,
   readState: Record<string, 1>,
-  includeUnreadCounts: boolean
+  includeUnreadCounts: boolean,
+  cutoff?: string
 ): RenderDescendantMetrics => {
   const allDescendantsLoadedById = new Map<string, boolean>();
   const unreadDescendantCountById = new Map<string, number>();
@@ -140,7 +138,7 @@ export const buildRenderDescendantMetrics = (
       const children = state.childrenByParentId.get(frame.id) || [];
       let count = 0;
       for (const child of children) {
-        if (!isRead(child._id, readState, child.postedAt)) {
+        if (!isRead(child._id, readState, child.postedAt, cutoff)) {
           count += 1;
         }
         count += unreadDescendantCountById.get(child._id) ?? 0;
@@ -181,7 +179,13 @@ export const renderCommentTree = (
   const idSet = allCommentIds ?? new Set(allComments.map(c => c._id));
   const childrenIndex = childrenByParentId ?? state.childrenByParentId;
   const tracking = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
-  const metrics = descendantMetrics ?? buildRenderDescendantMetrics(state, idSet, tracking.readState, !state.isArchiveMode);
+  const metrics = descendantMetrics ?? buildRenderDescendantMetrics(
+    state,
+    idSet,
+    tracking.readState,
+    !state.isArchiveMode,
+    tracking.cutoff
+  );
   const sharedTreeKarmaCache = treeKarmaCache ?? new Map<string, number>();
   // Use indexed children lookup
   const replies = childrenIndex.get(comment._id) ?? [];
@@ -191,13 +195,9 @@ export const renderCommentTree = (
   // [PR-READ-07] Check for implicit read based on cutoff
   const { readState, cutoff } = tracking;
 
-  const isImplicitlyRead = (item: { postedAt?: string }) => {
-    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
-  };
-
   if (visibleReplies.length > 0) {
     visibleReplies.forEach((r: any) => {
-      const isItemRead = !state.isArchiveMode && (readState[r._id] === 1 || isImplicitlyRead(r));
+      const isItemRead = !state.isArchiveMode && isRead(r._id, readState, r.postedAt, cutoff);
       r.treeKarma = calculateTreeKarma(
         r._id,
         r.baseScore || 0,
@@ -224,48 +224,6 @@ export const renderCommentTree = (
     : '';
 
   return renderComment(comment, state, repliesHtml, metrics, tracking);
-};
-
-/**
- * Check if all descendants of a comment are already loaded.
- * Uses an iterative stack-based approach for efficiency.
- */
-const hasAllDescendantsLoaded = (commentId: string, state: ReaderState): boolean => {
-  const stack = [commentId];
-  while (stack.length > 0) {
-    const id = stack.pop()!;
-    const comment = state.commentById.get(id);
-    const directChildrenCount = comment ? (comment as any).directChildrenCount || 0 : 0;
-    if (directChildrenCount <= 0) continue;
-    const loadedChildren = state.childrenByParentId.get(id) || [];
-    if (loadedChildren.length < directChildrenCount) return false;
-    for (const child of loadedChildren) {
-      stack.push(child._id);
-    }
-  }
-  return true;
-};
-
-/**
- * Render a single comment
- */
-const getUnreadDescendantCount = (commentId: string, state: ReaderState, readState: Record<string, 1>): number => {
-  let count = 0;
-  const stack = [commentId];
-
-  while (stack.length > 0) {
-    const currentId = stack.pop()!;
-    const children = state.childrenByParentId.get(currentId) || [];
-
-    for (const child of children) {
-      if (!isRead(child._id, readState, child.postedAt)) {
-        count++;
-      }
-      stack.push(child._id);
-    }
-  }
-
-  return count;
 };
 
 const renderContextPlaceholder = (
@@ -302,13 +260,20 @@ export const renderComment = (
   if (ct === 'missing') return renderMissingParentPlaceholder(comment, repliesHtml, state);
   if (ct === 'stub') return renderContextPlaceholder(comment, state, repliesHtml);
 
-  const { readState } = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
+  const { readState, cutoff } = readTrackingInputs ?? getReadTrackingInputs(state.isArchiveMode);
+  const effectiveDescendantMetrics = descendantMetrics ?? buildRenderDescendantMetrics(
+    state,
+    [comment._id],
+    readState,
+    !state.isArchiveMode,
+    cutoff
+  );
   // In archive mode, we ignore the local read state entirely to prevent collapsing context or greying out text
-  const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt);
+  const isLocallyRead = !state.isArchiveMode && isRead(comment._id, readState, comment.postedAt, cutoff);
   const commentIsRead = !state.isArchiveMode && (ct === 'fetched' || isLocallyRead);
   const unreadDescendantCount = state.isArchiveMode
     ? Infinity
-    : (descendantMetrics?.unreadDescendantCountById.get(comment._id) ?? getUnreadDescendantCount(comment._id, state, readState));
+    : (effectiveDescendantMetrics.unreadDescendantCountById.get(comment._id) ?? 0);
 
   // Placeholder Logic: If actually read and low activity in subtree, show blank placeholder
   // Exception: Never collapse if forceVisible is set (e.g. via Trace to Root)
@@ -378,7 +343,7 @@ export const renderComment = (
   if (totalChildren <= 0) {
     rDisabled = true;
     rTooltip = 'No replies to load';
-  } else if ((descendantMetrics?.allDescendantsLoadedById.get(comment._id) ?? hasAllDescendantsLoaded(comment._id, state))) {
+  } else if (effectiveDescendantMetrics.allDescendantsLoadedById.get(comment._id) ?? false) {
     rDisabled = true;
     rTooltip = 'All replies already loaded in current feed';
   } else {

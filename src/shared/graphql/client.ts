@@ -35,7 +35,9 @@ function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): bo
 }
 
 function isEAF(): boolean {
-    return window.location.hostname === 'forum.effectivealtruism.org';
+    const host = window.location.hostname.trim().toLowerCase();
+    return host === 'forum.effectivealtruism.org'
+        || host.endsWith('.forum.effectivealtruism.org');
 }
 
 function getGraphQLEndpoint(): string {

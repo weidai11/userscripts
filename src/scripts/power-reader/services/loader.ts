@@ -166,7 +166,7 @@ export const loadInitial = async (
 
   const effectiveCurrentUser = currentUserOverride !== undefined ? currentUserOverride : userRes?.currentUser;
   if (effectiveCurrentUser) {
-    currentUsername = effectiveCurrentUser.username || '';
+    currentUsername = effectiveCurrentUser.username || null;
     currentUserId = effectiveCurrentUser._id || null;
     currentUserPaletteStyle = effectiveCurrentUser.reactPaletteStyle || null;
   }

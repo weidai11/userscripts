@@ -216,30 +216,33 @@ export class ReadTracker {
         const nextLoadFrom = date.toISOString();
 
         const currentLoadFrom = getLoadFrom();
-        if (nextLoadFrom !== currentLoadFrom) {
+        const shouldAdvance =
+            !currentLoadFrom
+            || currentLoadFrom === '__LOAD_RECENT__'
+            || nextLoadFrom > currentLoadFrom;
+
+        if (shouldAdvance) {
             Logger.info(`Advancing session start to ${nextLoadFrom}`);
             setLoadFrom(nextLoadFrom);
             this.hasAdvancedThisBatch = true;
 
-            // [PR-READ-06] Cleanup: remove read IDs older than the new loadFrom.
-            // Items older than loadFrom will never appear again, so their read marks are stale.
+            // [PR-READ-06] Cleanup: remove known read IDs older than the new loadFrom.
+            // Unknown IDs are preserved to avoid cross-tab/session data loss.
             const readState = getReadState();
             const dateByItemId = new Map<string, string | undefined>();
             currentComments.forEach(c => dateByItemId.set(c._id, c.postedAt));
-            this.postsDataGetter().forEach(p => dateByItemId.set(p._id, p.postedAt));
+            this.postsDataGetter().forEach(p => {
+                dateByItemId.set(p._id, p.postedAt);
+            });
 
             const cleanupCutoffTime = new Date(nextLoadFrom).getTime();
             let removedCount = 0;
 
             for (const id of Object.keys(readState)) {
-                if (dateByItemId.has(id)) continue; // Keep if in current batch regardless of date
-
                 const postedAt = dateByItemId.get(id);
-                // remove if:
-                // 1. item is unknown in the current loaded set (orphaned), OR
-                // 2. item timestamp is older than the NEW loadFrom cutoff
-                const itemTime = postedAt ? new Date(postedAt).getTime() : NaN;
-                if (!postedAt || !Number.isFinite(itemTime) || itemTime < cleanupCutoffTime) {
+                if (!postedAt) continue;
+                const itemTime = new Date(postedAt).getTime();
+                if (Number.isFinite(itemTime) && itemTime < cleanupCutoffTime) {
                     delete readState[id];
                     removedCount++;
                 }
@@ -290,11 +293,11 @@ export class ReadTracker {
 
         if (this.recheckTimer && !force) return;
 
-        this.isCheckingForMore = true;
-        this.lastCheckedIso = afterIso;
-
         const msgEl = document.getElementById('pr-bottom-message');
         if (!msgEl) return;
+
+        this.isCheckingForMore = true;
+        this.lastCheckedIso = afterIso;
 
         msgEl.style.display = 'block';
         msgEl.textContent = 'Checking for more comments...';

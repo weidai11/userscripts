@@ -145,16 +145,11 @@ export const buildPostGroups = (
   const parentIds = new Set<string>();
 
   const cutoff = getLoadFrom();
-  const isImplicitlyRead = (item: { postedAt?: string }) => {
-    return !!(cutoff && cutoff !== '__LOAD_RECENT__' && cutoff.includes('T') && item.postedAt && item.postedAt < cutoff);
-  };
 
   sortedComments.forEach(c => {
     const ct = getCommentContextType(c);
     const isContext = ct === 'fetched' || ct === 'stub';
-    const isLocallyRead = isRead(c._id, readState, c.postedAt);
-    const implicit = isImplicitlyRead(c);
-    const commentIsRead = isLocallyRead || implicit;
+    const commentIsRead = isRead(c._id, readState, c.postedAt, cutoff);
     const forceVisible = isForceVisible(c);
 
     if (isContext || !commentIsRead || forceVisible) {
@@ -180,7 +175,7 @@ export const buildPostGroups = (
   // Track unread posts (we'll refine this count after filtering groups)
   const unreadPostIds = new Set<string>();
   posts.forEach(p => {
-    const readStatus = isRead(p._id, readState, p.postedAt) || isImplicitlyRead(p);
+    const readStatus = isRead(p._id, readState, p.postedAt, cutoff);
     if (!readStatus) {
       unreadPostIds.add(p._id);
     }
@@ -232,7 +227,7 @@ export const buildPostGroups = (
   groupsList.forEach((g: PostGroup) => {
     const postRecord = state.postById.get(g.postId);
     const post = postRecord || g.fullPost || { _id: g.postId, baseScore: 0 } as Post;
-    const isPostRead = isRead(g.postId, readState, post.postedAt) || isImplicitlyRead(post);
+    const isPostRead = isRead(g.postId, readState, post.postedAt, cutoff);
 
     // rootCommentsOfPost should include ANY comment whose parent is not in the batch.
     // This ensures we find unread comments even if their parents are missing.

@@ -5,35 +5,7 @@
  */
 
 import type { ReaderState } from '../state';
-import type { Comment, Post } from '../../../shared/graphql/queries';
-import { getUIHost } from '../render/uiHost';
 import { markCommentRevealed } from '../types/uiCommentFlags';
-
-/**
- * Merge comments into state using UIHost
- */
-export const mergeComments = (newComments: Comment[], _state: ReaderState, markAsContext: boolean = true): number => {
-    return getUIHost().mergeComments(newComments, markAsContext);
-};
-
-/**
- * Upsert a post into state using UIHost
- */
-export const upsertPost = (post: Post, _state: ReaderState): void => {
-    getUIHost().upsertPost(post);
-};
-
-/**
- * Re-render a single post group using UIHost
- */
-export const reRenderPostGroup = (
-    postId: string,
-    _state: ReaderState,
-    anchorCommentId?: string
-): void => {
-    getUIHost().rerenderPostGroup(postId, anchorCommentId);
-};
-
 
 /**
  * Find the top-level ancestor ID for a comment by walking up the state tree

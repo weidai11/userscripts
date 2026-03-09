@@ -15,7 +15,7 @@ import {
   type VoteResponse,
 } from '../utils/voting';
 import type { Comment, Post } from '../../../shared/graphql/queries';
-import { renderComment, highlightQuotes } from '../render/comment';
+import { highlightQuotes } from '../render/comment';
 import { renderReactions } from '../utils/rendering';
 import { Logger } from '../utils/logger';
 import { getCurrentUserFromGlobals } from '../utils/currentUser';
@@ -279,19 +279,4 @@ export const refreshReactions = (commentId: string, state: ReaderState): void =>
       comment.currentUserExtendedVote as any
     );
   }
-};
-
-/**
- * Re-render a single comment in place - DEPRECATED
- * Use updateVoteUI or specific sub-renders to preserve DOM children
- */
-export const restyleComment = (commentId: string, state: ReaderState): void => {
-  Logger.warn(`restyleComment called for ${commentId} - this replaces outerHTML and kills children!`);
-  const comment = state.commentById.get(commentId);
-  if (!comment) return;
-
-  const el = document.querySelector(`.pr-comment[data-id="${commentId}"]`);
-  if (!el) return;
-
-  el.outerHTML = renderComment(comment, state);
 };

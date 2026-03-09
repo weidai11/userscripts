@@ -156,21 +156,25 @@ test.describe('Power Reader Expanded Coverage', () => {
             const finalStateStr = await page.evaluate(() => {
                 const calls = (window as any).__GM_CALLS;
                 if (calls && calls['power-reader-read'] !== undefined) return calls['power-reader-read'];
-                return (window as any).__GM_STORAGE?.['power-reader-read'];
+                return (window as any).GM_getValue?.('power-reader-read', '{}');
             });
-            return typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
-        }, { timeout: 5000 }).toMatchObject({ 'c-current': 1 });
+            const parsed = typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
+            return {
+                hasCurrent: parsed?.['c-current'] === 1,
+                hasOld: parsed?.['c-old'] === 1,
+            };
+        }, { timeout: 5000 }).toEqual({ hasCurrent: false, hasOld: true });
 
         const finalStateStr = await page.evaluate(() => {
             const calls = (window as any).__GM_CALLS;
             if (calls && calls['power-reader-read'] !== undefined) return calls['power-reader-read'];
-            return (window as any).__GM_STORAGE?.['power-reader-read'];
+            return (window as any).GM_getValue?.('power-reader-read', '{}');
         });
         const parsedFinalState = typeof finalStateStr === 'string' ? JSON.parse(finalStateStr) : finalStateStr;
 
-        // [PR-READ-06] 'c-current' should be KEPT, 'c-old' should be REMOVED
+        // [PR-READ-06] known stale IDs are removed while unknown IDs are preserved.
         expect(parsedFinalState).toBeDefined();
-        expect(parsedFinalState['c-current']).toBe(1);
-        expect(parsedFinalState['c-old']).toBeUndefined();
+        expect(parsedFinalState['c-current']).toBeUndefined();
+        expect(parsedFinalState['c-old']).toBe(1);
     });
 });
