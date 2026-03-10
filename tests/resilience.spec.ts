@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { getScriptContent, setupMockEnvironment } from './helpers/setup';
+import { waitForArchiveRenderComplete } from './helpers/archiveControls';
 
 test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][PR-DATA-04]', () => {
     let scriptContent: string;
@@ -55,6 +56,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
 
         // Verify the valid post is still rendered despite the error
         await expect(page.locator('.pr-item h2')).toHaveText('Valid Post');
@@ -109,6 +111,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
 
         // Non-opt-in strict path should fail sync and prevent successful archive population.
         await expect(page.locator('#archive-status')).toContainText('Sync failed');
@@ -280,6 +283,7 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await page.goto('https://www.lesswrong.com/archive?username=' + username);
         await page.evaluate(scriptContent);
         await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
 
         // Verify the post is rendered
         const post = page.locator('.pr-item');
@@ -290,5 +294,4 @@ test.describe('Power Reader Resilience [PR-DATA-03][PR-DATA-03.1][PR-DATA-03.2][
         await expect(timestampLink).toHaveAttribute('href', '#');
     });
 });
-
 

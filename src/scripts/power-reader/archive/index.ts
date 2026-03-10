@@ -76,6 +76,14 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
   const isCurrentRun = (): boolean =>
     runId === activeArchiveInitRunId && !runAbortController.signal.aborted;
 
+  let networkIdleRenderTimer: number | null = null;
+  const clearNetworkIdleRenderTimer = () => {
+    if (networkIdleRenderTimer) {
+      window.clearTimeout(networkIdleRenderTimer);
+      networkIdleRenderTimer = null;
+    }
+  };
+
   try {
     if (!isCurrentRun()) return;
     resetRenderLimit();
@@ -2074,18 +2082,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let hasInitialRender = false;
     let syncCompleted = false;
     let shouldShowRefreshRequiredStatus = false;
-    let networkIdleRenderTimer: number | null = null;
     let resolveInitialRender: (() => void) | null = null;
     const initialRenderPromise = new Promise<void>((resolve) => {
       resolveInitialRender = resolve;
     });
-
-    const clearNetworkIdleRenderTimer = () => {
-      if (networkIdleRenderTimer) {
-        window.clearTimeout(networkIdleRenderTimer);
-        networkIdleRenderTimer = null;
-      }
-    };
+    runAbortController.signal.addEventListener('abort', () => {
+      clearNetworkIdleRenderTimer();
+      resolveInitialRender?.();
+      resolveInitialRender = null;
+    }, { once: true });
 
     const maybeSetRefreshRequiredStatus = () => {
       if (!hasInitialRender || !syncCompleted || !shouldShowRefreshRequiredStatus) return;
@@ -2362,7 +2367,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     if (!isCurrentRun()) return;
     if (await restartArchiveInitIfDetached('sync completion')) return;
     if (!hasInitialRender) {
-      scheduleRenderOnNetworkIdle();
+      // Keep waiting on the existing idle timer scheduled from sync activity.
       await initialRenderPromise;
       if (!isCurrentRun()) return;
     }

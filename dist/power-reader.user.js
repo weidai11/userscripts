@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.713
+// @version    1.2.716
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.713"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.716"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9069,7 +9069,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9249,7 +9249,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -15957,6 +15957,7 @@ sortCanonicalItems() {
   const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
   const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
   const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
+  const NETWORK_IDLE_RENDER_MS = 5e3;
   let activeArchiveInitRunId = 0;
   let activeArchiveInitAbortController = null;
   const initArchive = async (username, recoveryAttempt = 0) => {
@@ -15970,6 +15971,13 @@ sortCanonicalItems() {
       previousRunAbortController.abort();
     }
     const isCurrentRun = () => runId === activeArchiveInitRunId && !runAbortController.signal.aborted;
+    let networkIdleRenderTimer = null;
+    const clearNetworkIdleRenderTimer = () => {
+      if (networkIdleRenderTimer) {
+        window.clearTimeout(networkIdleRenderTimer);
+        networkIdleRenderTimer = null;
+      }
+    };
     try {
       if (!isCurrentRun()) return;
       resetRenderLimit();
@@ -16495,7 +16503,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17682,6 +17690,44 @@ sortCanonicalItems() {
       };
       let isSyncInProgress = false;
       let pendingRetryCount = 0;
+      let hasInitialRender = false;
+      let syncCompleted = false;
+      let shouldShowRefreshRequiredStatus = false;
+      let resolveInitialRender = null;
+      const initialRenderPromise = new Promise((resolve) => {
+        resolveInitialRender = resolve;
+      });
+      runAbortController.signal.addEventListener("abort", () => {
+        clearNetworkIdleRenderTimer();
+        resolveInitialRender?.();
+        resolveInitialRender = null;
+      }, { once: true });
+      const maybeSetRefreshRequiredStatus = () => {
+        if (!hasInitialRender || !syncCompleted || !shouldShowRefreshRequiredStatus) return;
+        setStatusBaseMessage("Fetch complete. Please refresh page to view latest content.", false, false);
+      };
+      const renderInitialSnapshot = () => {
+        if (!isCurrentRun() || hasInitialRender) return;
+        hasInitialRender = true;
+        updateItemMap(state2.items);
+        dashboardEl.style.display = "none";
+        signalReady();
+        resolveInitialRender?.();
+        resolveInitialRender = null;
+        shouldShowRefreshRequiredStatus = !syncCompleted;
+        maybeSetRefreshRequiredStatus();
+      };
+      const scheduleRenderOnNetworkIdle = () => {
+        if (hasInitialRender || !isCurrentRun()) return;
+        clearNetworkIdleRenderTimer();
+        networkIdleRenderTimer = window.setTimeout(() => {
+          networkIdleRenderTimer = null;
+          renderInitialSnapshot();
+        }, NETWORK_IDLE_RENDER_MS);
+      };
+      const markSyncActivity = () => {
+        scheduleRenderOnNetworkIdle();
+      };
       const performSync = async (forceFull = false) => {
         if (!isCurrentRun()) return;
         if (isSyncInProgress) {
@@ -17701,6 +17747,10 @@ sortCanonicalItems() {
         renderTopStatusLine();
         const setStatus = (msg, isError2 = false, isSyncing = false) => {
           if (!isCurrentRun()) return;
+          markSyncActivity();
+          if (isSyncing && hasInitialRender) {
+            shouldShowRefreshRequiredStatus = true;
+          }
           setStatusBaseMessage(msg, isError2, isSyncing);
         };
         const attemptSync = async (useAutoRetry, attemptNumber = 1) => {
@@ -17762,9 +17812,8 @@ sortCanonicalItems() {
             syncErrorState.retryCount = 0;
             if (errorContainer) errorContainer.style.display = "none";
             setStatus(`Sync complete. ${state2.items.length} total items.`, false, false);
-            if (perfMetrics.newItems > 0) {
-              updateItemMap(state2.items);
-            }
+            syncCompleted = true;
+            maybeSetRefreshRequiredStatus();
             if (pendingRetryCount === 0) {
               isSyncInProgress = false;
             }
@@ -17859,30 +17908,18 @@ sortCanonicalItems() {
         dashboardEl.style.display = "block";
         setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
       }
+      markSyncActivity();
       const syncPromise = performSync();
-      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve("timeout"), 2e3));
-      const raceResult = await Promise.race([syncPromise, timeoutPromise]);
-      if (raceResult === "timeout") {
-        console.log("[Archive Init] Sync taking > 2s, rendering cache first.");
-        if (cached.items.length > 0) {
-          setStatusBaseMessage(`Sync in progress... Showing cached data.`, false, true);
-          updateItemMap(state2.items);
-        }
-      }
+      scheduleRenderOnNetworkIdle();
       if (!isCurrentRun()) return;
       await syncPromise;
       if (!isCurrentRun()) return;
       if (await restartArchiveInitIfDetached("sync completion")) return;
-      const isRendered = !!feedEl.querySelector(".pr-archive-item, .pr-archive-index-item, .pr-post");
-      if (!isRendered) {
-        console.log(`[Archive Init] Final render check: currentItems=${state2.items.length}, newItems=${perfMetrics.newItems}`);
-        updateItemMap(state2.items);
+      if (!hasInitialRender) {
+        await initialRenderPromise;
+        if (!isCurrentRun()) return;
       }
-      await refreshView();
-      if (!isCurrentRun()) return;
-      if (await restartArchiveInitIfDetached("final refresh")) return;
-      dashboardEl.style.display = "none";
-      signalReady();
+      maybeSetRefreshRequiredStatus();
     } catch (err) {
       if (!isCurrentRun()) {
         Logger.debug("Archive init run superseded by a newer run; skipping stale error handling.");
@@ -17898,6 +17935,7 @@ sortCanonicalItems() {
         root.replaceChildren(errorEl);
       }
     } finally {
+      clearNetworkIdleRenderTimer();
       if (runId === activeArchiveInitRunId && activeArchiveInitAbortController === runAbortController) {
         activeArchiveInitAbortController = null;
       }
@@ -18584,7 +18622,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.713"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

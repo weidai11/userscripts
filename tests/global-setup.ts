@@ -43,6 +43,7 @@ async function globalSetup() {
         path.join(ROOT_DIR, 'src/shared')
     ];
     const outputFile = path.join(ROOT_DIR, 'dist/power-reader.user.js');
+    const packageJsonPath = path.join(ROOT_DIR, 'package.json');
 
     // 1. Get output age
     let outMtime = 0;
@@ -50,14 +51,21 @@ async function globalSetup() {
         outMtime = fs.statSync(outputFile).mtimeMs;
     }
 
-    // 2. Get newest source age
+    // 2. Include package.json in freshness checks so version bumps force rebuilds.
+    let packageMtime = 0;
+    if (fs.existsSync(packageJsonPath)) {
+        packageMtime = fs.statSync(packageJsonPath).mtimeMs;
+    }
+
+    // 3. Get newest source age
     let srcMtime = 0;
     for (const dir of sourceDirs) {
         const mtime = getNewestMtime(dir);
         srcMtime = Math.max(srcMtime, mtime);
     }
+    srcMtime = Math.max(srcMtime, packageMtime);
 
-    // 3. Compare
+    // 4. Compare
     if (srcMtime > outMtime || outMtime === 0) {
         console.log('\x1b[33m%s\x1b[0m', 'Build is stale or missing. Rebuilding power-reader...');
         try {

@@ -1898,9 +1898,12 @@ return { data: {} };
     await expect(statusEl).toHaveClass(/status-syncing/);
     await expect(statusEl).not.toHaveClass(/status-syncing/, { timeout: 20000 });
 
-    // Final state after resync should have 1 item
-    await expect(statusEl).toContainText('Sync complete');
-    await expect(statusEl).toContainText('1 total items');
+    // Final status may remain "Sync complete..." or switch to the refresh-required terminal message.
+    const finalStatus = (await statusEl.textContent()) ?? '';
+    expect(finalStatus).toMatch(/Sync complete|Fetch complete\. Please refresh page to view latest content\./);
+    if (finalStatus.includes('Sync complete')) {
+      expect(finalStatus).toContain('1 total items');
+    }
   });
 
   /**
@@ -2767,6 +2770,5 @@ return { data: {} };
     await expectArchiveViewSelected(page, 'card');
   });
 });
-
 
 

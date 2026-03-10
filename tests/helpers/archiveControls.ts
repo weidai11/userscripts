@@ -6,11 +6,33 @@ export type ArchiveViewValue = 'card' | 'index' | 'thread-full' | 'thread-placeh
 export const waitForArchiveRenderComplete = async (page: Page, timeout = 15000): Promise<void> => {
   await expect.poll(
     async () => page.evaluate(() => {
+      const isVisible = (el: Element | null): boolean => {
+        if (!(el instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        return el.getClientRects().length > 0;
+      };
+
       const hasArchiveUi = !!document.getElementById('archive-feed')
         || !!document.querySelector('.pr-archive-container');
-      if (!hasArchiveUi) return 100;
+      if (!hasArchiveUi) {
+        const isArchivePath = window.location.pathname === '/archive';
+        const hasArchiveUsername = new URLSearchParams(window.location.search).has('username');
+        const hasMainReaderUi = !!document.querySelector('#power-reader-root .pr-header');
+        if (hasMainReaderUi && (!isArchivePath || !hasArchiveUsername)) return 100;
+        return -1;
+      }
       if (document.querySelector('.pr-archive-render-dialog')) return 100;
+
+      const feed = document.getElementById('archive-feed');
+      const dashboard = document.getElementById('archive-dashboard');
+      const hasFeedContent = !!feed?.firstElementChild;
+      const dashboardVisible = isVisible(dashboard);
       const progress = (window as any).__PR_ARCHIVE_RENDER_PROGRESS__;
+
+      if (hasFeedContent && !dashboardVisible && (typeof progress !== 'number' || progress >= 100)) {
+        return 100;
+      }
       return typeof progress === 'number' ? progress : -1;
     }),
     { timeout }
