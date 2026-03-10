@@ -47,6 +47,7 @@ const SEARCH_DEBOUNCE_MS = 180;
 const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
 const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
 const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
+const NETWORK_IDLE_RENDER_MS = 5000;
 
 let activeArchiveInitRunId = 0;
 let activeArchiveInitAbortController: AbortController | null = null;
@@ -2070,6 +2071,50 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
      */
     let isSyncInProgress = false;
     let pendingRetryCount = 0;
+    let hasInitialRender = false;
+    let syncCompleted = false;
+    let networkIdleRenderTimer: number | null = null;
+    let resolveInitialRender: (() => void) | null = null;
+    const initialRenderPromise = new Promise<void>((resolve) => {
+      resolveInitialRender = resolve;
+    });
+
+    const clearNetworkIdleRenderTimer = () => {
+      if (networkIdleRenderTimer) {
+        window.clearTimeout(networkIdleRenderTimer);
+        networkIdleRenderTimer = null;
+      }
+    };
+
+    const maybeSetRefreshRequiredStatus = () => {
+      if (!hasInitialRender || !syncCompleted) return;
+      setStatusBaseMessage('Fetch complete. Please refresh page to view latest content.', false, false);
+    };
+
+    const renderInitialSnapshot = () => {
+      if (!isCurrentRun() || hasInitialRender) return;
+      hasInitialRender = true;
+      updateItemMap(state.items);
+      dashboardEl!.style.display = 'none';
+      signalReady();
+      resolveInitialRender?.();
+      resolveInitialRender = null;
+      maybeSetRefreshRequiredStatus();
+    };
+
+    const scheduleRenderOnNetworkIdle = () => {
+      if (hasInitialRender || !isCurrentRun()) return;
+      clearNetworkIdleRenderTimer();
+      networkIdleRenderTimer = window.setTimeout(() => {
+        networkIdleRenderTimer = null;
+        renderInitialSnapshot();
+      }, NETWORK_IDLE_RENDER_MS);
+    };
+
+    const markSyncActivity = () => {
+      scheduleRenderOnNetworkIdle();
+    };
+
     const performSync = async (forceFull = false): Promise<void> => {
       if (!isCurrentRun()) return;
       // Guard against concurrent syncs
@@ -2093,6 +2138,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
         if (!isCurrentRun()) return;
+        markSyncActivity();
         setStatusBaseMessage(msg, isError, isSyncing);
       };
 
@@ -2166,12 +2212,8 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
           // Clear syncing state
           setStatus(`Sync complete. ${state.items.length} total items.`, false, false);
-
-          // Only trigger a rerender if we actually found new data.
-          // refreshView (called via updateItemMap) will abort any in-progress "cached only" render.
-          if (perfMetrics.newItems > 0) {
-            updateItemMap(state.items);
-          }
+          syncCompleted = true;
+          maybeSetRefreshRequiredStatus();
 
           // If this attempt completed and no retry callbacks are still pending,
           // release the sync lock even when this call originated from a scheduled/manual retry.
@@ -2295,52 +2337,30 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     contextSearchItemsCache = null;
     if (!isCurrentRun()) return;
 
-    // We no longer trigger an initial render from cache here.
-    // Instead, we wait for sync to finish (or fail) and then render once.
-    // updateItemMap(state.items);
-
     if (cached.items.length > 0) {
       setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
     } else {
       dashboardEl!.style.display = 'block';
       setStatusBaseMessage(`No local data. Fetching full history for ${username}...`, false, false);
     }
+    markSyncActivity();
 
-    // 2. Perform Sync with error handling
-    // Start sync but don't wait indefinitely if it's slow
+    // 2. Perform sync in background and render exactly once when network activity
+    // has been idle for a short window.
     const syncPromise = performSync();
-    const timeoutPromise = new Promise(resolve => setTimeout(() => resolve('timeout'), 2000));
-
-    const raceResult = await Promise.race([syncPromise, timeoutPromise]);
-
-    if (raceResult === 'timeout') {
-      console.log('[Archive Init] Sync taking > 2s, rendering cache first.');
-      if (cached.items.length > 0) {
-        setStatusBaseMessage(`Sync in progress... Showing cached data.`, false, true);
-        updateItemMap(state.items);
-      }
-    }
+    scheduleRenderOnNetworkIdle();
     if (!isCurrentRun()) return;
 
-    // Wait for the sync to eventually finish (it will call updateItemMap itself if new items found)
+    // Wait for background sync completion (no automatic rerender afterward).
     await syncPromise;
     if (!isCurrentRun()) return;
     if (await restartArchiveInitIfDetached('sync completion')) return;
-
-    // 3. Final render check
-    // If we haven't rendered yet (e.g. sync was fast but found no new items), do it now.
-    const isRendered = !!feedEl!.querySelector('.pr-archive-item, .pr-archive-index-item, .pr-post');
-    if (!isRendered) {
-      console.log(`[Archive Init] Final render check: currentItems=${state.items.length}, newItems=${perfMetrics.newItems}`);
-      updateItemMap(state.items);
+    if (!hasInitialRender) {
+      scheduleRenderOnNetworkIdle();
+      await initialRenderPromise;
+      if (!isCurrentRun()) return;
     }
-
-    await refreshView();
-    if (!isCurrentRun()) return;
-    if (await restartArchiveInitIfDetached('final refresh')) return;
-
-    dashboardEl!.style.display = 'none';
-    signalReady();
+    maybeSetRefreshRequiredStatus();
 
   } catch (err) {
     if (!isCurrentRun()) {
@@ -2357,6 +2377,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       root.replaceChildren(errorEl);
     }
   } finally {
+    clearNetworkIdleRenderTimer();
     if (runId === activeArchiveInitRunId && activeArchiveInitAbortController === runAbortController) {
       activeArchiveInitAbortController = null;
     }
