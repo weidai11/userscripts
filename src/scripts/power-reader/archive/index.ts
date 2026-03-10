@@ -2073,6 +2073,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let pendingRetryCount = 0;
     let hasInitialRender = false;
     let syncCompleted = false;
+    let shouldShowRefreshRequiredStatus = false;
     let networkIdleRenderTimer: number | null = null;
     let resolveInitialRender: (() => void) | null = null;
     const initialRenderPromise = new Promise<void>((resolve) => {
@@ -2087,7 +2088,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     };
 
     const maybeSetRefreshRequiredStatus = () => {
-      if (!hasInitialRender || !syncCompleted) return;
+      if (!hasInitialRender || !syncCompleted || !shouldShowRefreshRequiredStatus) return;
       setStatusBaseMessage('Fetch complete. Please refresh page to view latest content.', false, false);
     };
 
@@ -2099,6 +2100,8 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       signalReady();
       resolveInitialRender?.();
       resolveInitialRender = null;
+      // Only ask for refresh if rendering happened before sync completed.
+      shouldShowRefreshRequiredStatus = !syncCompleted;
       maybeSetRefreshRequiredStatus();
     };
 
@@ -2139,6 +2142,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       const setStatus = (msg: string, isError = false, isSyncing = false) => {
         if (!isCurrentRun()) return;
         markSyncActivity();
+        if (isSyncing && hasInitialRender) {
+          shouldShowRefreshRequiredStatus = true;
+        }
         setStatusBaseMessage(msg, isError, isSyncing);
       };
 

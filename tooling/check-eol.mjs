@@ -8,10 +8,18 @@ const parseArgs = () => {
   };
 };
 
-const run = (cmd, args) => {
+const run = (cmd, args, { required = false } = {}) => {
   try {
-    return execFileSync(cmd, args, { encoding: 'utf8' });
-  } catch {
+    return execFileSync(cmd, args, {
+      encoding: 'utf8',
+      maxBuffer: 50 * 1024 * 1024,
+    });
+  } catch (error) {
+    if (required) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to run "${cmd} ${args.join(' ')}": ${message}`);
+      process.exit(2);
+    }
     return '';
   }
 };
@@ -36,7 +44,7 @@ const parseEolLine = (line) => {
   if (tabIndex === -1) return null;
   const meta = line.slice(0, tabIndex);
   const path = line.slice(tabIndex + 1);
-  const modeMatch = meta.match(/i\/(\S+)\s+w\/(\S+)\s+attr\/(.+)$/);
+  const modeMatch = meta.match(/i\/(\S+)\s+w\/(\S+)\s+attr\/(.*)$/);
   if (!modeMatch) return null;
   const [, iMode, wMode, attr] = modeMatch;
   return { iMode, wMode, attr, path };
@@ -67,7 +75,7 @@ const countLineEndingBytes = (path) => {
 
 const { all } = parseArgs();
 const changedFiles = getChangedFiles();
-const eolOutput = run('git', ['ls-files', '--eol']);
+const eolOutput = run('git', ['ls-files', '--eol'], { required: true });
 const parsed = splitLines(eolOutput).map(parseEolLine).filter(Boolean);
 const trackedLfPaths = new Set(parsed.filter((entry) => entry.attr.includes('eol=lf')).map((entry) => normalizePath(entry.path)));
 

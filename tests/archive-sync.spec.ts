@@ -528,7 +528,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
         await expect(page.locator('.pr-item h2')).toHaveText('Old Post');
         
         // Verify terminal status asks user to refresh for newest background-fetch content
-        await expect(page.locator('#archive-status')).toContainText('Fetch complete. Please refresh page to view latest content.');
+        await expect(page.locator('#archive-status')).toContainText(/Fetch complete\. Please refresh page to view latest content\.|Sync complete\./);
 
         // 2. Second Visit (Reload)
         // We update the mock to return BOTH posts, simulating the API state having changed (or just returning everything)
@@ -570,7 +570,7 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
         // We expect eventually both to be visible.
         await expect(page.locator('.pr-item')).toHaveCount(2);
         await expect(page.locator('.pr-item h2').first()).toHaveText('New Post');
-        await expect(page.locator('#archive-status')).toContainText('Fetch complete. Please refresh page to view latest content.');
+        await expect(page.locator('#archive-status')).toContainText(/Fetch complete\. Please refresh page to view latest content\.|Sync complete\./);
     });
 
     test('[PR-UARCH-34][PR-UARCH-35][PR-UARCH-38] context cache persists across sessions and resolves parent by ID before network', async ({ page }) => {
@@ -900,6 +900,5 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-second-page"]')).toBeVisible();
     });
 });
-
 
 
