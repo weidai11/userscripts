@@ -3,13 +3,32 @@ import { initPowerReader } from './helpers/setup';
 
 test.describe('Power Reader AI Studio Integration', () => {
 
-    test('[PR-CMTBTN-03][PR-AI-01][PR-AI-02][PR-AI-05][PR-AI-06][PR-AI-07] Pressing "g" over a comment triggers AI Studio prompt generation', async ({ page }) => {
+    test('[PR-CMTBTN-03][PR-AI-01][PR-AI-02][PR-AI-05][PR-AI-06][PR-AI-07][PR-AI-10] Pressing "g" over a comment triggers AI Studio prompt generation', async ({ page }) => {
+        const postedAt = '2026-01-02T03:04:05.000Z';
         const comments = [
             {
-                _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
+                _id: 'c1', postId: 'p1', postedAt,
                 htmlBody: '<p>AI Target Comment</p>', baseScore: 10,
+                voteCount: 21,
+                extendedScore: {
+                    agreement: 5,
+                    agreementVoteCount: 3,
+                    approvalVoteCount: 44,
+                    agree: 7,
+                    disagree: 2
+                },
+                currentUserVote: 'smallUpvote',
+                currentUserExtendedVote: { agreement: 'smallDownvote', agree: true, disagree: false },
                 user: { _id: 'u1', username: 'Author', displayName: 'Author Full Name', karma: 100 },
-                post: { _id: 'p1', title: 'Post 1', baseScore: 10, user: { karma: 100 } },
+                post: {
+                    _id: 'p1',
+                    title: 'Post 1',
+                    postedAt,
+                    baseScore: 10,
+                    voteCount: 8,
+                    extendedScore: { approvalVoteCount: 8, agree: 1, disagree: 0 },
+                    user: { karma: 100 }
+                },
                 contents: { markdown: 'AI Target Comment Markdown' }
             }
         ];
@@ -65,6 +84,10 @@ test.describe('Power Reader AI Studio Integration', () => {
         const payload = await page.evaluate(() => (window as any)._lastAiPayload);
         expect(payload).toContain('AI Target Comment');
         expect(payload).toContain('author="Author Full Name"');
+        expect(payload).toContain(`<posted_at>${postedAt}</posted_at>`);
+        expect(payload).toContain('<karma score="10" vote_count="44" current_user_vote="smallUpvote" />');
+        expect(payload).toContain('<agreement_lw score="5" vote_count="3" current_user_vote="smallDownvote" />');
+        expect(payload).toContain('<agreement_eaf agree_count="7" disagree_count="2" current_user_agree="true" current_user_disagree="false" />');
 
         // Verify highlight
         await expect(comment).toHaveClass(/being-summarized/);

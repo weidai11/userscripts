@@ -12,7 +12,7 @@ declare global {
 export const CONFIG = {
   loadMax: window.PR_TEST_LIMIT ?? 800,
   highlightLastN: 33,
-  scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 5000, // 5 seconds
+  scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 2000, // 2 seconds
   hoverDelay: 300,
   maxPostHeight: '50vh',
 } as const;

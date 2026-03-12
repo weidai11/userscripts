@@ -19,6 +19,7 @@ import {
   getSyncEnabled,
   getSyncMeta,
   getSyncQuotaMeta,
+  onSyncFieldApplied,
   onSyncFieldChanged,
   setAuthorPreferences,
   setAIStudioPrefix,
@@ -55,6 +56,7 @@ import {
 } from './dirtyState';
 import type {
   AuthorPreferences,
+  SyncFieldAppliedEvent,
   SyncableField,
 } from '../utils/storage';
 import type {
@@ -85,6 +87,7 @@ const PULL_FALLBACK_BASE_MS = 10 * 60_000;
 const PULL_FALLBACK_JITTER_MS = 60_000;
 const PUSH_FLOOR_MS = 5_000;
 const READ_ONLY_PUSH_FLOOR_MS = 45_000;
+const SESSION_ADVANCE_PRIORITY_FLUSH_THROTTLE_MS = 30_000;
 const SYNC_MAX_WAIT_MS = 30_000;
 const SYNC_STARTUP_TIMEOUT_MS = 5_000;
 const READ_CAP = 10_000;
@@ -189,6 +192,7 @@ interface RuntimeState {
   startupTimedOut: boolean;
   listenerDisposer: (() => void) | null;
   periodicPullTimer: number | null;
+  lastSessionAdvancePriorityFlushAtMs: number;
   writerId: string;
   userId: string | null;
   connectivityBlocked: boolean;
@@ -228,6 +232,7 @@ const runtime: RuntimeState = {
   startupTimedOut: false,
   listenerDisposer: null,
   periodicPullTimer: null,
+  lastSessionAdvancePriorityFlushAtMs: 0,
   writerId: '',
   userId: null,
   connectivityBlocked: false,
@@ -1848,10 +1853,32 @@ async function onLocalFieldChanged(field: SyncableField): Promise<void> {
   scheduleFlush(SYNC_DEBOUNCE_MS, true);
 }
 
+function onSyncFieldAppliedEvent(event: SyncFieldAppliedEvent): void {
+  if (!runtime.active || runtime.readOnly) return;
+  if (event.source !== 'session-advance') return;
+  if (event.field !== 'loadFrom' && event.field !== 'read') return;
+
+  const stamp = nowMs();
+  if ((stamp - runtime.lastSessionAdvancePriorityFlushAtMs) < SESSION_ADVANCE_PRIORITY_FLUSH_THROTTLE_MS) {
+    return;
+  }
+  runtime.lastSessionAdvancePriorityFlushAtMs = stamp;
+
+  // Intentional two-step deferral: follow-up writes in the same advancement batch can
+  // reschedule the shared flush timer; queueing this after the batch preserves priority.
+  window.setTimeout(() => {
+    if (!runtime.active || runtime.readOnly) return;
+    scheduleFlush(0, false);
+  }, 0);
+}
+
 function installListeners(): void {
   if (runtime.listenerDisposer) return;
   const disposeFieldListener = onSyncFieldChanged((field) => {
     void onLocalFieldChanged(field);
+  });
+  const disposeAppliedListener = onSyncFieldApplied((event) => {
+    onSyncFieldAppliedEvent(event);
   });
   const disposeCrossTabWatchers = installCrossTabFieldWatchers();
 
@@ -1916,6 +1943,7 @@ function installListeners(): void {
   schedulePeriodicPull();
   runtime.listenerDisposer = () => {
     disposeFieldListener();
+    disposeAppliedListener();
     disposeCrossTabWatchers();
     window.removeEventListener('focus', focusListener);
     window.removeEventListener('mousemove', activityListener);
@@ -2165,6 +2193,7 @@ export async function initPersistenceSync(
     runtime.startupTimedOut = false;
     runtime.firstDirtyAtMs = null;
     runtime.readOverflowNoticeUntilMs = 0;
+    runtime.lastSessionAdvancePriorityFlushAtMs = 0;
     runtime.dirtySequence = createDirtySequence();
     return {
       resetHandled: options.isResetRoute,
@@ -2190,6 +2219,7 @@ export async function initPersistenceSync(
   runtime.startupDone = false;
   runtime.startupTimedOut = false;
   runtime.readOverflowNoticeUntilMs = 0;
+  runtime.lastSessionAdvancePriorityFlushAtMs = 0;
   runtime.dirtySequence = createDirtySequence();
   runtime.currentUser = null;
   runtime.userId = null;

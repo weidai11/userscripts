@@ -4,18 +4,32 @@ import { initPowerReader } from './helpers/setup';
 test.describe('Power Reader Arena Max Integration', () => {
 
     test('[PR-AI-08] Pressing "m" over a comment triggers Arena Max prompt generation', async ({ page }) => {
+        const linkpostUrl = 'https://example.com/linkpost-target';
+        const posts = [
+            {
+                _id: 'p1',
+                title: 'Post 1',
+                postedAt: new Date().toISOString(),
+                htmlBody: '<p>Post Body</p>',
+                linkUrl: linkpostUrl,
+                postCategory: 'linkpost',
+                user: { _id: 'u1', username: 'Author', karma: 100 },
+                contents: { markdown: 'Post 1 markdown' }
+            }
+        ];
         const comments = [
             {
                 _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
                 htmlBody: '<p>Arena Target Comment</p>', baseScore: 10,
                 user: { _id: 'u1', username: 'Author', karma: 100 },
-                post: { _id: 'p1', title: 'Post 1', linkUrl: 'https://example.com/linkpost-target', postCategory: 'linkpost', baseScore: 10, user: { karma: 100 } },
+                post: { _id: 'p1', title: 'Post 1', linkUrl: linkpostUrl, postCategory: 'linkpost', baseScore: 10, user: { karma: 100 } },
                 contents: { markdown: 'Arena Target Comment Markdown' }
             }
         ];
 
         await initPowerReader(page, {
             testMode: true,
+            posts,
             comments,
             // Mock GM_openInTab
             onInit: `
@@ -64,31 +78,46 @@ test.describe('Power Reader Arena Max Integration', () => {
 
         const payload = await page.evaluate(() => (window as any)._lastArenaPayload);
         expect(payload).toContain('Arena Target Comment');
-        expect(payload).toContain('https://example.com/linkpost-target');
+        expect(payload).toContain(linkpostUrl);
 
         // Verify highlight
         await expect(comment).toHaveClass(/being-summarized/);
     });
 
-    test('Shift+m includes descendants for Arena Max', async ({ page }) => {
+    test('[PR-AI-11] Shift+m includes descendants for Arena Max and keeps linkpost URL context on the post entry only', async ({ page }) => {
+        const linkpostUrl = 'https://example.com/linkpost-target';
+        const posts = [
+            {
+                _id: 'p1',
+                title: 'Post 1',
+                postedAt: new Date(Date.now() - 5000).toISOString(),
+                htmlBody: '<p>Post Body</p>',
+                linkUrl: linkpostUrl,
+                postCategory: 'linkpost',
+                user: { _id: 'u1', username: 'Author', karma: 100 },
+                contents: { markdown: 'Post 1 markdown' }
+            }
+        ];
         const comments = [
             {
                 _id: 'c1', postId: 'p1', postedAt: new Date(Date.now() - 1000).toISOString(),
                 htmlBody: '<p>Parent</p>', baseScore: 10,
                 user: { _id: 'u1', username: 'Author', karma: 100 },
-                post: { _id: 'p1', title: 'Post 1', baseScore: 10, user: { karma: 100 } },
+                post: { _id: 'p1', title: 'Post 1', linkUrl: linkpostUrl, postCategory: 'linkpost', baseScore: 10, user: { karma: 100 } },
                 contents: { markdown: 'Parent Markdown' }
             },
             {
                 _id: 'c2', postId: 'p1', parentCommentId: 'c1', postedAt: new Date().toISOString(),
                 htmlBody: '<p>Child</p>', baseScore: 5,
                 user: { _id: 'u2', username: 'Replier', karma: 50 },
+                post: { _id: 'p1', title: 'Post 1', linkUrl: linkpostUrl, postCategory: 'linkpost', baseScore: 10, user: { karma: 100 } },
                 contents: { markdown: 'Child Markdown' }
             }
         ];
 
         await initPowerReader(page, {
             testMode: true,
+            posts,
             comments,
             onInit: `
                 window.GM_openInTab = (url) => {
@@ -131,6 +160,9 @@ test.describe('Power Reader Arena Max Integration', () => {
 
         expect(payload).toContain('Parent');
         expect(payload).toContain('Child');
+        expect(payload).toContain(`<link_url>${linkpostUrl}</link_url>`);
+        expect((payload.match(/<link_url>/g) || [])).toHaveLength(1);
+        expect(payload).not.toContain('<post_link_url>');
     });
 
     test('does not render linkpost badge for non-link posts', async ({ page }) => {

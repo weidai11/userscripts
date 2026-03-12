@@ -60,8 +60,8 @@ test.describe('Power Reader UI Interactions', () => {
         await expect(parentComment).not.toHaveClass(/highlight-parent/, { timeout: 5000 });
     });
 
-    test('[PR-READ-04] Read State should mark as read after 5s off-screen', async ({ page }) => {
-        // We use testMode: false here because we specifically want to test the 5s delay
+    test('[PR-READ-04] Read State should mark as read after 2s off-screen', async ({ page }) => {
+        // We use testMode: false here because we specifically want to test the 2s delay
         await initPowerReader(page, {
             testMode: false,
             storage: {

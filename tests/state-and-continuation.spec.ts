@@ -297,7 +297,7 @@ test.describe('Power Reader State and Continuation', () => {
         await expect(bottomMsg).toHaveText(/Failed to check server/);
     });
 
-    test('[PR-READ-03] Session advances and increments date by 1ms when at bottom', async ({ page }) => {
+    test('[PR-READ-03][PR-PERSIST-102] Session advances and increments date by 1ms when at bottom', async ({ page }) => {
         const consoleMsgs: string[] = [];
         page.on('console', msg => consoleMsgs.push(msg.text()));
 

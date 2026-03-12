@@ -1,6 +1,6 @@
 import { queryGraphQL } from '../../../shared/graphql/client';
 import { GET_POST, GET_COMMENT } from '../../../shared/graphql/queries';
-import type { Post, Comment } from '../../../shared/graphql/queries';
+import type { Post, Comment, NamesAttachedReactionsScore, CurrentUserExtendedVote } from '../../../shared/graphql/queries';
 import type {
   GetPostQuery,
   GetPostQueryVariables,
@@ -49,6 +49,13 @@ interface AIThreadItem {
   postId?: string | null;
   parentCommentId?: string | null;
   postedAt?: string | null;
+  baseScore?: number | null;
+  voteCount?: number | null;
+  extendedScore?: NamesAttachedReactionsScore | Record<string, unknown> | null;
+  afExtendedScore?: { agreement?: number | null; agreementVoteCount?: number | null } | Record<string, unknown> | null;
+  votingSystem?: string | null;
+  currentUserVote?: string | number | null;
+  currentUserExtendedVote?: (CurrentUserExtendedVote & Record<string, unknown>) | null;
   post?: { linkUrl?: string | null; postCategory?: string | null } | null;
 }
 
@@ -293,6 +300,150 @@ const escapeXmlAttr = (value: string): string =>
 
 const makeIndent = (depth: number): string => '  '.repeat(Math.max(0, depth));
 
+const toNumberOrNull = (value: unknown): number | null => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const toBooleanOrNull = (value: unknown): boolean | null => {
+  if (typeof value === 'boolean') return value;
+  return null;
+};
+
+const toStringOrNull = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const getReactionCount = (
+  extendedScore: NamesAttachedReactionsScore | Record<string, unknown> | null | undefined,
+  reactionName: string
+): number | null => {
+  if (!extendedScore || typeof extendedScore !== 'object') return null;
+
+  const directCount = toNumberOrNull((extendedScore as Record<string, unknown>)[reactionName]);
+  if (directCount !== null) return directCount;
+
+  const reactsMap = (extendedScore as { reacts?: Record<string, unknown> }).reacts;
+  const normalizedReactionName = reactionName.toLowerCase();
+  const entries = reactsMap?.[reactionName]
+    ?? (normalizedReactionName === 'agree' ? reactsMap?.agreed : undefined)
+    ?? (normalizedReactionName === 'disagree' ? reactsMap?.disagreed : undefined);
+  if (!Array.isArray(entries)) return null;
+
+  const matchesReactionType = (type: unknown): boolean => {
+    const normalizedType = typeof type === 'string' ? type.trim().toLowerCase() : '';
+    if (normalizedReactionName === 'agree') return normalizedType === 'agree' || normalizedType === 'agreed';
+    if (normalizedReactionName === 'disagree') return normalizedType === 'disagree' || normalizedType === 'disagreed';
+    return normalizedType === normalizedReactionName;
+  };
+
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const reactType = (entry as { reactType?: unknown }).reactType;
+    if (!matchesReactionType(reactType)) continue;
+    count += 1;
+  }
+  return count;
+};
+
+const voteXmlTag = (indent: string, tagName: string, attrs: Record<string, string | number | boolean | null | undefined>): string => {
+  const pieces: string[] = [];
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value === null || value === undefined) continue;
+    pieces.push(`${name}="${escapeXmlAttr(String(value))}"`);
+  }
+  const attrSuffix = pieces.length > 0 ? ` ${pieces.join(' ')}` : '';
+  return `${indent}<${tagName}${attrSuffix} />\n`;
+};
+
+const hasCurrentUserReaction = (
+  currentUserExtendedVote: (CurrentUserExtendedVote & Record<string, unknown>) | null | undefined,
+  reactionName: string
+): boolean => {
+  const reacts = currentUserExtendedVote?.reacts;
+  if (!Array.isArray(reacts)) return false;
+  const normalizedTarget = reactionName.toLowerCase();
+  return reacts.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const react = (entry as { react?: unknown }).react;
+    const normalizedReact = typeof react === 'string' ? react.trim().toLowerCase() : '';
+    if (normalizedTarget === 'agree') return normalizedReact === 'agree' || normalizedReact === 'agreed';
+    if (normalizedTarget === 'disagree') return normalizedReact === 'disagree' || normalizedReact === 'disagreed';
+    return normalizedReact === normalizedTarget;
+  });
+};
+
+const voteContextToXml = (item: AIThreadItem, indent: string): string => {
+  const extendedScore = item.extendedScore;
+  const afExtendedScore = item.afExtendedScore as { agreement?: unknown } | null | undefined;
+  const currentUserExtendedVote = item.currentUserExtendedVote as (CurrentUserExtendedVote & Record<string, unknown>) | null | undefined;
+
+  const karmaScore = toNumberOrNull(item.baseScore);
+  const karmaVoteCount = toNumberOrNull(
+    (extendedScore as { approvalVoteCount?: unknown } | null | undefined)?.approvalVoteCount
+  ) ?? toNumberOrNull(item.voteCount);
+  const karmaCurrentVote = typeof item.currentUserVote === 'number'
+    ? item.currentUserVote
+    : toStringOrNull(item.currentUserVote);
+
+  const lwAgreementScore = toNumberOrNull(
+    (extendedScore as { agreement?: unknown } | null | undefined)?.agreement
+  ) ?? toNumberOrNull(afExtendedScore?.agreement);
+  const lwAgreementVoteCount = toNumberOrNull(
+    (extendedScore as { agreementVoteCount?: unknown } | null | undefined)?.agreementVoteCount
+  ) ?? toNumberOrNull(
+    (afExtendedScore as { agreementVoteCount?: unknown } | null | undefined)?.agreementVoteCount
+  );
+  const lwCurrentAgreementVote = toStringOrNull(currentUserExtendedVote?.agreement);
+
+  const eafAgreeCount = getReactionCount(extendedScore, 'agree') ?? getReactionCount(afExtendedScore, 'agree');
+  const eafDisagreeCount = getReactionCount(extendedScore, 'disagree') ?? getReactionCount(afExtendedScore, 'disagree');
+  const hasCurrentVoteContext = !!currentUserExtendedVote && typeof currentUserExtendedVote === 'object';
+  const eafCurrentAgree = toBooleanOrNull(currentUserExtendedVote?.agree)
+    ?? (hasCurrentVoteContext ? hasCurrentUserReaction(currentUserExtendedVote, 'agree') : null);
+  const eafCurrentDisagree = toBooleanOrNull(currentUserExtendedVote?.disagree)
+    ?? (hasCurrentVoteContext ? hasCurrentUserReaction(currentUserExtendedVote, 'disagree') : null);
+
+  let xml = `${indent}<votes>\n`;
+  xml += voteXmlTag(`${indent}  `, 'karma', {
+    score: karmaScore,
+    vote_count: karmaVoteCount,
+    current_user_vote: karmaCurrentVote,
+  });
+
+  if (lwAgreementScore !== null || lwAgreementVoteCount !== null || lwCurrentAgreementVote !== null) {
+    xml += voteXmlTag(`${indent}  `, 'agreement_lw', {
+      score: lwAgreementScore,
+      vote_count: lwAgreementVoteCount,
+      current_user_vote: lwCurrentAgreementVote,
+    });
+  }
+
+  if (eafAgreeCount !== null || eafDisagreeCount !== null || eafCurrentAgree !== null || eafCurrentDisagree !== null) {
+    xml += voteXmlTag(`${indent}  `, 'agreement_eaf', {
+      agree_count: eafAgreeCount,
+      disagree_count: eafDisagreeCount,
+      current_user_agree: eafCurrentAgree,
+      current_user_disagree: eafCurrentDisagree,
+    });
+  }
+
+  xml += `${indent}</votes>\n`;
+  return xml;
+};
+
+const postedAtToXml = (item: AIThreadItem, indent: string): string =>
+  isNonEmptyText(item.postedAt)
+    ? `${indent}<posted_at>${escapeXmlText(item.postedAt)}</posted_at>\n`
+    : '';
+
 const getAuthorLabelForAI = (item: AIThreadItem, fallback: string = 'unknown'): string => {
   const displayName = item.user?.displayName;
   if (isNonEmptyText(displayName)) return displayName.trim();
@@ -319,13 +470,12 @@ const toXml = (
   const linkUrlTag = type === 'post' && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl)
     ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>\n`
     : '';
-  const commentPostLinkTag = type === 'comment' && isLinkpostCategory(item.post?.postCategory) && isNonEmptyText(item.post?.linkUrl)
-    ? `${childIndent}<post_link_url>${escapeXmlText(normalizeLinkpostUrl(item.post!.linkUrl!) || item.post!.linkUrl!)}</post_link_url>\n`
-    : '';
+  const postedAtTag = postedAtToXml(item, childIndent);
 
   let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ''}${titleAttr}>\n`;
   xml += linkUrlTag;
-  xml += commentPostLinkTag;
+  xml += postedAtTag;
+  xml += voteContextToXml(item, childIndent);
   xml += `${childIndent}<body_markdown>\n${escapeXmlText(md)}\n${childIndent}</body_markdown>\n`;
 
   if (isFocal && descendants.length > 0) {
@@ -355,8 +505,12 @@ const buildDescendantChildrenIndex = (descendants: AIThreadItem[]): Map<string, 
 const descendantsToXmlWithIndex = (
   childrenByParent: Map<string, AIThreadItem[]>,
   parentId: string,
-  depth: number
+  depth: number,
+  path: Set<string> = new Set()
 ): string => {
+  if (path.has(parentId)) return '';
+  const nextPath = new Set(path);
+  nextPath.add(parentId);
   const children = childrenByParent.get(parentId) || [];
   if (children.length === 0) return '';
 
@@ -366,9 +520,12 @@ const descendantsToXmlWithIndex = (
   return children.map(child => {
     const author = getAuthorLabelForAI(child, 'unknown');
     const md = child.contents?.markdown || child.htmlBody || '(no content)';
+    const postedAtTag = postedAtToXml(child, childIndent);
     let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">\n`;
+    xml += postedAtTag;
+    xml += voteContextToXml(child, childIndent);
     xml += `${childIndent}<body_markdown>\n${escapeXmlText(md)}\n${childIndent}</body_markdown>\n`;
-    const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1);
+    const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1, nextPath);
     if (grandChildrenXml) {
       xml += `${grandChildrenXml}\n`;
     }

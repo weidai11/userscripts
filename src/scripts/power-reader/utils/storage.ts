@@ -29,7 +29,13 @@ const DEVICE_ID_MAX_LENGTH = 96;
 
 export type SyncableField = 'read' | 'loadFrom' | 'authorPrefs' | 'aiStudioPrefix';
 
-export type SyncFieldApplySource = 'local' | 'sync-merge' | 'cross-tab' | 'polling' | 'reset';
+export type SyncFieldApplySource =
+  | 'local'
+  | 'sync-merge'
+  | 'cross-tab'
+  | 'polling'
+  | 'reset'
+  | 'session-advance';
 
 export interface SyncFieldAppliedEvent {
   field: SyncableField;

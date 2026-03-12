@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.716
+// @version    1.2.719
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.716"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.719"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3003,7 +3003,7 @@ reset: () => {
   const CONFIG = {
     loadMax: window.PR_TEST_LIMIT ?? 800,
     highlightLastN: 33,
-    scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 5e3,
+    scrollMarkDelay: window.PR_TEST_SCROLL_DELAY ?? 2e3,
 hoverDelay: 300,
     maxPostHeight: "50vh"
   };
@@ -6235,7 +6235,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       const shouldAdvance = !currentLoadFrom || currentLoadFrom === "__LOAD_RECENT__" || nextLoadFrom > currentLoadFrom;
       if (shouldAdvance) {
         Logger.info(`Advancing session start to ${nextLoadFrom}`);
-        setLoadFrom(nextLoadFrom);
+        setLoadFrom(nextLoadFrom, { source: "session-advance" });
         this.hasAdvancedThisBatch = true;
         const readState = getReadState();
         const dateByItemId = new Map();
@@ -6255,7 +6255,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           }
         }
         if (removedCount > 0) {
-          setReadState(readState);
+          setReadState(readState, { source: "session-advance" });
           Logger.info(`Cleaned up read state: removed ${removedCount} items older than ${nextLoadFrom}`);
         }
       }
@@ -6892,6 +6892,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   const PULL_FALLBACK_JITTER_MS = 6e4;
   const PUSH_FLOOR_MS = 5e3;
   const READ_ONLY_PUSH_FLOOR_MS = 45e3;
+  const SESSION_ADVANCE_PRIORITY_FLUSH_THROTTLE_MS = 3e4;
   const SYNC_MAX_WAIT_MS = 3e4;
   const SYNC_STARTUP_TIMEOUT_MS = 5e3;
   const READ_CAP = 1e4;
@@ -6934,6 +6935,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     startupTimedOut: false,
     listenerDisposer: null,
     periodicPullTimer: null,
+    lastSessionAdvancePriorityFlushAtMs: 0,
     writerId: "",
     userId: null,
     connectivityBlocked: false,
@@ -8279,10 +8281,27 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     scheduleFlush(SYNC_DEBOUNCE_MS, true);
   }
+  function onSyncFieldAppliedEvent(event) {
+    if (!runtime.active || runtime.readOnly) return;
+    if (event.source !== "session-advance") return;
+    if (event.field !== "loadFrom" && event.field !== "read") return;
+    const stamp = nowMs();
+    if (stamp - runtime.lastSessionAdvancePriorityFlushAtMs < SESSION_ADVANCE_PRIORITY_FLUSH_THROTTLE_MS) {
+      return;
+    }
+    runtime.lastSessionAdvancePriorityFlushAtMs = stamp;
+    window.setTimeout(() => {
+      if (!runtime.active || runtime.readOnly) return;
+      scheduleFlush(0, false);
+    }, 0);
+  }
   function installListeners() {
     if (runtime.listenerDisposer) return;
     const disposeFieldListener = onSyncFieldChanged((field) => {
       void onLocalFieldChanged(field);
+    });
+    const disposeAppliedListener2 = onSyncFieldApplied((event) => {
+      onSyncFieldAppliedEvent(event);
     });
     const disposeCrossTabWatchers = installCrossTabFieldWatchers();
     const requestPullViaExistingPath = () => {
@@ -8345,6 +8364,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     schedulePeriodicPull();
     runtime.listenerDisposer = () => {
       disposeFieldListener();
+      disposeAppliedListener2();
       disposeCrossTabWatchers();
       window.removeEventListener("focus", focusListener);
       window.removeEventListener("mousemove", activityListener);
@@ -8568,6 +8588,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       runtime.startupTimedOut = false;
       runtime.firstDirtyAtMs = null;
       runtime.readOverflowNoticeUntilMs = 0;
+      runtime.lastSessionAdvancePriorityFlushAtMs = 0;
       runtime.dirtySequence = createDirtySequence();
       return {
         resetHandled: options.isResetRoute,
@@ -8591,6 +8612,7 @@ currentUserSnapshot: void 0
     runtime.startupDone = false;
     runtime.startupTimedOut = false;
     runtime.readOverflowNoticeUntilMs = 0;
+    runtime.lastSessionAdvancePriorityFlushAtMs = 0;
     runtime.dirtySequence = createDirtySequence();
     runtime.currentUser = null;
     runtime.userId = null;
@@ -9069,7 +9091,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9249,7 +9271,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11804,6 +11826,120 @@ currentCommentId = null;
   const escapeXmlText = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const escapeXmlAttr = (value) => escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
   const makeIndent = (depth) => "  ".repeat(Math.max(0, depth));
+  const toNumberOrNull = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+  };
+  const toBooleanOrNull = (value) => {
+    if (typeof value === "boolean") return value;
+    return null;
+  };
+  const toStringOrNull = (value) => {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
+  const getReactionCount = (extendedScore, reactionName) => {
+    if (!extendedScore || typeof extendedScore !== "object") return null;
+    const directCount = toNumberOrNull(extendedScore[reactionName]);
+    if (directCount !== null) return directCount;
+    const reactsMap = extendedScore.reacts;
+    const normalizedReactionName = reactionName.toLowerCase();
+    const entries = reactsMap?.[reactionName] ?? (normalizedReactionName === "agree" ? reactsMap?.agreed : void 0) ?? (normalizedReactionName === "disagree" ? reactsMap?.disagreed : void 0);
+    if (!Array.isArray(entries)) return null;
+    const matchesReactionType = (type) => {
+      const normalizedType = typeof type === "string" ? type.trim().toLowerCase() : "";
+      if (normalizedReactionName === "agree") return normalizedType === "agree" || normalizedType === "agreed";
+      if (normalizedReactionName === "disagree") return normalizedType === "disagree" || normalizedType === "disagreed";
+      return normalizedType === normalizedReactionName;
+    };
+    let count = 0;
+    for (const entry of entries) {
+      if (!entry || typeof entry !== "object") continue;
+      const reactType = entry.reactType;
+      if (!matchesReactionType(reactType)) continue;
+      count += 1;
+    }
+    return count;
+  };
+  const voteXmlTag = (indent, tagName, attrs) => {
+    const pieces = [];
+    for (const [name, value] of Object.entries(attrs)) {
+      if (value === null || value === void 0) continue;
+      pieces.push(`${name}="${escapeXmlAttr(String(value))}"`);
+    }
+    const attrSuffix = pieces.length > 0 ? ` ${pieces.join(" ")}` : "";
+    return `${indent}<${tagName}${attrSuffix} />
+`;
+  };
+  const hasCurrentUserReaction = (currentUserExtendedVote, reactionName) => {
+    const reacts = currentUserExtendedVote?.reacts;
+    if (!Array.isArray(reacts)) return false;
+    const normalizedTarget = reactionName.toLowerCase();
+    return reacts.some((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const react = entry.react;
+      const normalizedReact = typeof react === "string" ? react.trim().toLowerCase() : "";
+      if (normalizedTarget === "agree") return normalizedReact === "agree" || normalizedReact === "agreed";
+      if (normalizedTarget === "disagree") return normalizedReact === "disagree" || normalizedReact === "disagreed";
+      return normalizedReact === normalizedTarget;
+    });
+  };
+  const voteContextToXml = (item, indent) => {
+    const extendedScore = item.extendedScore;
+    const afExtendedScore = item.afExtendedScore;
+    const currentUserExtendedVote = item.currentUserExtendedVote;
+    const karmaScore = toNumberOrNull(item.baseScore);
+    const karmaVoteCount = toNumberOrNull(
+      extendedScore?.approvalVoteCount
+    ) ?? toNumberOrNull(item.voteCount);
+    const karmaCurrentVote = typeof item.currentUserVote === "number" ? item.currentUserVote : toStringOrNull(item.currentUserVote);
+    const lwAgreementScore = toNumberOrNull(
+      extendedScore?.agreement
+    ) ?? toNumberOrNull(afExtendedScore?.agreement);
+    const lwAgreementVoteCount = toNumberOrNull(
+      extendedScore?.agreementVoteCount
+    ) ?? toNumberOrNull(
+      afExtendedScore?.agreementVoteCount
+    );
+    const lwCurrentAgreementVote = toStringOrNull(currentUserExtendedVote?.agreement);
+    const eafAgreeCount = getReactionCount(extendedScore, "agree") ?? getReactionCount(afExtendedScore, "agree");
+    const eafDisagreeCount = getReactionCount(extendedScore, "disagree") ?? getReactionCount(afExtendedScore, "disagree");
+    const hasCurrentVoteContext = !!currentUserExtendedVote && typeof currentUserExtendedVote === "object";
+    const eafCurrentAgree = toBooleanOrNull(currentUserExtendedVote?.agree) ?? (hasCurrentVoteContext ? hasCurrentUserReaction(currentUserExtendedVote, "agree") : null);
+    const eafCurrentDisagree = toBooleanOrNull(currentUserExtendedVote?.disagree) ?? (hasCurrentVoteContext ? hasCurrentUserReaction(currentUserExtendedVote, "disagree") : null);
+    let xml = `${indent}<votes>
+`;
+    xml += voteXmlTag(`${indent}  `, "karma", {
+      score: karmaScore,
+      vote_count: karmaVoteCount,
+      current_user_vote: karmaCurrentVote
+    });
+    if (lwAgreementScore !== null || lwAgreementVoteCount !== null || lwCurrentAgreementVote !== null) {
+      xml += voteXmlTag(`${indent}  `, "agreement_lw", {
+        score: lwAgreementScore,
+        vote_count: lwAgreementVoteCount,
+        current_user_vote: lwCurrentAgreementVote
+      });
+    }
+    if (eafAgreeCount !== null || eafDisagreeCount !== null || eafCurrentAgree !== null || eafCurrentDisagree !== null) {
+      xml += voteXmlTag(`${indent}  `, "agreement_eaf", {
+        agree_count: eafAgreeCount,
+        disagree_count: eafDisagreeCount,
+        current_user_agree: eafCurrentAgree,
+        current_user_disagree: eafCurrentDisagree
+      });
+    }
+    xml += `${indent}</votes>
+`;
+    return xml;
+  };
+  const postedAtToXml = (item, indent) => isNonEmptyText(item.postedAt) ? `${indent}<posted_at>${escapeXmlText(item.postedAt)}</posted_at>
+` : "";
   const getAuthorLabelForAI = (item, fallback = "unknown") => {
     const displayName = item.user?.displayName;
     if (isNonEmptyText(displayName)) return displayName.trim();
@@ -11822,12 +11958,12 @@ currentCommentId = null;
     const titleAttr = type === "post" && item.title ? ` title="${escapeXmlAttr(item.title)}"` : "";
     const linkUrlTag = type === "post" && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl) ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>
 ` : "";
-    const commentPostLinkTag = type === "comment" && isLinkpostCategory(item.post?.postCategory) && isNonEmptyText(item.post?.linkUrl) ? `${childIndent}<post_link_url>${escapeXmlText(normalizeLinkpostUrl(item.post.linkUrl) || item.post.linkUrl)}</post_link_url>
-` : "";
+    const postedAtTag = postedAtToXml(item, childIndent);
     let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}${titleAttr}>
 `;
     xml += linkUrlTag;
-    xml += commentPostLinkTag;
+    xml += postedAtTag;
+    xml += voteContextToXml(item, childIndent);
     xml += `${childIndent}<body_markdown>
 ${escapeXmlText(md)}
 ${childIndent}</body_markdown>
@@ -11857,7 +11993,10 @@ ${childIndent}</body_markdown>
     });
     return byParent;
   };
-  const descendantsToXmlWithIndex = (childrenByParent, parentId, depth) => {
+  const descendantsToXmlWithIndex = (childrenByParent, parentId, depth, path = new Set()) => {
+    if (path.has(parentId)) return "";
+    const nextPath = new Set(path);
+    nextPath.add(parentId);
     const children = childrenByParent.get(parentId) || [];
     if (children.length === 0) return "";
     const indent = makeIndent(depth);
@@ -11865,13 +12004,16 @@ ${childIndent}</body_markdown>
     return children.map((child) => {
       const author = getAuthorLabelForAI(child, "unknown");
       const md = child.contents?.markdown || child.htmlBody || "(no content)";
+      const postedAtTag = postedAtToXml(child, childIndent);
       let xml = `${indent}<comment id="${escapeXmlAttr(child._id)}" author="${escapeXmlAttr(author)}">
 `;
+      xml += postedAtTag;
+      xml += voteContextToXml(child, childIndent);
       xml += `${childIndent}<body_markdown>
 ${escapeXmlText(md)}
 ${childIndent}</body_markdown>
 `;
-      const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1);
+      const grandChildrenXml = descendantsToXmlWithIndex(childrenByParent, child._id, depth + 1, nextPath);
       if (grandChildrenXml) {
         xml += `${grandChildrenXml}
 `;
@@ -16503,7 +16645,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -18622,7 +18764,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.716"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

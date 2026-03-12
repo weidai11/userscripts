@@ -223,7 +223,7 @@ export class ReadTracker {
 
         if (shouldAdvance) {
             Logger.info(`Advancing session start to ${nextLoadFrom}`);
-            setLoadFrom(nextLoadFrom);
+            setLoadFrom(nextLoadFrom, { source: 'session-advance' });
             this.hasAdvancedThisBatch = true;
 
             // [PR-READ-06] Cleanup: remove known read IDs older than the new loadFrom.
@@ -249,7 +249,7 @@ export class ReadTracker {
             }
 
             if (removedCount > 0) {
-                setReadState(readState);
+                setReadState(readState, { source: 'session-advance' });
                 Logger.info(`Cleaned up read state: removed ${removedCount} items older than ${nextLoadFrom}`);
             }
         }

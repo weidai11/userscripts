@@ -154,13 +154,13 @@ export async function setupMockEnvironment(page: Page, options?: MockSetupOption
         'power-reader-read': '{}',
         'power-reader-debug-mode': opts.appDebugMode ?? false,
         'power-reader-verbose': opts.appVerbose ?? false,
-        'power-reader-scrollMarkDelay': opts.testMode ? 100 : 5000,
+        'power-reader-scrollMarkDelay': opts.testMode ? 100 : 2000,
         // Also provide prefixed keys for EA Forum tests
         'ea-power-reader-read-from': '__LOAD_RECENT__',
         'ea-power-reader-read': '{}',
         'ea-power-reader-debug-mode': opts.appDebugMode ?? false,
         'ea-power-reader-verbose': opts.appVerbose ?? false,
-        'ea-power-reader-scrollMarkDelay': opts.testMode ? 100 : 5000,
+        'ea-power-reader-scrollMarkDelay': opts.testMode ? 100 : 2000,
     };
 
     const scrapedReactionsJson = opts.scrapedReactions ? JSON.stringify({

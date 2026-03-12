@@ -4,21 +4,33 @@ import { initPowerReader } from './helpers/setup';
 test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
 
     test('[PR-AI-04] Shift-G over a comment includes descendants in XML payload', async ({ page }) => {
-        const posts = [{ _id: 'p1', title: 'Post 1', postedAt: new Date().toISOString() }];
+        const posts = [{ _id: 'p1', title: 'Post 1', postedAt: '2026-02-01T00:00:00.000Z' }];
         const comments = [
             {
                 _id: 'c1', postId: 'p1', htmlBody: 'Parent Comment',
-                user: { username: 'Author1' }, postedAt: new Date().toISOString(),
+                user: { username: 'Author1' }, postedAt: '2026-02-01T00:00:01.000Z',
                 contents: { markdown: 'Parent Markdown' }
             },
             {
                 _id: 'c2', postId: 'p1', parentCommentId: 'c1', htmlBody: 'Child Comment',
-                user: { username: 'Author2' }, postedAt: new Date().toISOString(),
+                user: { username: 'Author2' }, postedAt: '2026-02-01T00:00:02.000Z',
+                baseScore: 22, voteCount: 9, extendedScore: {
+                    reacts: {
+                        agreed: [
+                            { userId: 'u-agree-1', reactType: 'agreed' },
+                            { userId: 'u-funny-1', reactType: 'funny' }
+                        ],
+                        disagree: [{ userId: 'u-disagree-1', reactType: 'disagreed' }]
+                    }
+                },
+                currentUserExtendedVote: { reacts: [{ userId: 'viewer-1', react: 'disagreed' }] },
                 contents: { markdown: 'Child Markdown' }
             },
             {
                 _id: 'c3', postId: 'p1', parentCommentId: 'c2', htmlBody: 'Grandchild Comment',
-                user: { username: 'Author3' }, postedAt: new Date().toISOString(),
+                user: { username: 'Author3' }, postedAt: '2026-02-01T00:00:03.000Z',
+                baseScore: 8, voteCount: 5, extendedScore: { agreement: 2, agreementVoteCount: 6 },
+                currentUserExtendedVote: { agreement: 'smallUpvote' },
                 contents: { markdown: 'Grandchild Markdown' }
             }
         ];
@@ -54,6 +66,10 @@ test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
         expect(payload).toContain('<comment id="c3"');
         expect(payload).toContain('Child Markdown');
         expect(payload).toContain('Grandchild Markdown');
+        expect(payload).toContain('<posted_at>2026-02-01T00:00:02.000Z</posted_at>');
+        expect(payload).toContain('<karma score="22" vote_count="9" />');
+        expect(payload).toContain('<agreement_eaf agree_count="1" disagree_count="1" current_user_agree="false" current_user_disagree="true" />');
+        expect(payload).toContain('<agreement_lw score="2" vote_count="6" current_user_vote="smallUpvote" />');
 
         // Verify structure (nesting)
         // c2 should be inside descendants
@@ -65,16 +81,17 @@ test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
     });
 
     test('Shift+Click on [g] button includes descendants in XML payload', async ({ page }) => {
-        const posts = [{ _id: 'p1', title: 'Post 1', postedAt: new Date().toISOString() }];
+        const posts = [{ _id: 'p1', title: 'Post 1', postedAt: '2026-03-01T00:00:00.000Z' }];
         const comments = [
             {
                 _id: 'c1', postId: 'p1', htmlBody: 'Parent Comment',
-                user: { username: 'Author1' }, postedAt: new Date().toISOString(),
+                user: { username: 'Author1' }, postedAt: '2026-03-01T00:00:01.000Z',
                 contents: { markdown: 'Parent Markdown' }
             },
             {
                 _id: 'c2', postId: 'p1', parentCommentId: 'c1', htmlBody: 'Child Comment',
-                user: { username: 'Author2' }, postedAt: new Date().toISOString(),
+                user: { username: 'Author2' }, postedAt: '2026-03-01T00:00:02.000Z',
+                baseScore: 6, voteCount: 2,
                 contents: { markdown: 'Child Markdown' }
             }
         ];
@@ -103,5 +120,7 @@ test.describe('AI Studio Descendants: Shift-G and Shift+Click', () => {
 
         const payload = await page.evaluate(() => (window as any).__LAST_PAYLOAD);
         expect(payload).toContain('<comment id="c2"');
+        expect(payload).toContain('<posted_at>2026-03-01T00:00:02.000Z</posted_at>');
+        expect(payload).toContain('<karma score="6" vote_count="2" />');
     });
 });

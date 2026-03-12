@@ -35,7 +35,7 @@ test('[PR-READ-02] Comments are marked read automatically when content is less t
     await expect(comment).toBeVisible();
     await expect(comment).not.toHaveClass(/read/);
 
-    // 2. Wait for the ReadTracker's initial check and the 5s mark delay (or test-mode instant mark)
+    // 2. Wait for the ReadTracker's initial check and the 2s mark delay (or test-mode instant mark)
     // The tracker has a 1000ms delay before initial check, and then a scrollMarkDelay.
     // In testMode: true, the delay should be 0 or very small.
 

@@ -51,6 +51,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - **[PR-SYNC-03]** Remote state is stored in Firestore at `pr_sync_v1/{site}/nodes/{syncNode}` using REST `documents:commit` with single-write CAS preconditions (`exists=false` or `updateTime`).
 - **[PR-SYNC-04]** Synced subset in v3: `read`, `loadFrom`, `authorPrefs`, and `aiStudioPrefix`. `read/loadFrom/authorPrefs` use clear-epoch barriers for durable reset/overflow clears; `aiStudioPrefix` uses versioned last-write-wins merge.
 - **[PR-SYNC-05]** `/reader/reset` clears local syncable fields immediately and attempts an authoritative remote clear; if identity/secret is unavailable, a pending-reset marker is persisted for replay.
+- **[PR-PERSIST-102]** Session-advance writes (`loadFrom` advancement and related read-state cleanup) request an immediate sync flush scheduling pass, while still honoring push-floor, quota, and local-budget gates.
 
 #### Persistence Plan v3 Requirement IDs (`PR-PERSIST-*`)
 - PR-PERSIST-01: deterministic sync node derivation
@@ -154,6 +155,7 @@ LW Power Reader is a userscript that provides an enhanced interface for reading 
 - [PR-PERSIST-99]: idle/visibility resume pull requests route through existing `performPullAndMerge()` gating (quota + cross-tab `lastPull`)
 - [PR-PERSIST-100]: hot-patch timestamps prefer `data-posted-at-ms`, fallback to `time[datetime]`, and avoid unread downgrades when timestamps are missing/invalid
 - [PR-PERSIST-101]: successful CAS writes must clear dirty flags only for fields unchanged since commit start; local edits that occur during an in-flight commit remain dirty for the next flush
+- [PR-PERSIST-102]: session-advance applies trigger throttled priority flush scheduling (`delay=0`) without bypassing push-floor/quota/local-budget guards
 
 ---
 
@@ -294,7 +296,7 @@ Comments under a post are organized hierarchically:
     - **Comments**: Marked when the bottom of `.pr-comment-body` is passed. If a comment is collapsed, the bottom of the `.pr-comment-meta` (header) is used as the threshold.
 - **[PR-READ-02]** **Bottom of Page Logic**: Bottom detection uses a small tolerance margin (currently ~150px from document end) for cross-browser and zoom robustness. Once in this bottom zone, all currently visible unread comments become eligible for read-marking (using the same delay as the normal scroll-past threshold).
 - **[PR-READ-03]** **Session Advancement**: When the "Bottom of Page" condition is met, update the stored `loadFrom` value to the ISO timestamp of the **newest comment from the initial comments batch PLUS 1 millisecond** (excluding smart-load and user-triggered loads). Advancement triggers unconditionally at bottom-of-page (no additional check on unread count). Startup exception: if unread count is already zero on initial render and comments are loaded, this same advancement flow may run immediately.
-- **[PR-READ-04]** **5-second delay** before marking - uses `setTimeout` to avoid marking during fast scrolling.
+- **[PR-READ-04]** **2-second delay** before marking - uses `setTimeout` to avoid marking during fast scrolling.
 - **[PR-READ-05]** **Unread Persistence**: On page refresh, only unread items are shown with full content. Read comments with fewer than 2 unread descendants are collapsed into minimal placeholder bars (preserving thread structure context); read comments with 2+ unread descendants are rendered in full with greyed-out styling. Placeholders can be expanded on click, **or automatically when navigated to via `[^]` or `[t]`.**
 - **[PR-READ-06]** **Cleanup**: During session advancement (bottom-of-page processing), read IDs with known `postedAt` older than the new `loadFrom` are removed. IDs not found in the current loaded set are preserved to avoid cross-tab/session data loss.
 - **[PR-READ-07]** **Implicit Read State (Temporal Boundary)**: Any item (Post or Comment) with a `postedAt` timestamp older than the current `loadFrom` value is treated as **Read** by default, even if its ID is not present in the explicit `readState` storage. This ensures that old posts anchoring new comments are correctly greyed out and excluded from unread counts.
@@ -629,6 +631,8 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
     - Press **`g`** to send to Google AI Studio.
     - Press **`m`** to send to Arena.ai Max.
 - **[PR-AI-02]** **Automation**: Opens the respective AI site, injects thread XML and prompt, and submits it in-page.
+- **[PR-AI-10]** **Vote + Date Context in AI Payload**: Thread XML MUST include `postedAt` timestamps and vote metadata for every serialized post/comment (lineage and descendants). Vote metadata MUST include karma score + vote count, and agreement data in both forum representations when available: LW-style agreement axis fields (`agreement`, `agreementVoteCount`, current user agreement vote) and EAF-style `agree`/`disagree` reaction counts + current-user `agree`/`disagree` state.
+- **[PR-AI-11]** **Linkpost URL Context in AI Payload**: For link posts only, AI thread XML MUST include the normalized linkpost target URL on the post entry via `<link_url>`. Comment entries (including descendants) MUST NOT include a separate linkpost URL tag.
 - **[PR-AI-03]** **Handoff-Only Output**: The reader MUST NOT render provider responses in-page. Output is viewed directly in the opened AI Studio/Arena tab.
 - **[PR-AI-04]** **Descendant Mode**: Shift-triggered AI actions (`Shift+G`, `Shift+M`, and Shift-click variants) include descendants in the payload, with the large-descendant confirmation policy applied.
 - **[PR-AI-05]** **Depth**: Recursively fetches parent comments up to the root (no fixed depth cap), with cycle-safe traversal to avoid infinite loops on malformed parent links.
