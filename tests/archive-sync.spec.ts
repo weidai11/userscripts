@@ -82,6 +82,57 @@ test.describe('Power Reader Archive Sync', () => {
         expect(statusText?.toLowerCase()).toMatch(/fail|error|not found/);
     });
 
+    test('[PR-UARCH-48][PR-UARCH-03][PR-UARCH-04] empty-cache boot defers first render until sync completes', async ({ page }) => {
+        const username = `EmptyCacheDeferredRender_${Date.now()}`;
+        const userId = 'u-empty-cache-deferred-render';
+        const delayedPost = {
+            _id: 'p-delayed-first',
+            title: 'Delayed First Post',
+            slug: 'delayed-first-post',
+            pageUrl: 'https://lesswrong.com/posts/p-delayed-first/delayed-first-post',
+            postedAt: '2025-01-02T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 2,
+            commentCount: 0,
+            htmlBody: '<p>Delayed first post body</p>',
+            contents: { markdown: 'Delayed first post body' },
+            user: { _id: userId, username, displayName: 'Deferred Render User', slug: 'deferred-render-user', karma: 50 }
+        };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+                if (query.includes('UserBySlug') || query.includes('user(input:')) {
+                    return { data: { user: { _id: '${userId}', username: '${username}', displayName: 'Deferred Render User' } } };
+                }
+                if (query.includes('GetUserComments')) {
+                    return { data: { comments: { results: [] } } };
+                }
+                if (query.includes('GetUserPosts')) {
+                    return new Promise((resolve) => {
+                        setTimeout(() => resolve({ data: { posts: { results: [${JSON.stringify(delayedPost)}] } } }), 6500);
+                    });
+                }
+            `
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+
+        // Default idle-render timeout is 5s. Keep fetch pending longer and verify we
+        // still do not render while local cache was empty at startup.
+        await page.waitForTimeout(5600);
+        await expect(page.locator('#archive-dashboard')).toBeVisible();
+        await expect(page.locator('#archive-feed .pr-item')).toHaveCount(0);
+
+        await waitForArchiveRenderComplete(page);
+        await expect(page.locator('.pr-item h2')).toHaveText('Delayed First Post');
+        await expect(page.locator('#archive-status')).toContainText('Sync complete.');
+        await expect(page.locator('#archive-status')).not.toContainText('Please refresh page to view latest content.');
+    });
+
     test('sync watermark uses sync-start and does not skip in-flight items [PR-UARCH-05]', async ({ page }) => {
         const username = `WatermarkUser_${Date.now()}`;
         const userId = 'u-watermark';
@@ -900,5 +951,4 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-second-page"]')).toBeVisible();
     });
 });
-
 

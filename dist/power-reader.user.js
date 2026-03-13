@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.719
+// @version    1.2.720
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.719"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.720"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9091,7 +9091,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9271,7 +9271,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -16645,7 +16645,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17833,6 +17833,7 @@ sortCanonicalItems() {
       let isSyncInProgress = false;
       let pendingRetryCount = 0;
       let hasInitialRender = false;
+      let startedWithEmptyCache = false;
       let syncCompleted = false;
       let shouldShowRefreshRequiredStatus = false;
       let resolveInitialRender = null;
@@ -17860,7 +17861,7 @@ sortCanonicalItems() {
         maybeSetRefreshRequiredStatus();
       };
       const scheduleRenderOnNetworkIdle = () => {
-        if (hasInitialRender || !isCurrentRun()) return;
+        if (startedWithEmptyCache || hasInitialRender || !isCurrentRun()) return;
         clearNetworkIdleRenderTimer();
         networkIdleRenderTimer = window.setTimeout(() => {
           networkIdleRenderTimer = null;
@@ -18044,6 +18045,7 @@ sortCanonicalItems() {
       persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
       contextSearchItemsCache = null;
       if (!isCurrentRun()) return;
+      startedWithEmptyCache = cached.items.length === 0;
       if (cached.items.length > 0) {
         setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
       } else {
@@ -18058,8 +18060,12 @@ sortCanonicalItems() {
       if (!isCurrentRun()) return;
       if (await restartArchiveInitIfDetached("sync completion")) return;
       if (!hasInitialRender) {
-        await initialRenderPromise;
-        if (!isCurrentRun()) return;
+        if (startedWithEmptyCache) {
+          renderInitialSnapshot();
+        } else {
+          await initialRenderPromise;
+          if (!isCurrentRun()) return;
+        }
       }
       maybeSetRefreshRequiredStatus();
     } catch (err) {
@@ -18764,7 +18770,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.719"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

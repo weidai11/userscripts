@@ -2080,6 +2080,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let isSyncInProgress = false;
     let pendingRetryCount = 0;
     let hasInitialRender = false;
+    let startedWithEmptyCache = false;
     let syncCompleted = false;
     let shouldShowRefreshRequiredStatus = false;
     let resolveInitialRender: (() => void) | null = null;
@@ -2111,7 +2112,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     };
 
     const scheduleRenderOnNetworkIdle = () => {
-      if (hasInitialRender || !isCurrentRun()) return;
+      if (startedWithEmptyCache || hasInitialRender || !isCurrentRun()) return;
       clearNetworkIdleRenderTimer();
       networkIdleRenderTimer = window.setTimeout(() => {
         networkIdleRenderTimer = null;
@@ -2347,6 +2348,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
     contextSearchItemsCache = null;
     if (!isCurrentRun()) return;
+    startedWithEmptyCache = cached.items.length === 0;
 
     if (cached.items.length > 0) {
       setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
@@ -2356,8 +2358,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     }
     markSyncActivity();
 
-    // 2. Perform sync in background and render exactly once when network activity
-    // has been idle for a short window.
+    // 2. Perform sync in background.
+    // - If startup cache was non-empty: render once when network has been idle for a short window.
+    // - If startup cache was empty: defer first render until sync attempt completes.
     const syncPromise = performSync();
     scheduleRenderOnNetworkIdle();
     if (!isCurrentRun()) return;
@@ -2367,9 +2370,13 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     if (!isCurrentRun()) return;
     if (await restartArchiveInitIfDetached('sync completion')) return;
     if (!hasInitialRender) {
-      // Keep waiting on the existing idle timer scheduled from sync activity.
-      await initialRenderPromise;
-      if (!isCurrentRun()) return;
+      if (startedWithEmptyCache) {
+        renderInitialSnapshot();
+      } else {
+        // Keep waiting on the existing idle timer scheduled from sync activity.
+        await initialRenderPromise;
+        if (!isCurrentRun()) return;
+      }
     }
     maybeSetRefreshRequiredStatus();
 
