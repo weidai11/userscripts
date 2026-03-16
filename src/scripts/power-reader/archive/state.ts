@@ -31,6 +31,7 @@ export interface ArchiveState {
     // Contextual third-party items are persisted separately in IndexedDB contextual cache.
     items: (Post | Comment)[];
     itemById: Map<string, Post | Comment>;
+    canonicalVersion: number;
 
     // Caching/Sync
     lastSyncDate: string | null; // Watermark for incremental updates
@@ -57,6 +58,7 @@ export const createInitialArchiveState = (username: string): ArchiveState => ({
     userId: null,
     items: [],
     itemById: new Map(),
+    canonicalVersion: 0,
     lastSyncDate: null,
     viewMode: 'card',
     sortBy: 'date',

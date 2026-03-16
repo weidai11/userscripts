@@ -24,7 +24,6 @@ export class ArchiveUIHost implements UIHost {
     private feedContainer: HTMLElement | null = null;
     private renderCallback: (() => void | Promise<void>) | null = null;
     private searchStateRevision = 0;
-    private canonicalStateRevision = 0;
 
     constructor(archiveState: ArchiveState, feedContainer: HTMLElement | null, renderCallback?: () => void | Promise<void>) {
         this.archiveState = archiveState;
@@ -66,16 +65,12 @@ export class ArchiveUIHost implements UIHost {
       return this.searchStateRevision;
     }
 
-    public getCanonicalStateRevision(): number {
-      return this.canonicalStateRevision;
-    }
-
     private bumpSearchStateRevision(): void {
       this.searchStateRevision += 1;
     }
 
   private bumpCanonicalStateRevision(): void {
-      this.canonicalStateRevision += 1;
+      this.archiveState.canonicalVersion += 1;
     }
 
   private rebuildCanonicalItemIndex(): void {

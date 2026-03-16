@@ -921,6 +921,30 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let viewModeRefreshTimer: number | null = null;
     let pendingSortResetMessage: string | null = null;
 
+    const rebuildCanonicalItemMap = (): void => {
+      state.itemById.clear();
+      for (const item of state.items) {
+        state.itemById.set(item._id, item);
+      }
+    };
+
+    const invalidateAuthoredSearchIndex = (): void => {
+      authoredIndexItemsRef = null;
+      authoredIndexCanonicalRevision = -1;
+      contextSearchItemsCache = null;
+    };
+
+    const markCanonicalItemsMutated = (): void => {
+      rebuildCanonicalItemMap();
+      state.canonicalVersion += 1;
+      invalidateAuthoredSearchIndex();
+    };
+
+    const replaceCanonicalItems = (items: ArchiveItem[]): void => {
+      state.items = items;
+      markCanonicalItemsMutated();
+    };
+
     const getScopeButtons = (): HTMLButtonElement[] =>
       scopeContainer
         ? Array.from(scopeContainer.querySelectorAll('.pr-seg-btn')) as HTMLButtonElement[]
@@ -1291,7 +1315,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     };
 
     const syncAuthoredSearchIndex = (): void => {
-      const canonicalRevision = uiHost.getCanonicalStateRevision();
+      const canonicalRevision = state.canonicalVersion;
       if (authoredIndexItemsRef === state.items && authoredIndexCanonicalRevision === canonicalRevision) return;
       searchManager.setAuthoredItems(state.items, canonicalRevision);
       authoredIndexItemsRef = state.items;
@@ -1595,12 +1619,11 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       syncErrorState.abortController?.abort();
     }, { once: true });
 
-    // Helper to batch updates to map
-    const updateItemMap = (items: ArchiveItem[]) => {
+    // Helper to reconcile canonical map/index trackers after direct state mutations
+    const updateItemMap = () => {
       if (!isCurrentRun()) return;
-      items.forEach(i => state.itemById.set(i._id, i));
+      markCanonicalItemsMutated();
       syncAuthoredSearchIndex();
-      contextSearchItemsCache = null;
 
       // Update UI Host when we have new items
       // We trigger a re-sync of reader state
@@ -2101,7 +2124,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     const renderInitialSnapshot = () => {
       if (!isCurrentRun() || hasInitialRender) return;
       hasInitialRender = true;
-      updateItemMap(state.items);
+      updateItemMap();
       dashboardEl!.style.display = 'none';
       signalReady();
       resolveInitialRender?.();
@@ -2171,13 +2194,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           ]);
           if (!isCurrentRun()) return;
 
-          // Update in-memory state to include items saved by previous failed attempts
-          state.items = currentCached.items;
+          // Update in-memory canonical state to include items saved by previous failed attempts
+          replaceCanonicalItems(currentCached.items);
           persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
-          contextSearchItemsCache = null;
-
-          state.itemById.clear();
-          state.items.forEach((item: any) => state.itemById.set(item._id, item));
 
           if (attemptNumber > 1) {
             setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
@@ -2206,7 +2225,8 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
               state,
               watermarks,
               (msg) => setStatus(msg, false, true),
-              syncAbortController.signal
+              syncAbortController.signal,
+              markCanonicalItemsMutated
             );
           } finally {
             syncErrorState.abortController.signal.removeEventListener('abort', abortSyncAttempt);
@@ -2344,9 +2364,8 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       })
     ]);
 
-    state.items = cached.items;
+    replaceCanonicalItems(cached.items);
     persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
-    contextSearchItemsCache = null;
     if (!isCurrentRun()) return;
     startedWithEmptyCache = cached.items.length === 0;
 
@@ -2440,7 +2459,8 @@ const syncArchive = async (
     lastSyncDate_posts: string | null;
   },
   onStatus: (msg: string) => void,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  onCanonicalMutated?: () => void
 ) => {
   // Check for abort before starting
   if (abortSignal?.aborted) {
@@ -2525,6 +2545,7 @@ const syncArchive = async (
 
     // Re-sort (Default to date for the background state)
     state.items.sort((a: any, b: any) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+    onCanonicalMutated?.();
 
     // Final watermark update to sync start time to cover any items created during sync
     await saveArchiveData(username, [], {

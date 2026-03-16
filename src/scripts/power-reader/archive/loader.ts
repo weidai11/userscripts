@@ -46,27 +46,37 @@ interface TimeFieldFallbackConfig {
     cursorField: CursorField;
 }
 
-const isValidArchiveItem = <T extends { _id: string; postedAt: string }>(
-    item: T | null | undefined
-): item is T => {
-    return !!item
-        && typeof item._id === 'string'
-        && item._id.length > 0
-        && typeof item.postedAt === 'string'
-        && item.postedAt.length > 0;
-};
+const CURSOR_FALLBACK_ORDER: CursorField[] = ['postedAt', 'lastEditedAt', 'modifiedAt'];
 
 const getCursorTimestampValue = (item: unknown, cursorField: CursorField): string | null => {
     const source = item as any;
-    const primary = source?.[cursorField];
-    if (typeof primary === 'string' && primary.length > 0) {
-        return primary;
+    const orderedFields: CursorField[] = [cursorField];
+    for (const fallback of CURSOR_FALLBACK_ORDER) {
+        if (fallback !== cursorField) {
+            orderedFields.push(fallback);
+        }
     }
-    const fallback = source?.postedAt;
-    if (typeof fallback === 'string' && fallback.length > 0) {
-        return fallback;
+    for (const field of orderedFields) {
+        const value = source?.[field];
+        if (typeof value === 'string' && value.length > 0 && parseTimestampMs(value) !== null) {
+            return value;
+        }
     }
     return null;
+};
+
+const normalizeArchiveItem = <T extends { _id: string; postedAt: string }>(
+    item: unknown,
+    cursorField: CursorField
+): T | null => {
+    const source = item as any;
+    if (!source || typeof source._id !== 'string' || source._id.length === 0) return null;
+    const timestamp = getCursorTimestampValue(source, cursorField);
+    if (!timestamp) return null;
+    if (typeof source.postedAt === 'string' && source.postedAt.length > 0 && parseTimestampMs(source.postedAt) !== null) {
+        return source as T;
+    }
+    return { ...source, postedAt: timestamp } as T;
 };
 
 const getCursorTimestampFromBatch = <T extends { postedAt: string }>(
@@ -256,6 +266,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
     let activeCursorField = cursorField;
     let fallbackActivated = false;
     let batchNumber = 0;
+    let nonAdvancingCursorRetries = 0;
     let previousBatchTail: { id: string | null; timestamp: string | null } | null = null;
 
     while (hasMore) {
@@ -328,7 +339,9 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 rawResults = await requestBatch(fetchLimitUsed);
             }
 
-            const results = rawResults.filter(isValidArchiveItem);
+            const results = rawResults
+                .map(item => normalizeArchiveItem<T>(item, activeCursorField))
+                .filter((item): item is T => item !== null);
             const duration = Date.now() - startTime;
 
             Logger.debug(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
@@ -406,11 +419,38 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                 }
                 const nextCursor = nextCursorLatest;
                 if (!nextCursor) {
+                    const tailDidNotAdvance = Boolean(
+                        batchSummary.lastId &&
+                        batchSummary.lastTimestamp &&
+                        previousBatchTail?.id &&
+                        previousBatchTail?.timestamp &&
+                        batchSummary.lastId === previousBatchTail.id &&
+                        batchSummary.lastTimestamp === previousBatchTail.timestamp
+                    );
+
+                    if (rawResults.length > 0 && nonAdvancingCursorRetries < 2 && !tailDidNotAdvance) {
+                        nonAdvancingCursorRetries += 1;
+                        const retriedLimit = Math.min(
+                            MAX_PAGE_SIZE,
+                            Math.max(currentLimit, Math.round(fetchLimitUsed * 1.5))
+                        );
+                        Logger.warn(
+                            `Archive ${key}: non-advancing cursor detected (attempt ${nonAdvancingCursorRetries}/2); retrying same cursor with limit ${retriedLimit}.`
+                        );
+                        currentLimit = retriedLimit;
+                        previousBatchTail = {
+                            id: batchSummary.lastId,
+                            timestamp: batchSummary.lastTimestamp
+                        };
+                        continue;
+                    }
                     const stopReason = 'cursor_not_advancing';
                     const hint = !nextCursorTail
-                        ? (batchSummary.missingTimestampCount === rawResults.length
-                            ? `all_raw_items_missing_${cursorField}`
-                            : `tail_item_missing_or_invalid_${cursorField}`)
+                        ? (tailDidNotAdvance
+                            ? 'tail_unchanged_after_retry'
+                            : (batchSummary.missingTimestampCount === rawResults.length
+                                ? `all_raw_items_missing_${activeCursorField}`
+                                : `tail_item_missing_or_invalid_${activeCursorField}`))
                         : (batchSummary.uniqueTimestampCount <= 1
                             ? 'batch_collapsed_to_single_timestamp'
                             : 'server_returned_non_advancing_page');
@@ -451,6 +491,7 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
                     hasMore = false;
                 } else {
                     afterCursor = nextCursor;
+                    nonAdvancingCursorRetries = 0;
                 }
                 previousBatchTail = {
                     id: batchSummary.lastId,
@@ -590,7 +631,9 @@ export const fetchCommentsByIds = async (commentIds: string[], username?: string
         }
 
         if (response.comments?.results) {
-            const valid = response.comments.results.filter(isValidArchiveItem);
+            const valid = response.comments.results
+                .map(item => normalizeArchiveItem<Comment>(item, 'lastEditedAt'))
+                .filter((item): item is Comment => item !== null);
             if (valid.length !== response.comments.results.length) {
                 Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
             }

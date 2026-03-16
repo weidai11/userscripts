@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.720
+// @version    1.2.721
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.720"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.721"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9091,7 +9091,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.721"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9271,7 +9271,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.721"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -13417,6 +13417,7 @@ getPromptPrefix: getAIStudioPrefix,
     userId: null,
     items: [],
     itemById: new Map(),
+    canonicalVersion: 0,
     lastSyncDate: null,
     viewMode: "card",
     sortBy: "date",
@@ -13774,20 +13775,32 @@ getPromptPrefix: getAIStudioPrefix,
     allowPartialData: true,
     toleratedErrorPatterns: [/Unable to find document/i, /commentGetPageUrl/i]
   };
-  const isValidArchiveItem = (item) => {
-    return !!item && typeof item._id === "string" && item._id.length > 0 && typeof item.postedAt === "string" && item.postedAt.length > 0;
-  };
+  const CURSOR_FALLBACK_ORDER = ["postedAt", "lastEditedAt", "modifiedAt"];
   const getCursorTimestampValue = (item, cursorField) => {
     const source = item;
-    const primary = source?.[cursorField];
-    if (typeof primary === "string" && primary.length > 0) {
-      return primary;
+    const orderedFields = [cursorField];
+    for (const fallback of CURSOR_FALLBACK_ORDER) {
+      if (fallback !== cursorField) {
+        orderedFields.push(fallback);
+      }
     }
-    const fallback = source?.postedAt;
-    if (typeof fallback === "string" && fallback.length > 0) {
-      return fallback;
+    for (const field of orderedFields) {
+      const value = source?.[field];
+      if (typeof value === "string" && value.length > 0 && parseTimestampMs(value) !== null) {
+        return value;
+      }
     }
     return null;
+  };
+  const normalizeArchiveItem = (item, cursorField) => {
+    const source = item;
+    if (!source || typeof source._id !== "string" || source._id.length === 0) return null;
+    const timestamp = getCursorTimestampValue(source, cursorField);
+    if (!timestamp) return null;
+    if (typeof source.postedAt === "string" && source.postedAt.length > 0 && parseTimestampMs(source.postedAt) !== null) {
+      return source;
+    }
+    return { ...source, postedAt: timestamp };
   };
   const getCursorTimestampFromBatch = (rawItems, cursorField) => {
     for (let i = rawItems.length - 1; i >= 0; i--) {
@@ -13917,6 +13930,7 @@ getPromptPrefix: getAIStudioPrefix,
     let activeCursorField = cursorField;
     let fallbackActivated = false;
     let batchNumber = 0;
+    let nonAdvancingCursorRetries = 0;
     let previousBatchTail = null;
     while (hasMore) {
       const startTime = Date.now();
@@ -13976,7 +13990,7 @@ getPromptPrefix: getAIStudioPrefix,
           fetchLimitUsed = expandedLimit;
           rawResults = await requestBatch(fetchLimitUsed);
         }
-        const results = rawResults.filter(isValidArchiveItem);
+        const results = rawResults.map((item) => normalizeArchiveItem(item, activeCursorField)).filter((item) => item !== null);
         const duration = Date.now() - startTime;
         Logger.debug(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
         if (results.length !== rawResults.length) {
@@ -14035,8 +14049,27 @@ getPromptPrefix: getAIStudioPrefix,
           }
           const nextCursor = nextCursorLatest;
           if (!nextCursor) {
+            const tailDidNotAdvance = Boolean(
+              batchSummary.lastId && batchSummary.lastTimestamp && previousBatchTail?.id && previousBatchTail?.timestamp && batchSummary.lastId === previousBatchTail.id && batchSummary.lastTimestamp === previousBatchTail.timestamp
+            );
+            if (rawResults.length > 0 && nonAdvancingCursorRetries < 2 && !tailDidNotAdvance) {
+              nonAdvancingCursorRetries += 1;
+              const retriedLimit = Math.min(
+                MAX_PAGE_SIZE,
+                Math.max(currentLimit, Math.round(fetchLimitUsed * 1.5))
+              );
+              Logger.warn(
+                `Archive ${key}: non-advancing cursor detected (attempt ${nonAdvancingCursorRetries}/2); retrying same cursor with limit ${retriedLimit}.`
+              );
+              currentLimit = retriedLimit;
+              previousBatchTail = {
+                id: batchSummary.lastId,
+                timestamp: batchSummary.lastTimestamp
+              };
+              continue;
+            }
             const stopReason = "cursor_not_advancing";
-            const hint = !nextCursorTail ? batchSummary.missingTimestampCount === rawResults.length ? `all_raw_items_missing_${cursorField}` : `tail_item_missing_or_invalid_${cursorField}` : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
+            const hint = !nextCursorTail ? tailDidNotAdvance ? "tail_unchanged_after_retry" : batchSummary.missingTimestampCount === rawResults.length ? `all_raw_items_missing_${activeCursorField}` : `tail_item_missing_or_invalid_${activeCursorField}` : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
             Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
               key,
               cursorField: activeCursorField,
@@ -14074,6 +14107,7 @@ getPromptPrefix: getAIStudioPrefix,
             hasMore = false;
           } else {
             afterCursor = nextCursor;
+            nonAdvancingCursorRetries = 0;
           }
           previousBatchTail = {
             id: batchSummary.lastId,
@@ -14175,7 +14209,7 @@ getPromptPrefix: getAIStudioPrefix,
         continue;
       }
       if (response.comments?.results) {
-        const valid = response.comments.results.filter(isValidArchiveItem);
+        const valid = response.comments.results.map((item) => normalizeArchiveItem(item, "lastEditedAt")).filter((item) => item !== null);
         if (valid.length !== response.comments.results.length) {
           Logger.warn(`Context fetch: dropped ${response.comments.results.length - valid.length} invalid comments from partial GraphQL response.`);
         }
@@ -15156,7 +15190,6 @@ getPromptPrefix: getAIStudioPrefix,
     feedContainer = null;
     renderCallback = null;
     searchStateRevision = 0;
-    canonicalStateRevision = 0;
     constructor(archiveState, feedContainer, renderCallback) {
       this.archiveState = archiveState;
       this.feedContainer = feedContainer;
@@ -15189,14 +15222,11 @@ getPromptPrefix: getAIStudioPrefix,
     getSearchStateRevision() {
       return this.searchStateRevision;
     }
-    getCanonicalStateRevision() {
-      return this.canonicalStateRevision;
-    }
     bumpSearchStateRevision() {
       this.searchStateRevision += 1;
     }
     bumpCanonicalStateRevision() {
-      this.canonicalStateRevision += 1;
+      this.archiveState.canonicalVersion += 1;
     }
     rebuildCanonicalItemIndex() {
       this.canonicalItemIndexById.clear();
@@ -16645,7 +16675,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.721"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -16912,6 +16942,26 @@ sortCanonicalItems() {
       let viewFallbackValue = DEFAULT_VIEW;
       let viewModeRefreshTimer = null;
       let pendingSortResetMessage = null;
+      const rebuildCanonicalItemMap = () => {
+        state2.itemById.clear();
+        for (const item of state2.items) {
+          state2.itemById.set(item._id, item);
+        }
+      };
+      const invalidateAuthoredSearchIndex = () => {
+        authoredIndexItemsRef = null;
+        authoredIndexCanonicalRevision = -1;
+        contextSearchItemsCache = null;
+      };
+      const markCanonicalItemsMutated = () => {
+        rebuildCanonicalItemMap();
+        state2.canonicalVersion += 1;
+        invalidateAuthoredSearchIndex();
+      };
+      const replaceCanonicalItems = (items) => {
+        state2.items = items;
+        markCanonicalItemsMutated();
+      };
       const getScopeButtons = () => scopeContainer ? Array.from(scopeContainer.querySelectorAll(".pr-seg-btn")) : [];
       const getScopeValue = () => {
         if (!scopeContainer) return scopeFallbackValue;
@@ -17189,7 +17239,7 @@ sortCanonicalItems() {
         renderTopStatusLine();
       };
       const syncAuthoredSearchIndex = () => {
-        const canonicalRevision = uiHost.getCanonicalStateRevision();
+        const canonicalRevision = state2.canonicalVersion;
         if (authoredIndexItemsRef === state2.items && authoredIndexCanonicalRevision === canonicalRevision) return;
         searchManager.setAuthoredItems(state2.items, canonicalRevision);
         authoredIndexItemsRef = state2.items;
@@ -17433,11 +17483,10 @@ sortCanonicalItems() {
       runAbortController.signal.addEventListener("abort", () => {
         syncErrorState.abortController?.abort();
       }, { once: true });
-      const updateItemMap = (items) => {
+      const updateItemMap = () => {
         if (!isCurrentRun()) return;
-        items.forEach((i) => state2.itemById.set(i._id, i));
+        markCanonicalItemsMutated();
         syncAuthoredSearchIndex();
-        contextSearchItemsCache = null;
         uiHost.rerenderAll();
       };
       const showRenderCountDialog = (totalCount, onConfirm) => {
@@ -17852,7 +17901,7 @@ sortCanonicalItems() {
       const renderInitialSnapshot = () => {
         if (!isCurrentRun() || hasInitialRender) return;
         hasInitialRender = true;
-        updateItemMap(state2.items);
+        updateItemMap();
         dashboardEl.style.display = "none";
         signalReady();
         resolveInitialRender?.();
@@ -17910,11 +17959,8 @@ sortCanonicalItems() {
               })
             ]);
             if (!isCurrentRun()) return;
-            state2.items = currentCached.items;
+            replaceCanonicalItems(currentCached.items);
             persistedContextItems = [...cachedContext2.posts, ...cachedContext2.comments];
-            contextSearchItemsCache = null;
-            state2.itemById.clear();
-            state2.items.forEach((item) => state2.itemById.set(item._id, item));
             if (attemptNumber > 1) {
               setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
             } else if (forceFull) {
@@ -17941,7 +17987,8 @@ sortCanonicalItems() {
                 state2,
                 watermarks,
                 (msg) => setStatus(msg, false, true),
-                syncAbortController.signal
+                syncAbortController.signal,
+                markCanonicalItemsMutated
               );
             } finally {
               syncErrorState.abortController.signal.removeEventListener("abort", abortSyncAttempt);
@@ -18041,9 +18088,8 @@ sortCanonicalItems() {
           return { posts: [], comments: [] };
         })
       ]);
-      state2.items = cached.items;
+      replaceCanonicalItems(cached.items);
       persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
-      contextSearchItemsCache = null;
       if (!isCurrentRun()) return;
       startedWithEmptyCache = cached.items.length === 0;
       if (cached.items.length > 0) {
@@ -18108,7 +18154,7 @@ sortCanonicalItems() {
     }
     return newest;
   };
-  const syncArchive = async (username, state2, watermarks, onStatus, abortSignal) => {
+  const syncArchive = async (username, state2, watermarks, onStatus, abortSignal, onCanonicalMutated) => {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
@@ -18168,6 +18214,7 @@ sortCanonicalItems() {
         }
       }
       state2.items.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
+      onCanonicalMutated?.();
       await saveArchiveData(username, [], {
         lastSyncDate: syncStartTime,
         lastSyncDate_comments: syncStartTime,
@@ -18770,7 +18817,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.720"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.721"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
