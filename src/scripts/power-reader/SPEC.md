@@ -768,6 +768,7 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-50] Help Popover Control**: Search syntax help is exposed via an icon-triggered popover (`#archive-search-help-btn` / `#archive-search-help-popover`) that supports outside close via `pointerdown`, `Escape`, and example-click close behavior.
 - **[PR-UARCH-51] Idle Search Status Collapse**: The archive search status row (`#archive-search-status`) remains hidden when there are no messages and only appears for active diagnostics/info chips.
 - **[PR-UARCH-52] Compact Toolbar Density**: Archive top controls use compact icon actions, horizontal view tabs, and grouped spacing to reduce vertical footprint without removing existing sort/scope/view functionality.
+- **[PR-UARCH-53] No-Query Baseline Facets**: When the query is empty, archive facets render immediately from cached per-scope baseline aggregates keyed by sync watermark (and `all`-scope context count). If a fresh exact baseline is unavailable, sampled counts are shown first and refined asynchronously when feasible.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

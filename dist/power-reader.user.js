@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.722
+// @version    1.2.723
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.722"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.723"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9091,7 +9091,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.722"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9271,7 +9271,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.722"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -13449,6 +13449,24 @@ getPromptPrefix: getAIStudioPrefix,
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
+  const normalizeBaselineFacets = (value) => {
+    if (!value || typeof value !== "object") return {};
+    const raw = value;
+    const normalized = {};
+    for (const scope of ["authored", "all"]) {
+      const snapshot = raw[scope];
+      if (!snapshot || typeof snapshot !== "object") continue;
+      if (!Array.isArray(snapshot.groups)) continue;
+      normalized[scope] = {
+        syncKey: typeof snapshot.syncKey === "string" || snapshot.syncKey === null ? snapshot.syncKey : null,
+        contextCount: Number.isFinite(snapshot.contextCount) ? snapshot.contextCount : 0,
+        groups: snapshot.groups,
+        delayed: Boolean(snapshot.delayed),
+        updatedAt: Number.isFinite(snapshot.updatedAt) ? snapshot.updatedAt : 0
+      };
+    }
+    return normalized;
+  };
   const isPost = (item) => "title" in item;
   const contextCacheKey = (username, itemType, itemId) => `${username}:${itemType}:${itemId}`;
   const dedupeById = (items) => {
@@ -13540,7 +13558,8 @@ getPromptPrefix: getAIStudioPrefix,
       username,
       lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
       lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
-      lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null
+      lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null,
+      baselineFacets: normalizeBaselineFacets(existingMetadata?.baselineFacets)
     };
     metadataStore.put(updatedMetadata);
     await transactionToPromise(tx);
@@ -13568,8 +13587,34 @@ getPromptPrefix: getAIStudioPrefix,
       items,
       lastSyncDate: metadata?.lastSyncDate || null,
       lastSyncDate_comments: metadata?.lastSyncDate_comments || null,
-      lastSyncDate_posts: metadata?.lastSyncDate_posts || null
+      lastSyncDate_posts: metadata?.lastSyncDate_posts || null,
+      baselineFacets: normalizeBaselineFacets(metadata?.baselineFacets)
     };
+  };
+  const saveArchiveBaselineFacets = async (username, scope, snapshot) => {
+    const db = await openDB();
+    const tx = db.transaction(STORE_METADATA, "readwrite");
+    const metadataStore = tx.objectStore(STORE_METADATA);
+    const existingMetadata = await requestToPromise(
+      metadataStore.get(username)
+    );
+    const baselineFacets = {
+      ...normalizeBaselineFacets(existingMetadata?.baselineFacets),
+      [scope]: {
+        ...snapshot,
+        updatedAt: Date.now()
+      }
+    };
+    const updatedMetadata = {
+      ...existingMetadata || {},
+      username,
+      baselineFacets,
+      lastSyncDate: existingMetadata?.lastSyncDate ?? null,
+      lastSyncDate_comments: existingMetadata?.lastSyncDate_comments ?? null,
+      lastSyncDate_posts: existingMetadata?.lastSyncDate_posts ?? null
+    };
+    metadataStore.put(updatedMetadata);
+    await transactionToPromise(tx);
   };
   const upsertContextualEntries = async (username, itemType, items) => {
     if (items.length === 0) return;
@@ -16000,6 +16045,7 @@ sortCanonicalItems() {
   }
   const createSearchWorkerClient = () => new SearchWorkerClient(new WorkerWrapper());
   const FACET_BUDGET_MS = 30;
+  const FACET_BUDGET_CHECK_INTERVAL = 100;
   const escapeQueryQuotedValue = (value) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const getYearFromTimestamp = (ms) => {
     if (!Number.isFinite(ms)) return null;
@@ -16048,48 +16094,45 @@ sortCanonicalItems() {
     }
     return { types, authors, dateYears };
   };
-  const computeFacets = (items, currentQuery) => {
-    const startMs = Date.now();
-    const groups = [];
-    let postCount = 0;
-    let commentCount = 0;
-    const authorCounts = new Map();
-    const yearCounts = new Map();
-    for (let i = 0; i < items.length; i++) {
-      if (i % 100 === 0 && Date.now() - startMs > FACET_BUDGET_MS) {
-        return { groups, delayed: true, computeMs: Date.now() - startMs };
-      }
-      const item = items[i];
-      const isPost2 = "title" in item;
-      if (isPost2) {
-        postCount++;
+  const createFacetAccumulator = () => ({
+    postCount: 0,
+    commentCount: 0,
+    authorCounts: new Map(),
+    yearCounts: new Map()
+  });
+  const accumulateFacetItem = (accumulator, item) => {
+    const isPost2 = "title" in item;
+    if (isPost2) {
+      accumulator.postCount += 1;
+    } else {
+      accumulator.commentCount += 1;
+    }
+    const displayName = item.user?.displayName || "";
+    if (displayName) {
+      const key = normalizeForSearch(displayName);
+      const existing = accumulator.authorCounts.get(key);
+      if (existing) {
+        existing.count += 1;
       } else {
-        commentCount++;
-      }
-      const displayName = item.user?.displayName || "";
-      if (displayName) {
-        const key = normalizeForSearch(displayName);
-        const existing = authorCounts.get(key);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          authorCounts.set(key, { display: displayName, count: 1 });
-        }
-      }
-      const year = getYearFromPostedAt(item.postedAt);
-      if (year !== null) {
-        yearCounts.set(year, (yearCounts.get(year) || 0) + 1);
+        accumulator.authorCounts.set(key, { display: displayName, count: 1 });
       }
     }
+    const year = getYearFromPostedAt(item.postedAt);
+    if (year !== null) {
+      accumulator.yearCounts.set(year, (accumulator.yearCounts.get(year) || 0) + 1);
+    }
+  };
+  const buildFacetGroups = (accumulator, currentQuery) => {
+    const groups = [];
     const active = detectActiveFacets(currentQuery);
     groups.push({
       label: "Type",
       items: [
-        { value: "Posts", queryFragment: "type:post", count: postCount, active: active.types.has("post") },
-        { value: "Comments", queryFragment: "type:comment", count: commentCount, active: active.types.has("comment") }
+        { value: "Posts", queryFragment: "type:post", count: accumulator.postCount, active: active.types.has("post") },
+        { value: "Comments", queryFragment: "type:comment", count: accumulator.commentCount, active: active.types.has("comment") }
       ].filter((item) => item.count > 0)
     });
-    const topAuthors = Array.from(authorCounts.entries()).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
+    const topAuthors = Array.from(accumulator.authorCounts.entries()).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
     if (topAuthors.length > 0) {
       groups.push({
         label: "Author",
@@ -16104,7 +16147,7 @@ sortCanonicalItems() {
         })
       });
     }
-    const sortedYears = Array.from(yearCounts.entries()).sort((a, b) => b[0] - a[0]);
+    const sortedYears = Array.from(accumulator.yearCounts.entries()).sort((a, b) => b[0] - a[0]);
     if (sortedYears.length > 1) {
       groups.push({
         label: "Year",
@@ -16116,10 +16159,42 @@ sortCanonicalItems() {
         }))
       });
     }
+    return groups;
+  };
+  const scanFacetChunk = (items, currentQuery, options = {}) => {
+    const startMs = Date.now();
+    const accumulator = options.accumulator ?? createFacetAccumulator();
+    const budgetMs = options.budgetMs ?? FACET_BUDGET_MS;
+    const enforceBudget = Number.isFinite(budgetMs) && budgetMs >= 0;
+    const startIndex = Math.max(0, options.startIndex ?? 0);
+    let nextIndex = items.length;
+    let done = true;
+    for (let i = startIndex; i < items.length; i++) {
+      const iterations = i - startIndex;
+      if (enforceBudget && iterations > 0 && iterations % FACET_BUDGET_CHECK_INTERVAL === 0) {
+        if (Date.now() - startMs > budgetMs) {
+          nextIndex = i;
+          done = false;
+          break;
+        }
+      }
+      accumulateFacetItem(accumulator, items[i]);
+    }
     return {
-      groups,
-      delayed: false,
-      computeMs: Date.now() - startMs
+      groups: buildFacetGroups(accumulator, currentQuery),
+      delayed: !done,
+      computeMs: Date.now() - startMs,
+      nextIndex,
+      done,
+      accumulator
+    };
+  };
+  const computeFacets = (items, currentQuery, options = {}) => {
+    const chunkResult = scanFacetChunk(items, currentQuery, { budgetMs: options.budgetMs });
+    return {
+      groups: chunkResult.groups,
+      delayed: chunkResult.delayed,
+      computeMs: chunkResult.computeMs
     };
   };
   const AUTO_RETRY_KEY = "power-reader-archive-auto-retry";
@@ -16130,6 +16205,7 @@ sortCanonicalItems() {
   const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
   const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
   const NETWORK_IDLE_RENDER_MS = 5e3;
+  const NO_QUERY_EXACT_FACET_REFINE_BUDGET_MS = 30;
   let activeArchiveInitRunId = 0;
   let activeArchiveInitAbortController = null;
   const initArchive = async (username, recoveryAttempt = 0) => {
@@ -16738,7 +16814,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.722"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17032,6 +17108,12 @@ sortCanonicalItems() {
       let viewFallbackValue = DEFAULT_VIEW;
       let viewModeRefreshTimer = null;
       let pendingSortResetMessage = null;
+      let facetsRefineTimer = null;
+      let facetsRefineIdleHandle = null;
+      let facetsRefineToken = 0;
+      let lastRenderedFacetSignature = null;
+      let baselineFacetSnapshots = {};
+      const baselineFacetSnapshotSignatures = {};
       const rebuildCanonicalItemMap = () => {
         state2.itemById.clear();
         for (const item of state2.items) {
@@ -17051,6 +17133,7 @@ sortCanonicalItems() {
       const replaceCanonicalItems = (items) => {
         state2.items = items;
         markCanonicalItemsMutated();
+        clearPendingFacetRefine();
       };
       const getScopeButtons = () => scopeContainer ? Array.from(scopeContainer.querySelectorAll(".pr-seg-btn")) : [];
       const getScopeValue = () => {
@@ -17164,22 +17247,91 @@ sortCanonicalItems() {
       const createFacetDelayedMessageEl = () => {
         const delayedEl = document.createElement("span");
         delayedEl.className = "pr-facet-delayed";
-        delayedEl.textContent = "Facets delayed - refine query";
+        delayedEl.textContent = "Facet counts sampled - calculating exact counts...";
         return delayedEl;
+      };
+      const toFacetScope = (scope) => scope === "all" ? "all" : "authored";
+      const createFacetGroupsSignature = (groups) => groups.map((group) => {
+        const itemsSignature = group.items.map(
+          (item) => `${item.value}${item.queryFragment}${item.count}${item.active ? 1 : 0}`
+        ).join("");
+        return `${group.label}${itemsSignature}`;
+      }).join("");
+      const createFacetSnapshotSignature = (snapshot) => `${snapshot.syncKey ?? ""}\x1B${snapshot.contextCount}\x1B${snapshot.delayed ? 1 : 0}\x1B${createFacetGroupsSignature(snapshot.groups)}`;
+      const createFacetResultSignature = (result) => `${result.delayed ? 1 : 0}\x1B${createFacetGroupsSignature(result.groups)}`;
+      const getNoQueryContextCount = (scope, contextItemCount) => scope === "all" ? contextItemCount : 0;
+      const isNoQuery = (query) => query.trim().length === 0;
+      const clearPendingFacetRefine = () => {
+        facetsRefineToken += 1;
+        if (facetsRefineIdleHandle !== null && typeof window.cancelIdleCallback === "function") {
+          window.cancelIdleCallback(facetsRefineIdleHandle);
+          facetsRefineIdleHandle = null;
+        }
+        if (facetsRefineTimer !== null) {
+          window.clearTimeout(facetsRefineTimer);
+          facetsRefineTimer = null;
+        }
+      };
+      runAbortController.signal.addEventListener("abort", clearPendingFacetRefine, { once: true });
+      const scheduleFacetRefineTask = (task) => {
+        if (typeof window.requestIdleCallback === "function") {
+          facetsRefineIdleHandle = window.requestIdleCallback(() => {
+            facetsRefineIdleHandle = null;
+            task();
+          }, { timeout: 200 });
+          return;
+        }
+        facetsRefineTimer = window.setTimeout(() => {
+          facetsRefineTimer = null;
+          task();
+        }, 16);
+      };
+      const persistBaselineFacetSnapshot = (scope, contextItemCount, result) => {
+        const facetScope = toFacetScope(scope);
+        const snapshot = {
+          syncKey: state2.lastSyncDate,
+          contextCount: getNoQueryContextCount(scope, contextItemCount),
+          groups: result.groups,
+          delayed: result.delayed,
+          updatedAt: Date.now()
+        };
+        const signature = createFacetSnapshotSignature(snapshot);
+        if (baselineFacetSnapshotSignatures[facetScope] === signature) return;
+        baselineFacetSnapshots[facetScope] = snapshot;
+        baselineFacetSnapshotSignatures[facetScope] = signature;
+        void saveArchiveBaselineFacets(username, facetScope, {
+          syncKey: snapshot.syncKey,
+          contextCount: snapshot.contextCount,
+          groups: snapshot.groups,
+          delayed: snapshot.delayed
+        }).catch((error) => {
+          Logger.warn("Failed to save archive baseline facets snapshot", error);
+        });
+      };
+      const getValidBaselineFacetSnapshot = (scope, contextItemCount) => {
+        const snapshot = baselineFacetSnapshots[toFacetScope(scope)];
+        if (!snapshot) return null;
+        if (snapshot.syncKey !== state2.lastSyncDate) return null;
+        if (snapshot.contextCount !== getNoQueryContextCount(scope, contextItemCount)) return null;
+        return snapshot;
       };
       const clearFacetUi = () => {
         if (!facetsEl) return;
         facetsEl.replaceChildren();
         facetsEl.style.display = "none";
+        lastRenderedFacetSignature = null;
+        clearPendingFacetRefine();
       };
-      const renderFacets = (items, query) => {
+      const renderFacetResult = (facetResult) => {
         if (!facetsEl) return;
-        const facetResult = computeFacets(items, query);
         const hasFacetItems = facetResult.groups.some((group) => group.items.length > 0);
         if (!hasFacetItems && !facetResult.delayed) {
           clearFacetUi();
           return;
         }
+        const signature = createFacetResultSignature(facetResult);
+        if (signature === lastRenderedFacetSignature) return;
+        lastRenderedFacetSignature = signature;
         const fragment = document.createDocumentFragment();
         for (const group of facetResult.groups) {
           if (group.items.length === 0) continue;
@@ -17209,6 +17361,61 @@ sortCanonicalItems() {
         }
         facetsEl.replaceChildren(fragment);
         facetsEl.style.display = "";
+      };
+      const scheduleExactNoQueryFacetRefine = (items, scope, contextItemCount, requestId, seed) => {
+        clearPendingFacetRefine();
+        const refineToken = facetsRefineToken;
+        const accumulator = seed?.accumulator ?? createFacetAccumulator();
+        let nextIndex = seed?.startIndex ?? 0;
+        const runRefineChunk = () => {
+          if (!isCurrentRun() || refineToken !== facetsRefineToken) return;
+          if (requestId !== activeQueryRequestId) return;
+          const currentUi = readUiState();
+          if (!isNoQuery(currentUi.query) || currentUi.scope !== scope) return;
+          const chunkResult = scanFacetChunk(items, currentUi.query, {
+            accumulator,
+            startIndex: nextIndex,
+            budgetMs: NO_QUERY_EXACT_FACET_REFINE_BUDGET_MS
+          });
+          nextIndex = chunkResult.nextIndex;
+          if (!isCurrentRun() || refineToken !== facetsRefineToken) return;
+          if (requestId !== activeQueryRequestId) return;
+          const latestUi = readUiState();
+          if (!isNoQuery(latestUi.query) || latestUi.scope !== scope) return;
+          renderFacetResult(chunkResult);
+          if (chunkResult.done) {
+            persistBaselineFacetSnapshot(scope, contextItemCount, chunkResult);
+            return;
+          }
+          scheduleFacetRefineTask(runRefineChunk);
+        };
+        scheduleFacetRefineTask(runRefineChunk);
+      };
+      const renderFacets = (items, query, scope, contextItemCount, requestId) => {
+        if (!isNoQuery(query)) {
+          clearPendingFacetRefine();
+          renderFacetResult(computeFacets(items, query));
+          return;
+        }
+        const cachedSnapshot = getValidBaselineFacetSnapshot(scope, contextItemCount);
+        if (cachedSnapshot) {
+          renderFacetResult(cachedSnapshot);
+          if (cachedSnapshot.delayed) {
+            scheduleExactNoQueryFacetRefine(items, scope, contextItemCount, requestId);
+          }
+          return;
+        }
+        const sampledResult = scanFacetChunk(items, query);
+        renderFacetResult(sampledResult);
+        persistBaselineFacetSnapshot(scope, contextItemCount, sampledResult);
+        if (sampledResult.delayed) {
+          scheduleExactNoQueryFacetRefine(items, scope, contextItemCount, requestId, {
+            accumulator: sampledResult.accumulator,
+            startIndex: sampledResult.nextIndex
+          });
+        } else {
+          clearPendingFacetRefine();
+        }
       };
       const isNonDefaultState = () => {
         const current = readUiState();
@@ -17476,6 +17683,14 @@ sortCanonicalItems() {
         try {
           syncAuthoredSearchIndex();
           const contextItems = collectContextSearchItems();
+          if (isNoQuery(currentUi.query)) {
+            const cachedSnapshot = getValidBaselineFacetSnapshot(currentUi.scope, contextItems.length);
+            if (cachedSnapshot) {
+              renderFacetResult(cachedSnapshot);
+            }
+          } else {
+            clearPendingFacetRefine();
+          }
           searchManager.setContextItems(contextItems);
           const scopeParam = useDedicatedScopeParam ? currentUi.scope : void 0;
           const searchStart = performance.now();
@@ -17507,7 +17722,7 @@ sortCanonicalItems() {
           setStatusSearchResultCount(result.total);
           updateResultCount(result.total, result.diagnostics.tookMs, result.canonicalQuery);
           updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
-          renderFacets(result.items, result.canonicalQuery);
+          renderFacets(result.items, result.canonicalQuery, result.resolvedScope, contextItems.length, requestId);
           updateResetButton();
           const renderOptions = getRenderOptionsForQuery(currentUi.query);
           const totalItems = activeItems.length;
@@ -18089,6 +18304,7 @@ sortCanonicalItems() {
         const dbStart = performance.now();
         const cached2 = await loadArchiveData(username);
         if (!isCurrentRun()) return;
+        state2.lastSyncDate = cached2.lastSyncDate;
         perfMetrics.dbLoadMs = performance.now() - dbStart;
         renderTopStatusLine();
         const setStatus = (msg, isError2 = false, isSyncing = false) => {
@@ -18115,6 +18331,7 @@ sortCanonicalItems() {
             if (!isCurrentRun()) return;
             replaceCanonicalItems(currentCached.items);
             persistedContextItems = [...cachedContext2.posts, ...cachedContext2.comments];
+            state2.lastSyncDate = currentCached.lastSyncDate;
             if (attemptNumber > 1) {
               setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
             } else if (forceFull) {
@@ -18244,8 +18461,22 @@ sortCanonicalItems() {
       ]);
       replaceCanonicalItems(cached.items);
       persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+      state2.lastSyncDate = cached.lastSyncDate;
+      baselineFacetSnapshots = cached.baselineFacets;
+      for (const scope of ["authored", "all"]) {
+        const snapshot = baselineFacetSnapshots[scope];
+        baselineFacetSnapshotSignatures[scope] = snapshot ? createFacetSnapshotSignature(snapshot) : void 0;
+      }
       if (!isCurrentRun()) return;
       startedWithEmptyCache = cached.items.length === 0;
+      if (isNoQuery(searchInput.value)) {
+        const initialScope = getScopeValue();
+        const initialContextCount = getNoQueryContextCount(initialScope, persistedContextItems.length);
+        const cachedSnapshot = getValidBaselineFacetSnapshot(initialScope, initialContextCount);
+        if (cachedSnapshot) {
+          renderFacetResult(cachedSnapshot);
+        }
+      }
       if (cached.items.length > 0) {
         setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
       } else {
@@ -18374,6 +18605,7 @@ sortCanonicalItems() {
         lastSyncDate_comments: syncStartTime,
         lastSyncDate_posts: syncStartTime
       });
+      state2.lastSyncDate = syncStartTime;
       onStatus(`Sync complete. ${state2.items.length} total items.`);
     } else {
       const statusMsg = watermarks.lastSyncDate ? `Up to date. (${state2.items.length} items)` : `No history found for ${username}.`;
@@ -18383,6 +18615,7 @@ sortCanonicalItems() {
         lastSyncDate_comments: syncStartTime,
         lastSyncDate_posts: syncStartTime
       });
+      state2.lastSyncDate = syncStartTime;
     }
   };
   const ITEM_SELECTOR = ".pr-item[data-id]";
@@ -18971,7 +19204,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.722"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

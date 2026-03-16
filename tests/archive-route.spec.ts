@@ -971,7 +971,7 @@ return { data: {} };
     await expect(page.locator('.pr-archive-index-item[data-id="c-highlight-hit"] .pr-index-title mark.pr-search-highlight')).toHaveCount(1);
   });
 
-  test('archive facets add, replace, and remove structured query fragments', async ({ page }) => {
+  test('[PR-UARCH-46][PR-UARCH-53] archive facets add, replace, and remove structured query fragments', async ({ page }) => {
     const userId = 'u-facet-user';
     const username = 'Facet_User';
     const userObj = { _id: userId, username, displayName: 'Facet User', slug: 'facet-user', karma: 100 };
@@ -1090,6 +1090,121 @@ return { data: {} };
     await authorAChip.click();
     await expect(searchInput).toHaveValue('');
     await expect.poll(async () => new URL(page.url()).searchParams.get('q')).toBeNull();
+  });
+
+  test('[PR-UARCH-53] no-query baseline facets render immediately from cached snapshot', async ({ page }) => {
+    const userId = 'u-facet-baseline';
+    const username = 'Facet_Baseline_User';
+    const userObj = { _id: userId, username, displayName: 'Facet Baseline User', slug: 'facet-baseline-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+    });
+
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(async ({ username }) => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('PowerReaderArchive', 2);
+        request.onupgradeneeded = (event) => {
+          const database = (event.target as IDBOpenDBRequest).result;
+          if (!database.objectStoreNames.contains('items')) {
+            const itemStore = database.createObjectStore('items', { keyPath: '_id' });
+            itemStore.createIndex('username', 'username', { unique: false });
+            itemStore.createIndex('postedAt', 'postedAt', { unique: false });
+            itemStore.createIndex('userId', 'userId', { unique: false });
+          }
+          if (!database.objectStoreNames.contains('metadata')) {
+            database.createObjectStore('metadata', { keyPath: 'username' });
+          }
+          if (!database.objectStoreNames.contains('contextual_cache')) {
+            const contextualStore = database.createObjectStore('contextual_cache', { keyPath: 'cacheKey' });
+            contextualStore.createIndex('username', 'username', { unique: false });
+            contextualStore.createIndex('itemType', 'itemType', { unique: false });
+            contextualStore.createIndex('lastAccessedAt', 'lastAccessedAt', { unique: false });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+
+      const tx = db.transaction(['items', 'metadata'], 'readwrite');
+      tx.objectStore('items').put({
+        _id: 'c-baseline-seed',
+        username,
+        postedAt: '2025-01-01T12:00:00Z',
+        baseScore: 7,
+        voteCount: 2,
+        htmlBody: '<p>Seeded cached comment</p>',
+        contents: { markdown: 'Seeded cached comment' },
+        user: { _id: 'u-seed-author', username: 'Seed_Author', displayName: 'Seeded Baseline', slug: 'seed-author', karma: 50 },
+        postId: 'p-seed-post',
+        topLevelCommentId: 'c-baseline-seed',
+        parentCommentId: null,
+        parentComment: null,
+        post: {
+          _id: 'p-seed-post',
+          title: 'Seed Post',
+          pageUrl: 'https://lesswrong.com/posts/p-seed-post',
+          user: { _id: 'u-seed-author', username: 'Seed_Author', displayName: 'Seeded Baseline', slug: 'seed-author', karma: 50 }
+        },
+        pageUrl: 'https://lesswrong.com/posts/p-seed-post/comment/c-baseline-seed'
+      });
+      tx.objectStore('metadata').put({
+        username,
+        lastSyncDate: null,
+        lastSyncDate_comments: null,
+        lastSyncDate_posts: null,
+        baselineFacets: {
+          authored: {
+            syncKey: null,
+            contextCount: 0,
+            delayed: false,
+            updatedAt: Date.now(),
+            groups: [
+              {
+                label: 'Type',
+                items: [
+                  { value: 'Comments', queryFragment: 'type:comment', count: 777, active: false }
+                ]
+              },
+              {
+                label: 'Author',
+                items: [
+                  { value: 'Seeded Baseline', queryFragment: 'author:"Seeded Baseline"', count: 777, active: false }
+                ]
+              }
+            ]
+          }
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+      db.close();
+    }, { username });
+
+    await page.evaluate(scriptContent);
+
+    const authorChip = page.locator('#archive-facets .pr-facet-chip', { hasText: 'Seeded Baseline' });
+    await expect(authorChip).toBeVisible();
+    await expect(authorChip).toContainText('(777)');
+    await expect(page.locator('#archive-facets .pr-facet-delayed')).toHaveCount(0);
   });
 
   test('invalid regex literals are excluded with warning [PR-UARCH-08]', async ({ page }) => {

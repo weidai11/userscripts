@@ -21,6 +21,29 @@ export type FacetResult = {
 };
 
 export const FACET_BUDGET_MS = 30;
+const FACET_BUDGET_CHECK_INTERVAL = 100;
+
+export type FacetComputeOptions = {
+  budgetMs?: number;
+};
+
+export type FacetAccumulator = {
+  postCount: number;
+  commentCount: number;
+  authorCounts: Map<string, { display: string; count: number }>;
+  yearCounts: Map<number, number>;
+};
+
+export type FacetChunkOptions = FacetComputeOptions & {
+  startIndex?: number;
+  accumulator?: FacetAccumulator;
+};
+
+export type FacetChunkResult = FacetResult & {
+  nextIndex: number;
+  done: boolean;
+  accumulator: FacetAccumulator;
+};
 
 const escapeQueryQuotedValue = (value: string): string =>
   value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -100,59 +123,51 @@ const detectActiveFacets = (query: string): { types: Set<string>; authors: Set<s
   return { types, authors, dateYears };
 };
 
-export const computeFacets = (
-  items: readonly ArchiveItem[],
-  currentQuery: string
-): FacetResult => {
-  const startMs = Date.now();
-  const groups: FacetGroup[] = [];
+export const createFacetAccumulator = (): FacetAccumulator => ({
+  postCount: 0,
+  commentCount: 0,
+  authorCounts: new Map<string, { display: string; count: number }>(),
+  yearCounts: new Map<number, number>()
+});
 
-  let postCount = 0;
-  let commentCount = 0;
-  const authorCounts = new Map<string, { display: string; count: number }>();
-  const yearCounts = new Map<number, number>();
+const accumulateFacetItem = (accumulator: FacetAccumulator, item: ArchiveItem): void => {
+  const isPost = 'title' in item;
+  if (isPost) {
+    accumulator.postCount += 1;
+  } else {
+    accumulator.commentCount += 1;
+  }
 
-  for (let i = 0; i < items.length; i++) {
-    if (i % 100 === 0 && Date.now() - startMs > FACET_BUDGET_MS) {
-      return { groups, delayed: true, computeMs: Date.now() - startMs };
-    }
-
-    const item = items[i];
-    const isPost = 'title' in item;
-    if (isPost) {
-      postCount++;
+  const displayName = item.user?.displayName || '';
+  if (displayName) {
+    const key = normalizeForSearch(displayName);
+    const existing = accumulator.authorCounts.get(key);
+    if (existing) {
+      existing.count += 1;
     } else {
-      commentCount++;
-    }
-
-    const displayName = item.user?.displayName || '';
-    if (displayName) {
-      const key = normalizeForSearch(displayName);
-      const existing = authorCounts.get(key);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        authorCounts.set(key, { display: displayName, count: 1 });
-      }
-    }
-
-    const year = getYearFromPostedAt(item.postedAt);
-    if (year !== null) {
-      yearCounts.set(year, (yearCounts.get(year) || 0) + 1);
+      accumulator.authorCounts.set(key, { display: displayName, count: 1 });
     }
   }
 
+  const year = getYearFromPostedAt(item.postedAt);
+  if (year !== null) {
+    accumulator.yearCounts.set(year, (accumulator.yearCounts.get(year) || 0) + 1);
+  }
+};
+
+const buildFacetGroups = (accumulator: FacetAccumulator, currentQuery: string): FacetGroup[] => {
+  const groups: FacetGroup[] = [];
   const active = detectActiveFacets(currentQuery);
 
   groups.push({
     label: 'Type',
     items: [
-      { value: 'Posts', queryFragment: 'type:post', count: postCount, active: active.types.has('post') },
-      { value: 'Comments', queryFragment: 'type:comment', count: commentCount, active: active.types.has('comment') }
+      { value: 'Posts', queryFragment: 'type:post', count: accumulator.postCount, active: active.types.has('post') },
+      { value: 'Comments', queryFragment: 'type:comment', count: accumulator.commentCount, active: active.types.has('comment') }
     ].filter(item => item.count > 0)
   });
 
-  const topAuthors = Array.from(authorCounts.entries())
+  const topAuthors = Array.from(accumulator.authorCounts.entries())
     .sort((a, b) => b[1].count - a[1].count)
     .slice(0, 5);
 
@@ -173,7 +188,7 @@ export const computeFacets = (
     });
   }
 
-  const sortedYears = Array.from(yearCounts.entries()).sort((a, b) => b[0] - a[0]);
+  const sortedYears = Array.from(accumulator.yearCounts.entries()).sort((a, b) => b[0] - a[0]);
   if (sortedYears.length > 1) {
     groups.push({
       label: 'Year',
@@ -186,9 +201,54 @@ export const computeFacets = (
     });
   }
 
+  return groups;
+};
+
+export const scanFacetChunk = (
+  items: readonly ArchiveItem[],
+  currentQuery: string,
+  options: FacetChunkOptions = {}
+): FacetChunkResult => {
+  const startMs = Date.now();
+  const accumulator = options.accumulator ?? createFacetAccumulator();
+  const budgetMs = options.budgetMs ?? FACET_BUDGET_MS;
+  const enforceBudget = Number.isFinite(budgetMs) && budgetMs >= 0;
+  const startIndex = Math.max(0, options.startIndex ?? 0);
+  let nextIndex = items.length;
+  let done = true;
+
+  for (let i = startIndex; i < items.length; i++) {
+    const iterations = i - startIndex;
+    if (enforceBudget && iterations > 0 && iterations % FACET_BUDGET_CHECK_INTERVAL === 0) {
+      if (Date.now() - startMs > budgetMs) {
+        nextIndex = i;
+        done = false;
+        break;
+      }
+    }
+
+    accumulateFacetItem(accumulator, items[i]);
+  }
+
   return {
-    groups,
-    delayed: false,
-    computeMs: Date.now() - startMs
+    groups: buildFacetGroups(accumulator, currentQuery),
+    delayed: !done,
+    computeMs: Date.now() - startMs,
+    nextIndex,
+    done,
+    accumulator
+  };
+};
+
+export const computeFacets = (
+  items: readonly ArchiveItem[],
+  currentQuery: string,
+  options: FacetComputeOptions = {}
+): FacetResult => {
+  const chunkResult = scanFacetChunk(items, currentQuery, { budgetMs: options.budgetMs });
+  return {
+    groups: chunkResult.groups,
+    delayed: chunkResult.delayed,
+    computeMs: chunkResult.computeMs
   };
 };

@@ -3,6 +3,7 @@
  */
 
 import type { Post, Comment } from '../../../shared/graphql/queries';
+import type { FacetGroup } from './search/facets';
 import { Logger } from '../utils/logger';
 
 const DB_NAME = 'PowerReaderArchive';
@@ -17,6 +18,23 @@ const CONTEXT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 60; // 60 days
 
 type ContextualItem = Post | Comment;
 type ContextualItemType = 'post' | 'comment';
+export type ArchiveFacetScope = 'authored' | 'all';
+
+export type ArchiveBaselineFacetSnapshot = {
+  syncKey: string | null;
+  contextCount: number;
+  groups: FacetGroup[];
+  delayed: boolean;
+  updatedAt: number;
+};
+
+type ArchiveMetadataRecord = {
+  username: string;
+  lastSyncDate: string | null;
+  lastSyncDate_comments: string | null;
+  lastSyncDate_posts: string | null;
+  baselineFacets?: Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>>;
+};
 
 interface ContextualCacheEntry {
   cacheKey: string;
@@ -41,6 +59,25 @@ const transactionToPromise = (tx: IDBTransaction): Promise<void> =>
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error);
   });
+
+const normalizeBaselineFacets = (value: unknown): Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>> => {
+  if (!value || typeof value !== 'object') return {};
+  const raw = value as Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>>;
+  const normalized: Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>> = {};
+  for (const scope of ['authored', 'all'] as const) {
+    const snapshot = raw[scope];
+    if (!snapshot || typeof snapshot !== 'object') continue;
+    if (!Array.isArray(snapshot.groups)) continue;
+    normalized[scope] = {
+      syncKey: typeof snapshot.syncKey === 'string' || snapshot.syncKey === null ? snapshot.syncKey : null,
+      contextCount: Number.isFinite(snapshot.contextCount) ? snapshot.contextCount : 0,
+      groups: snapshot.groups,
+      delayed: Boolean(snapshot.delayed),
+      updatedAt: Number.isFinite(snapshot.updatedAt) ? snapshot.updatedAt : 0
+    };
+  }
+  return normalized;
+};
 
 const isPost = (item: ContextualItem): item is Post => 'title' in item;
 
@@ -171,13 +208,14 @@ export const saveArchiveData = async (
 
   // Get current metadata to preserve existing watermarks if not provided in this call
   const existingMetadataRequest = metadataStore.get(username);
-  const existingMetadata = await requestToPromise(existingMetadataRequest);
+  const existingMetadata = await requestToPromise(existingMetadataRequest) as ArchiveMetadataRecord | undefined;
 
-  const updatedMetadata = {
+  const updatedMetadata: ArchiveMetadataRecord = {
     username,
     lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
     lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
-    lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null
+    lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null,
+    baselineFacets: normalizeBaselineFacets(existingMetadata?.baselineFacets)
   };
 
   metadataStore.put(updatedMetadata);
@@ -192,11 +230,12 @@ export const loadArchiveData = async (username: string): Promise<{
   lastSyncDate: string | null;
   lastSyncDate_comments: string | null;
   lastSyncDate_posts: string | null;
+  baselineFacets: Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>>;
 }> => {
   const db = await openDB();
 
   // 1. Get metadata.
-  const metadata: any = await new Promise((resolve) => {
+  const metadata = await new Promise<ArchiveMetadataRecord | null>((resolve) => {
     const tx = db.transaction(STORE_METADATA, 'readonly');
     const request = tx.objectStore(STORE_METADATA).get(username);
     request.onsuccess = () => resolve(request.result);
@@ -222,8 +261,41 @@ export const loadArchiveData = async (username: string): Promise<{
     items,
     lastSyncDate: metadata?.lastSyncDate || null,
     lastSyncDate_comments: metadata?.lastSyncDate_comments || null,
-    lastSyncDate_posts: metadata?.lastSyncDate_posts || null
+    lastSyncDate_posts: metadata?.lastSyncDate_posts || null,
+    baselineFacets: normalizeBaselineFacets(metadata?.baselineFacets)
   };
+};
+
+export const saveArchiveBaselineFacets = async (
+  username: string,
+  scope: ArchiveFacetScope,
+  snapshot: Omit<ArchiveBaselineFacetSnapshot, 'updatedAt'>
+): Promise<void> => {
+  const db = await openDB();
+  const tx = db.transaction(STORE_METADATA, 'readwrite');
+  const metadataStore = tx.objectStore(STORE_METADATA);
+  const existingMetadata = await requestToPromise(
+    metadataStore.get(username) as IDBRequest<ArchiveMetadataRecord | undefined>
+  );
+
+  const baselineFacets = {
+    ...normalizeBaselineFacets(existingMetadata?.baselineFacets),
+    [scope]: {
+      ...snapshot,
+      updatedAt: Date.now()
+    }
+  };
+
+  const updatedMetadata: ArchiveMetadataRecord = {
+    ...(existingMetadata || {}),
+    username,
+    baselineFacets,
+    lastSyncDate: existingMetadata?.lastSyncDate ?? null,
+    lastSyncDate_comments: existingMetadata?.lastSyncDate_comments ?? null,
+    lastSyncDate_posts: existingMetadata?.lastSyncDate_posts ?? null
+  };
+  metadataStore.put(updatedMetadata);
+  await transactionToPromise(tx);
 };
 
 const upsertContextualEntries = async (

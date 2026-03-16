@@ -3,7 +3,14 @@ import { executeTakeover, rebuildDocument, signalReady } from '../takeover';
 import { initializeReactions } from '../utils/reactions';
 import { Logger } from '../utils/logger';
 import { createInitialArchiveState, type ArchiveSortBy, type ArchiveViewMode, isThreadMode } from './state';
-import { loadAllContextualItems, loadArchiveData, saveArchiveData } from './storage';
+import {
+  loadAllContextualItems,
+  loadArchiveData,
+  saveArchiveBaselineFacets,
+  saveArchiveData,
+  type ArchiveBaselineFacetSnapshot,
+  type ArchiveFacetScope
+} from './storage';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
 import { renderArchiveFeed, updateRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
@@ -23,7 +30,13 @@ import { createSearchWorkerClient } from './search/workerFactory';
 import { parseStructuredQuery } from './search/parser';
 import { isPositiveContentWithoutWildcard } from './search/ast';
 import { extractHighlightTerms, highlightTermsInContainer } from './search/highlight';
-import { computeFacets } from './search/facets';
+import {
+  computeFacets,
+  createFacetAccumulator,
+  scanFacetChunk,
+  type FacetGroup,
+  type FacetResult
+} from './search/facets';
 import { setupLinkPreviewsDelegated } from '../features/linkPreviews';
 import type { SearchWorkerClient } from './search/protocol';
 import type {
@@ -48,6 +61,7 @@ const VIEW_MODE_KEYBOARD_DEBOUNCE_MS = 80;
 const MAX_ARCHIVE_DOM_RECOVERY_ATTEMPTS = 2;
 const MAX_SEARCH_HIGHLIGHT_TARGETS = 1200;
 const NETWORK_IDLE_RENDER_MS = 5000;
+const NO_QUERY_EXACT_FACET_REFINE_BUDGET_MS = 30;
 
 let activeArchiveInitRunId = 0;
 let activeArchiveInitAbortController: AbortController | null = null;
@@ -1011,6 +1025,12 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let viewFallbackValue: ArchiveViewMode = DEFAULT_VIEW;
     let viewModeRefreshTimer: number | null = null;
     let pendingSortResetMessage: string | null = null;
+    let facetsRefineTimer: number | null = null;
+    let facetsRefineIdleHandle: number | null = null;
+    let facetsRefineToken = 0;
+    let lastRenderedFacetSignature: string | null = null;
+    let baselineFacetSnapshots: Partial<Record<ArchiveFacetScope, ArchiveBaselineFacetSnapshot>> = {};
+    const baselineFacetSnapshotSignatures: Partial<Record<ArchiveFacetScope, string>> = {};
 
     const rebuildCanonicalItemMap = (): void => {
       state.itemById.clear();
@@ -1034,6 +1054,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     const replaceCanonicalItems = (items: ArchiveItem[]): void => {
       state.items = items;
       markCanonicalItemsMutated();
+      clearPendingFacetRefine();
     };
 
     const getScopeButtons = (): HTMLButtonElement[] =>
@@ -1192,25 +1213,123 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     const createFacetDelayedMessageEl = (): HTMLSpanElement => {
       const delayedEl = document.createElement('span');
       delayedEl.className = 'pr-facet-delayed';
-      delayedEl.textContent = 'Facets delayed - refine query';
+      delayedEl.textContent = 'Facet counts sampled - calculating exact counts...';
       return delayedEl;
+    };
+
+    const toFacetScope = (scope: ArchiveSearchScope): ArchiveFacetScope =>
+      scope === 'all' ? 'all' : 'authored';
+
+    const createFacetGroupsSignature = (groups: readonly FacetGroup[]): string =>
+      groups.map(group => {
+        const itemsSignature = group.items.map(item =>
+          `${item.value}\u001F${item.queryFragment}\u001F${item.count}\u001F${item.active ? 1 : 0}`
+        ).join('\u001E');
+        return `${group.label}\u001D${itemsSignature}`;
+      }).join('\u001C');
+
+    const createFacetSnapshotSignature = (snapshot: {
+      syncKey: string | null;
+      contextCount: number;
+      groups: FacetGroup[];
+      delayed: boolean;
+    }): string =>
+      `${snapshot.syncKey ?? ''}\u001B${snapshot.contextCount}\u001B${snapshot.delayed ? 1 : 0}\u001B${createFacetGroupsSignature(snapshot.groups)}`;
+
+    const createFacetResultSignature = (result: Pick<FacetResult, 'groups' | 'delayed'>): string =>
+      `${result.delayed ? 1 : 0}\u001B${createFacetGroupsSignature(result.groups)}`;
+
+    const getNoQueryContextCount = (scope: ArchiveSearchScope, contextItemCount: number): number =>
+      scope === 'all' ? contextItemCount : 0;
+
+    const isNoQuery = (query: string): boolean =>
+      query.trim().length === 0;
+
+    const clearPendingFacetRefine = (): void => {
+      facetsRefineToken += 1;
+      if (facetsRefineIdleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(facetsRefineIdleHandle);
+        facetsRefineIdleHandle = null;
+      }
+      if (facetsRefineTimer !== null) {
+        window.clearTimeout(facetsRefineTimer);
+        facetsRefineTimer = null;
+      }
+    };
+    runAbortController.signal.addEventListener('abort', clearPendingFacetRefine, { once: true });
+
+    const scheduleFacetRefineTask = (task: () => void): void => {
+      if (typeof window.requestIdleCallback === 'function') {
+        facetsRefineIdleHandle = window.requestIdleCallback(() => {
+          facetsRefineIdleHandle = null;
+          task();
+        }, { timeout: 200 });
+        return;
+      }
+
+      facetsRefineTimer = window.setTimeout(() => {
+        facetsRefineTimer = null;
+        task();
+      }, 16);
+    };
+
+    const persistBaselineFacetSnapshot = (
+      scope: ArchiveSearchScope,
+      contextItemCount: number,
+      result: Pick<FacetResult, 'groups' | 'delayed'>
+    ): void => {
+      const facetScope = toFacetScope(scope);
+      const snapshot: ArchiveBaselineFacetSnapshot = {
+        syncKey: state.lastSyncDate,
+        contextCount: getNoQueryContextCount(scope, contextItemCount),
+        groups: result.groups,
+        delayed: result.delayed,
+        updatedAt: Date.now()
+      };
+      const signature = createFacetSnapshotSignature(snapshot);
+      if (baselineFacetSnapshotSignatures[facetScope] === signature) return;
+
+      baselineFacetSnapshots[facetScope] = snapshot;
+      baselineFacetSnapshotSignatures[facetScope] = signature;
+      void saveArchiveBaselineFacets(username, facetScope, {
+        syncKey: snapshot.syncKey,
+        contextCount: snapshot.contextCount,
+        groups: snapshot.groups,
+        delayed: snapshot.delayed
+      }).catch((error) => {
+        Logger.warn('Failed to save archive baseline facets snapshot', error);
+      });
+    };
+
+    const getValidBaselineFacetSnapshot = (
+      scope: ArchiveSearchScope,
+      contextItemCount: number
+    ): ArchiveBaselineFacetSnapshot | null => {
+      const snapshot = baselineFacetSnapshots[toFacetScope(scope)];
+      if (!snapshot) return null;
+      if (snapshot.syncKey !== state.lastSyncDate) return null;
+      if (snapshot.contextCount !== getNoQueryContextCount(scope, contextItemCount)) return null;
+      return snapshot;
     };
 
     const clearFacetUi = (): void => {
       if (!facetsEl) return;
       facetsEl.replaceChildren();
       facetsEl.style.display = 'none';
+      lastRenderedFacetSignature = null;
+      clearPendingFacetRefine();
     };
 
-    const renderFacets = (items: readonly ArchiveItem[], query: string): void => {
+    const renderFacetResult = (facetResult: Pick<FacetResult, 'groups' | 'delayed'>): void => {
       if (!facetsEl) return;
-
-      const facetResult = computeFacets(items, query);
       const hasFacetItems = facetResult.groups.some(group => group.items.length > 0);
       if (!hasFacetItems && !facetResult.delayed) {
         clearFacetUi();
         return;
       }
+      const signature = createFacetResultSignature(facetResult);
+      if (signature === lastRenderedFacetSignature) return;
+      lastRenderedFacetSignature = signature;
 
       const fragment = document.createDocumentFragment();
       for (const group of facetResult.groups) {
@@ -1247,6 +1366,83 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
       facetsEl.replaceChildren(fragment);
       facetsEl.style.display = '';
+    };
+
+    const scheduleExactNoQueryFacetRefine = (
+      items: readonly ArchiveItem[],
+      scope: ArchiveSearchScope,
+      contextItemCount: number,
+      requestId: number,
+      seed?: { accumulator: ReturnType<typeof createFacetAccumulator>; startIndex: number }
+    ): void => {
+      clearPendingFacetRefine();
+      const refineToken = facetsRefineToken;
+      const accumulator = seed?.accumulator ?? createFacetAccumulator();
+      let nextIndex = seed?.startIndex ?? 0;
+
+      const runRefineChunk = (): void => {
+        if (!isCurrentRun() || refineToken !== facetsRefineToken) return;
+        if (requestId !== activeQueryRequestId) return;
+        const currentUi = readUiState();
+        if (!isNoQuery(currentUi.query) || currentUi.scope !== scope) return;
+
+        const chunkResult = scanFacetChunk(items, currentUi.query, {
+          accumulator,
+          startIndex: nextIndex,
+          budgetMs: NO_QUERY_EXACT_FACET_REFINE_BUDGET_MS
+        });
+        nextIndex = chunkResult.nextIndex;
+        if (!isCurrentRun() || refineToken !== facetsRefineToken) return;
+        if (requestId !== activeQueryRequestId) return;
+        const latestUi = readUiState();
+        if (!isNoQuery(latestUi.query) || latestUi.scope !== scope) return;
+
+        renderFacetResult(chunkResult);
+
+        if (chunkResult.done) {
+          persistBaselineFacetSnapshot(scope, contextItemCount, chunkResult);
+          return;
+        }
+
+        scheduleFacetRefineTask(runRefineChunk);
+      };
+
+      scheduleFacetRefineTask(runRefineChunk);
+    };
+
+    const renderFacets = (
+      items: readonly ArchiveItem[],
+      query: string,
+      scope: ArchiveSearchScope,
+      contextItemCount: number,
+      requestId: number
+    ): void => {
+      if (!isNoQuery(query)) {
+        clearPendingFacetRefine();
+        renderFacetResult(computeFacets(items, query));
+        return;
+      }
+
+      const cachedSnapshot = getValidBaselineFacetSnapshot(scope, contextItemCount);
+      if (cachedSnapshot) {
+        renderFacetResult(cachedSnapshot);
+        if (cachedSnapshot.delayed) {
+          scheduleExactNoQueryFacetRefine(items, scope, contextItemCount, requestId);
+        }
+        return;
+      }
+
+      const sampledResult = scanFacetChunk(items, query);
+      renderFacetResult(sampledResult);
+      persistBaselineFacetSnapshot(scope, contextItemCount, sampledResult);
+      if (sampledResult.delayed) {
+        scheduleExactNoQueryFacetRefine(items, scope, contextItemCount, requestId, {
+          accumulator: sampledResult.accumulator,
+          startIndex: sampledResult.nextIndex
+        });
+      } else {
+        clearPendingFacetRefine();
+      }
     };
 
     const isNonDefaultState = (): boolean => {
@@ -1587,6 +1783,14 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       try {
         syncAuthoredSearchIndex();
         const contextItems = collectContextSearchItems();
+        if (isNoQuery(currentUi.query)) {
+          const cachedSnapshot = getValidBaselineFacetSnapshot(currentUi.scope, contextItems.length);
+          if (cachedSnapshot) {
+            renderFacetResult(cachedSnapshot);
+          }
+        } else {
+          clearPendingFacetRefine();
+        }
         searchManager.setContextItems(contextItems);
         const scopeParam = useDedicatedScopeParam ? currentUi.scope : undefined;
         const searchStart = performance.now();
@@ -1622,7 +1826,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         setStatusSearchResultCount(result.total);
         updateResultCount(result.total, result.diagnostics.tookMs, result.canonicalQuery);
         updateSearchStatus(result.diagnostics, result.resolvedScope, contextItems.length, sortMode);
-        renderFacets(result.items, result.canonicalQuery);
+        renderFacets(result.items, result.canonicalQuery, result.resolvedScope, contextItems.length, requestId);
         updateResetButton();
         const renderOptions = getRenderOptionsForQuery(currentUi.query);
 
@@ -2321,6 +2525,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       const dbStart = performance.now();
       const cached = await loadArchiveData(username);
       if (!isCurrentRun()) return;
+      state.lastSyncDate = cached.lastSyncDate;
       perfMetrics.dbLoadMs = performance.now() - dbStart;
       renderTopStatusLine();
 
@@ -2353,6 +2558,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           // Update in-memory canonical state to include items saved by previous failed attempts
           replaceCanonicalItems(currentCached.items);
           persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+          state.lastSyncDate = currentCached.lastSyncDate;
 
           if (attemptNumber > 1) {
             setStatus(`Retrying sync (attempt ${attemptNumber})`, false, true);
@@ -2522,8 +2728,25 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
     replaceCanonicalItems(cached.items);
     persistedContextItems = [...cachedContext.posts, ...cachedContext.comments];
+    state.lastSyncDate = cached.lastSyncDate;
+    baselineFacetSnapshots = cached.baselineFacets;
+    for (const scope of ['authored', 'all'] as const) {
+      const snapshot = baselineFacetSnapshots[scope];
+      baselineFacetSnapshotSignatures[scope] = snapshot
+        ? createFacetSnapshotSignature(snapshot)
+        : undefined;
+    }
     if (!isCurrentRun()) return;
     startedWithEmptyCache = cached.items.length === 0;
+
+    if (isNoQuery(searchInput.value)) {
+      const initialScope = getScopeValue();
+      const initialContextCount = getNoQueryContextCount(initialScope, persistedContextItems.length);
+      const cachedSnapshot = getValidBaselineFacetSnapshot(initialScope, initialContextCount);
+      if (cachedSnapshot) {
+        renderFacetResult(cachedSnapshot);
+      }
+    }
 
     if (cached.items.length > 0) {
       setStatusBaseMessage(`Loaded ${cached.items.length} items from cache. Checking for updates...`, false, false);
@@ -2709,6 +2932,7 @@ const syncArchive = async (
       lastSyncDate_comments: syncStartTime,
       lastSyncDate_posts: syncStartTime
     });
+    state.lastSyncDate = syncStartTime;
 
     onStatus(`Sync complete. ${state.items.length} total items.`);
   } else {
@@ -2719,5 +2943,6 @@ const syncArchive = async (
       lastSyncDate_comments: syncStartTime,
       lastSyncDate_posts: syncStartTime
     });
+    state.lastSyncDate = syncStartTime;
   }
 };
