@@ -674,7 +674,7 @@ return { data: {} };
     await expect(page.locator('.pr-item h2')).toHaveText('Test Post Alpha');
   });
 
-  test('search syntax help expands and example clicks execute queries [PR-UARCH-08]', async ({ page }) => {
+  test('search syntax help popover applies example queries [PR-UARCH-08][PR-UARCH-49][PR-UARCH-50][PR-UARCH-51][PR-UARCH-52]', async ({ page }) => {
     const userId = 'u-help-user';
     const userObj = { _id: userId, username: 'Help_User', displayName: 'Help User', slug: 'help-user', karma: 100 };
 
@@ -733,14 +733,35 @@ return { data: {} };
     await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
     await waitForArchiveRenderComplete(page);
 
-    const helpDetails = page.locator('#archive-search-help');
-    await expect(helpDetails).toBeVisible();
-    await expect(helpDetails).not.toHaveAttribute('open', '');
+    const stickyHeader = page.locator('#archive-sticky-header');
+    await expect(stickyHeader).toBeVisible();
+    await expect(stickyHeader).toHaveCSS('position', 'sticky');
 
-    await page.locator('#archive-search-help > summary').click();
-    await expect(helpDetails).toHaveAttribute('open', '');
+    const resyncBtn = page.locator('#archive-resync');
+    await expect(resyncBtn).toHaveText('🔄');
+    const firstViewTab = page.locator('#archive-view .pr-view-tab').first();
+    await expect(firstViewTab).toHaveCSS('flex-direction', 'row');
 
-    await page.locator('.pr-search-example[data-query=\'"alignment tax" -type:comment\']').click();
+    const helpButton = page.locator('#archive-search-help-btn');
+    const helpPopover = page.locator('#archive-search-help-popover');
+    await expect(helpButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(helpPopover).toBeHidden();
+    await expect(page.locator('#archive-search-status')).toBeHidden();
+
+    await helpButton.click();
+    await expect(helpButton).toHaveAttribute('aria-expanded', 'true');
+    await expect(helpPopover).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(helpButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(helpPopover).toBeHidden();
+
+    await helpButton.click();
+    await expect(helpButton).toHaveAttribute('aria-expanded', 'true');
+    await expect(helpPopover).toBeVisible();
+
+    await page.locator('#archive-search-help-popover .pr-search-example[data-query=\'"alignment tax" -type:comment\']').click();
+    await expect(helpButton).toHaveAttribute('aria-expanded', 'false');
+    await expect(helpPopover).toBeHidden();
 
     await expect(page.locator('#archive-search')).toHaveValue('"alignment tax" -type:comment');
     await expect.poll(() =>
@@ -748,6 +769,7 @@ return { data: {} };
     ).toBe('archive-search');
     await expect(page.locator('.pr-item')).toHaveCount(1);
     await expect(page.locator('.pr-item h2')).toHaveText('Alignment Tax Primer');
+    await expect(page.locator('#archive-search-status')).toBeHidden();
   });
 
   test('search index refreshes after in-place canonical load-all merge [PR-UARCH-22]', async ({ page }) => {
@@ -2770,5 +2792,3 @@ return { data: {} };
     await expectArchiveViewSelected(page, 'card');
   });
 });
-
-

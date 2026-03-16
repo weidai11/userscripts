@@ -152,21 +152,42 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         .pr-button.primary:hover {
             background: #0056cc;
         }
+        .pr-is-hidden {
+            display: none !important;
+        }
         .pr-archive-container {
+            --pr-archive-toolbar-height: 72px;
             padding: 10px;
             background: var(--pr-bg-secondary, #f9f9f9);
             border-radius: 8px;
+        }
+        .pr-archive-sticky-sentinel {
+            height: 1px;
+            margin-top: -1px;
+        }
+        .pr-archive-sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 1500;
+            background: var(--pr-bg-secondary, #f9f9f9);
+            overflow: visible;
+        }
+        .pr-archive-sticky-header.pr-is-scrolled {
+            border-bottom: 1px solid var(--pr-border-subtle, #eee);
         }
         .pr-archive-toolbar {
             display: flex;
             flex-direction: column;
             gap: 8px;
-            margin: 10px 0;
+            margin: 10px 0 0;
+            overflow: visible;
         }
         .pr-archive-toolbar-primary {
             display: flex;
             gap: 10px;
             align-items: center;
+            position: relative;
+            overflow: visible;
         }
         .pr-archive-toolbar-secondary {
             display: flex;
@@ -175,11 +196,20 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             flex-wrap: wrap;
             justify-content: space-between;
         }
+        .pr-icon-btn {
+            padding: 6px 8px;
+            min-width: unset;
+            font-size: 1.1em;
+            line-height: 1;
+        }
         .pr-toolbar-controls {
             display: flex;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
+        }
+        .pr-archive-sort-select {
+            margin: 0 8px;
         }
         .pr-toolbar-info {
             display: flex;
@@ -192,6 +222,17 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         .pr-result-count {
             white-space: nowrap;
             min-width: 90px;
+        }
+        .pr-archive-status-badge {
+            display: inline-flex;
+            align-items: center;
+            white-space: nowrap;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 0.8em;
+            background: rgba(246, 196, 83, 0.18);
+            border: 1px solid rgba(246, 196, 83, 0.45);
+            color: #7a4f00;
         }
         .pr-toolbar-reset {
             background: none;
@@ -295,10 +336,10 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         }
         .pr-view-tab {
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
             align-items: center;
-            gap: 2px;
-            padding: 4px 12px;
+            gap: 4px;
+            padding: 6px 10px;
             border: none;
             background: transparent;
             color: var(--pr-text-secondary, #666);
@@ -371,8 +412,23 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         .pr-search-retry-btn:hover {
             background: var(--pr-bg-hover, #333);
         }
-        .pr-search-help {
-            margin-top: 8px;
+        .pr-search-help-popover {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            right: 0;
+            margin: 0 auto;
+            width: min(95vw, 700px);
+            max-height: calc(100vh - var(--pr-archive-toolbar-height, 72px));
+            overflow-y: auto;
+            z-index: 1600;
+            background: var(--pr-bg-secondary, #f9f9f9);
+            border: 1px solid var(--pr-border-color, #ddd);
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        .pr-search-help-popover .pr-help-content {
+            border-top: none;
         }
         .pr-archive-facets {
             margin-top: 8px;
@@ -380,6 +436,13 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             flex-wrap: wrap;
             gap: 8px;
             align-items: center;
+            max-height: var(--pr-archive-facets-max-height, 120px);
+            overflow-y: auto;
+        }
+        @media (max-height: 760px) {
+            .pr-archive-facets {
+                max-height: var(--pr-archive-facets-max-height-small, 72px);
+            }
         }
         .pr-facet-group {
             display: inline-flex;
@@ -618,103 +681,111 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     </div>
     
     <div class="pr-archive-container">
-        <div class="pr-archive-toolbar">
-            <div class="pr-archive-toolbar-primary">
-                <div class="pr-search-container">
-                    <input type="text" id="archive-search" placeholder='Search by keyword, "phrase", or operator...' class="pr-input">
-                    <button id="archive-search-clear" class="pr-search-clear" type="button" aria-label="Clear search">&times;</button>
-                </div>
-                <button id="archive-resync" class="pr-button" title="Force re-download all data">Resync</button>
-            </div>
-            <div class="pr-archive-toolbar-secondary">
-                <div class="pr-toolbar-controls">
-                    <div id="archive-scope" class="pr-segmented-control" role="radiogroup" aria-label="Search scope">
-                        <button type="button" data-value="authored" class="pr-seg-btn active" role="radio" aria-checked="true" tabindex="0">Authored</button>
-                        <button type="button" data-value="all" class="pr-seg-btn" role="radio" aria-checked="false" tabindex="-1">All</button>
+        <div class="pr-archive-sticky-sentinel" id="archive-sticky-sentinel" aria-hidden="true"></div>
+        <div class="pr-archive-sticky-header" id="archive-sticky-header">
+            <div class="pr-archive-toolbar">
+                <div class="pr-archive-toolbar-primary">
+                    <div class="pr-search-container">
+                        <input type="text" id="archive-search" placeholder='Search by keyword, "phrase", or operator...' class="pr-input">
+                        <button id="archive-search-clear" class="pr-search-clear" type="button" aria-label="Clear search">&times;</button>
                     </div>
-                    <select id="archive-sort">
-                        <option value="date">Date (Newest)</option>
-                        <option value="date-asc">Date (Oldest)</option>
-                        <option value="score">Karma (High-Low)</option>
-                        <option value="score-asc">Karma (Low-High)</option>
-                        <option value="replyTo">Reply To (Name)</option>
-                        <option value="relevance">Relevance</option>
-                    </select>
-                    <div id="archive-view" class="pr-view-tabs" role="tablist" aria-label="View mode">
-                        <button type="button" data-value="card" class="pr-view-tab active" role="tab"
-                                aria-selected="true" tabindex="0" aria-label="Card view" title="Card View">
-                            <span class="pr-view-icon">☰</span>
-                            <span class="pr-view-label">Card</span>
-                        </button>
-                        <button type="button" data-value="index" class="pr-view-tab" role="tab"
-                                aria-selected="false" tabindex="-1" aria-label="Index view" title="Index View">
-                            <span class="pr-view-icon">≡</span>
-                            <span class="pr-view-label">Index</span>
-                        </button>
-                        <button type="button" data-value="thread-full" class="pr-view-tab" role="tab"
-                                aria-selected="false" tabindex="-1" aria-label="Thread view full context" title="Thread View (Full Context)">
-                            <span class="pr-view-icon">⊞</span>
-                            <span class="pr-view-label">Thread</span>
-                        </button>
-                        <button type="button" data-value="thread-placeholder" class="pr-view-tab" role="tab"
-                                aria-selected="false" tabindex="-1" aria-label="Thread view compact context" title="Thread View (Placeholder Context)">
-                            <span class="pr-view-icon">⊟</span>
-                            <span class="pr-view-label">Compact</span>
-                        </button>
+                    <button id="archive-search-help-btn" class="pr-button pr-icon-btn" type="button"
+                            title="Search syntax help" aria-label="Search help" aria-expanded="false"
+                            aria-controls="archive-search-help-popover">?</button>
+                    <button id="archive-resync" class="pr-button pr-icon-btn" type="button"
+                            title="Force re-download all data" aria-label="Resync">🔄</button>
+                    <div id="archive-search-help-popover" class="pr-search-help-popover pr-help pr-is-hidden"
+                         role="region" aria-label="Search syntax reference">
+                        <div class="pr-help-content">
+                            <div class="pr-help-columns">
+                                <div class="pr-help-section">
+                                    <h4>Text Search</h4>
+                                    <ul>
+                                        <li><code>word</code> - plain keyword</li>
+                                        <li><code>"exact phrase"</code> - phrase match</li>
+                                        <li><code>/regex/i</code> - regex literal</li>
+                                        <li><code>*</code> - match all items</li>
+                                        <li><code>-term</code> - exclude results matching <code>term</code></li>
+                                    </ul>
+                                </div>
+                                <div class="pr-help-section">
+                                    <h4>Field Operators</h4>
+                                    <ul>
+                                        <li><code>author:name</code> - filter by author</li>
+                                        <li><code>replyto:name</code> - filter by parent author</li>
+                                        <li><code>type:post</code> or <code>type:comment</code></li>
+                                    </ul>
+                                </div>
+                                <div class="pr-help-section">
+                                    <h4>Range Operators</h4>
+                                    <ul>
+                                        <li><code>score:&gt;10</code> - karma above 10</li>
+                                        <li><code>score:5..20</code> - karma 5 to 20</li>
+                                        <li><code>date:2025-01-01</code> - exact date</li>
+                                        <li><code>date:2025-01..2025-06</code> - date range</li>
+                                        <li><code>date:&gt;2025-01-01</code> - after date</li>
+                                    </ul>
+                                </div>
+                                <div class="pr-help-section">
+                                    <h4>Examples</h4>
+                                    <ul>
+                                        <li><button type="button" class="pr-search-example" data-query='author:"Eliezer" score:>50'><code>author:"Eliezer" score:&gt;50</code></button></li>
+                                        <li><button type="button" class="pr-search-example" data-query='type:post date:2025-01..2025-06'><code>type:post date:2025-01..2025-06</code></button></li>
+                                        <li><button type="button" class="pr-search-example" data-query='"alignment tax" -type:comment'><code>"alignment tax" -type:comment</code></button></li>
+                                        <li><button type="button" class="pr-search-example" data-query='* -type:post'><code>* -type:post</code></button> (all comments)</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="pr-toolbar-info">
-                    <span id="archive-result-count" class="pr-result-count"></span>
-                    <button id="archive-reset-filters" class="pr-toolbar-reset" type="button">Reset</button>
+                <div class="pr-archive-toolbar-secondary">
+                    <div class="pr-toolbar-controls">
+                        <div id="archive-scope" class="pr-segmented-control" role="radiogroup" aria-label="Search scope">
+                            <button type="button" data-value="authored" class="pr-seg-btn active" role="radio" aria-checked="true" tabindex="0">Authored</button>
+                            <button type="button" data-value="all" class="pr-seg-btn" role="radio" aria-checked="false" tabindex="-1">All</button>
+                        </div>
+                        <select id="archive-sort" class="pr-archive-sort-select">
+                            <option value="date">Date (Newest)</option>
+                            <option value="date-asc">Date (Oldest)</option>
+                            <option value="score">Karma (High-Low)</option>
+                            <option value="score-asc">Karma (Low-High)</option>
+                            <option value="replyTo">Reply To (Name)</option>
+                            <option value="relevance">Relevance</option>
+                        </select>
+                        <div id="archive-view" class="pr-view-tabs" role="tablist" aria-label="View mode">
+                            <button type="button" data-value="card" class="pr-view-tab active" role="tab"
+                                    aria-selected="true" tabindex="0" aria-label="Card view" title="Card View">
+                                <span class="pr-view-icon">☰</span>
+                                <span class="pr-view-label">Card</span>
+                            </button>
+                            <button type="button" data-value="index" class="pr-view-tab" role="tab"
+                                    aria-selected="false" tabindex="-1" aria-label="Index view" title="Index View">
+                                <span class="pr-view-icon">≡</span>
+                                <span class="pr-view-label">Index</span>
+                            </button>
+                            <button type="button" data-value="thread-full" class="pr-view-tab" role="tab"
+                                    aria-selected="false" tabindex="-1" aria-label="Thread view full context" title="Thread View (Full Context)">
+                                <span class="pr-view-icon">⊞</span>
+                                <span class="pr-view-label">Thread</span>
+                            </button>
+                            <button type="button" data-value="thread-placeholder" class="pr-view-tab" role="tab"
+                                    aria-selected="false" tabindex="-1" aria-label="Thread view compact context" title="Thread View (Placeholder Context)">
+                                <span class="pr-view-icon">⊟</span>
+                                <span class="pr-view-label">Compact</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="pr-toolbar-info">
+                        <span id="archive-status-badge" class="pr-archive-status-badge pr-is-hidden" role="status" aria-live="polite"></span>
+                        <span id="archive-result-count" class="pr-result-count"></span>
+                        <button id="archive-reset-filters" class="pr-toolbar-reset" type="button">Reset</button>
+                    </div>
                 </div>
             </div>
+            <div id="archive-facets" class="pr-archive-facets" style="display: none;"></div>
         </div>
-        <div id="archive-search-status" class="pr-archive-search-status">Ready</div>
-        <details class="pr-help pr-search-help" id="archive-search-help">
-            <summary>Search syntax reference</summary>
-            <div class="pr-help-content">
-                <div class="pr-help-columns">
-                    <div class="pr-help-section">
-                        <h4>Text Search</h4>
-                        <ul>
-                            <li><code>word</code> - plain keyword</li>
-                            <li><code>"exact phrase"</code> - phrase match</li>
-                            <li><code>/regex/i</code> - regex literal</li>
-                            <li><code>*</code> - match all items</li>
-                            <li><code>-term</code> - exclude results matching <code>term</code></li>
-                        </ul>
-                    </div>
-                    <div class="pr-help-section">
-                        <h4>Field Operators</h4>
-                        <ul>
-                            <li><code>author:name</code> - filter by author</li>
-                            <li><code>replyto:name</code> - filter by parent author</li>
-                            <li><code>type:post</code> or <code>type:comment</code></li>
-                        </ul>
-                    </div>
-                    <div class="pr-help-section">
-                        <h4>Range Operators</h4>
-                        <ul>
-                            <li><code>score:&gt;10</code> - karma above 10</li>
-                            <li><code>score:5..20</code> - karma 5 to 20</li>
-                            <li><code>date:2025-01-01</code> - exact date</li>
-                            <li><code>date:2025-01..2025-06</code> - date range</li>
-                            <li><code>date:&gt;2025-01-01</code> - after date</li>
-                        </ul>
-                    </div>
-                    <div class="pr-help-section">
-                        <h4>Examples</h4>
-                        <ul>
-                            <li><button type="button" class="pr-search-example" data-query='author:"Eliezer" score:>50'><code>author:"Eliezer" score:&gt;50</code></button></li>
-                            <li><button type="button" class="pr-search-example" data-query='type:post date:2025-01..2025-06'><code>type:post date:2025-01..2025-06</code></button></li>
-                            <li><button type="button" class="pr-search-example" data-query='"alignment tax" -type:comment'><code>"alignment tax" -type:comment</code></button></li>
-                            <li><button type="button" class="pr-search-example" data-query='* -type:post'><code>* -type:post</code></button> (all comments)</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </details>
-        <div id="archive-facets" class="pr-archive-facets" style="display: none;"></div>
+        <div id="archive-search-status" class="pr-archive-search-status pr-is-hidden"></div>
     </div>
 
     <div id="archive-error-container" style="display: none;"></div>
@@ -734,12 +805,16 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     const sortSelect = document.getElementById('archive-sort') as HTMLSelectElement;
     const viewContainer = document.getElementById('archive-view') as HTMLDivElement | null;
     const resultCountEl = document.getElementById('archive-result-count');
+    const statusBadgeEl = document.getElementById('archive-status-badge');
     const resetBtn = document.getElementById('archive-reset-filters') as HTMLButtonElement;
     const resyncBtn = document.getElementById('archive-resync');
+    const searchHelpBtn = document.getElementById('archive-search-help-btn') as HTMLButtonElement | null;
+    const searchHelpPopoverEl = document.getElementById('archive-search-help-popover');
     const errorContainer = document.getElementById('archive-error-container');
     const searchStatusEl = document.getElementById('archive-search-status');
-    const searchHelpEl = document.getElementById('archive-search-help');
     const facetsEl = document.getElementById('archive-facets') as HTMLDivElement | null;
+    const stickyHeaderEl = document.getElementById('archive-sticky-header');
+    const stickySentinelEl = document.getElementById('archive-sticky-sentinel');
 
     const isArchiveDomDetached = (): boolean => {
       const currentRoot = document.getElementById('power-reader-root');
@@ -871,6 +946,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
     // Observer for lazy post action button refresh
     let postObserver: IntersectionObserver | null = null;
+    let stickyObserver: IntersectionObserver | null = null;
     const initPostObserver = () => {
       if (postObserver) postObserver.disconnect();
       postObserver = new IntersectionObserver((entries) => {
@@ -890,6 +966,21 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         }
       }, { rootMargin: '200px' }); // Refresh slightly before they enter viewport
     };
+
+    const initStickyObserver = (): void => {
+      if (!stickyHeaderEl || !stickySentinelEl) return;
+      stickyObserver?.disconnect();
+      stickyObserver = new IntersectionObserver((entries) => {
+        const entry = entries[0];
+        stickyHeaderEl.classList.toggle('pr-is-scrolled', !entry?.isIntersecting);
+      }, { threshold: [0], rootMargin: '1px 0px 0px 0px' });
+      stickyObserver.observe(stickySentinelEl);
+    };
+    initStickyObserver();
+    runAbortController.signal.addEventListener('abort', () => {
+      stickyObserver?.disconnect();
+      postObserver?.disconnect();
+    }, { once: true });
 
     const urlState = parseArchiveUrlState();
     const isDebugExplainEnabled = (): boolean =>
@@ -1370,7 +1461,11 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       if (!searchStatusEl) return;
 
       searchStatusEl.textContent = '';
-      searchStatusEl.classList.remove('warning', 'error');
+      if (statusBadgeEl) {
+        statusBadgeEl.classList.add('pr-is-hidden');
+        statusBadgeEl.textContent = '';
+        statusBadgeEl.removeAttribute('title');
+      }
 
       const addChip = (text: string, type: 'info' | 'warning' | 'error' = 'info'): void => {
         const chip = document.createElement('span');
@@ -1380,12 +1475,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       };
 
       let hasMessages = false;
+      const criticalMessages: string[] = [];
 
       if (resolvedScope === 'all') {
         addChip(`Scope: authored + ${contextItemCount} context items`, 'info');
         hasMessages = true;
         if (contextItemCount === 0) {
-          addChip('Context cache may be incomplete', 'warning');
+          const contextWarning = 'Context cache may be incomplete';
+          addChip(contextWarning, 'warning');
+          criticalMessages.push(contextWarning);
           hasMessages = true;
         }
         if (sortMode === 'replyTo') {
@@ -1395,7 +1493,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       }
 
       if (diagnostics.partialResults) {
-        addChip(`Partial results (${diagnostics.tookMs}ms budget hit)`, 'warning');
+        const partialLabel = `Partial results (${diagnostics.tookMs}ms budget hit)`;
+        addChip(partialLabel, 'warning');
+        criticalMessages.push(partialLabel);
         hasMessages = true;
 
         const retryBtn = document.createElement('button');
@@ -1412,6 +1512,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           ? 'error'
           : 'warning';
         addChip(warning.message, type);
+        criticalMessages.push(warning.message);
         hasMessages = true;
       }
 
@@ -1421,9 +1522,19 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         hasMessages = true;
       }
 
-      if (!hasMessages) {
-        searchStatusEl.textContent = 'Ready';
+      if (statusBadgeEl) {
+        const hasCriticalDiagnostics = criticalMessages.length > 0;
+        statusBadgeEl.classList.toggle('pr-is-hidden', !hasCriticalDiagnostics);
+        if (hasCriticalDiagnostics) {
+          const diagnosticsWarningSummary = diagnostics.partialResults
+            ? `Partial results${criticalMessages.length > 1 ? ` (+${criticalMessages.length - 1})` : ''}`
+            : `${criticalMessages.length} issue${criticalMessages.length === 1 ? '' : 's'}`;
+          statusBadgeEl.textContent = diagnosticsWarningSummary;
+          statusBadgeEl.title = criticalMessages.join('\n');
+        }
       }
+
+      searchStatusEl.classList.toggle('pr-is-hidden', !hasMessages);
     };
 
     const ensureSearchResultContextLoaded = (items: readonly ArchiveItem[]): void => {
@@ -1604,9 +1715,6 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     // Attach standard event listeners using the host's reader state
     attachEventListeners(uiHost.getReaderState());
     initReactionTooltips();
-
-    // Sticky header currently depends on main-reader singleton state (`getState()`).
-    // Do not enable it in archive mode until it is wired to archive-local ReaderState.
     setupExternalLinks();
     setupInlineReactions(uiHost.getReaderState());
 
@@ -1703,11 +1811,50 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       searchInput.focus();
     });
 
-    searchHelpEl?.addEventListener('click', async (event: Event) => {
+    let isSearchHelpPopoverOpen = false;
+    const handleSearchHelpDocumentPointerDown = (event: PointerEvent): void => {
+      if (!isSearchHelpPopoverOpen || !searchHelpPopoverEl) return;
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (searchHelpPopoverEl.contains(target)) return;
+      if (searchHelpBtn?.contains(target)) return;
+      setSearchHelpPopoverOpen(false);
+    };
+    const handleSearchHelpDocumentKeydown = (event: KeyboardEvent): void => {
+      if (!isSearchHelpPopoverOpen || event.key !== 'Escape') return;
+      const target = event.target as Node | null;
+      if (target && (searchHelpPopoverEl?.contains(target) || searchHelpBtn?.contains(target))) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      setSearchHelpPopoverOpen(false);
+      searchHelpBtn?.focus();
+    };
+    const setSearchHelpPopoverOpen = (open: boolean): void => {
+      if (!searchHelpPopoverEl || !searchHelpBtn) return;
+      if (isSearchHelpPopoverOpen === open) return;
+      isSearchHelpPopoverOpen = open;
+      searchHelpPopoverEl.classList.toggle('pr-is-hidden', !open);
+      searchHelpBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        document.addEventListener('pointerdown', handleSearchHelpDocumentPointerDown);
+        document.addEventListener('keydown', handleSearchHelpDocumentKeydown);
+      } else {
+        document.removeEventListener('pointerdown', handleSearchHelpDocumentPointerDown);
+        document.removeEventListener('keydown', handleSearchHelpDocumentKeydown);
+      }
+    };
+    searchHelpBtn?.addEventListener('click', (event: MouseEvent) => {
+      event.preventDefault();
+      setSearchHelpPopoverOpen(!isSearchHelpPopoverOpen);
+    });
+
+    searchHelpPopoverEl?.addEventListener('click', async (event: Event) => {
       const target = (event.target as HTMLElement).closest('.pr-search-example') as HTMLElement | null;
       if (!target) return;
       const query = target.dataset.query;
       if (!query) return;
+      setSearchHelpPopoverOpen(false);
       searchInput.value = query;
       updateClearButton();
       updateSortOptions(deriveHasContentQuery(searchInput.value), getViewValue());
@@ -1826,6 +1973,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     };
     shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ = handleArchiveGlobalKeydown;
     document.addEventListener('keydown', handleArchiveGlobalKeydown);
+    runAbortController.signal.addEventListener('abort', () => {
+      setSearchHelpPopoverOpen(false);
+      document.removeEventListener('pointerdown', handleSearchHelpDocumentPointerDown);
+      document.removeEventListener('keydown', handleSearchHelpDocumentKeydown);
+      if (shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__ === handleArchiveGlobalKeydown) {
+        delete shortcutWindow.__PR_ARCHIVE_SHORTCUT_HANDLER__;
+      }
+      document.removeEventListener('keydown', handleArchiveGlobalKeydown);
+    }, { once: true });
 
     resetBtn?.addEventListener('click', async () => {
       if (searchDispatchTimer) {

@@ -764,6 +764,10 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-45] Debug Explain Output**: Utilizing the query parameter `?debug=1` turns on relevance transparency, outputting diagnostic math alongside results (`tokenHits`, `phraseHits`, internal scoring bounds). 
 - **[PR-UARCH-46] Interactive Facet Filtering**: Clickable dynamic `.pr-facet-chip` elements populate based on current result aggregations. Activating a facet updates the native search bar text string and automatically dispatches a new search via event triggering.
 - **[PR-UARCH-47] Eager Parent Preloading**: To minimize network round-trips and improve responsiveness in thread views, the archive sync loader eagerly requests the `htmlBody` and `contents` of immediate parent comments during the initial authored history download. These parent items are extracted and automatically populated into the persistent contextual cache.
+- **[PR-UARCH-49] Sticky Archive Controls**: The archive toolbar and facet chip row are rendered in a sticky header with scroll-state styling so search/sort/view controls remain pinned during feed scrolling.
+- **[PR-UARCH-50] Help Popover Control**: Search syntax help is exposed via an icon-triggered popover (`#archive-search-help-btn` / `#archive-search-help-popover`) that supports outside close via `pointerdown`, `Escape`, and example-click close behavior.
+- **[PR-UARCH-51] Idle Search Status Collapse**: The archive search status row (`#archive-search-status`) remains hidden when there are no messages and only appears for active diagnostics/info chips.
+- **[PR-UARCH-52] Compact Toolbar Density**: Archive top controls use compact icon actions, horizontal view tabs, and grouped spacing to reduce vertical footprint without removing existing sort/scope/view functionality.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection
