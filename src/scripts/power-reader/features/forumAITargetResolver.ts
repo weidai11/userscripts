@@ -4,7 +4,7 @@ export interface ForumResolvedAITarget extends AISendTarget {
   containerEl: HTMLElement | null;
 }
 
-const COMMENT_CONTAINER_SELECTORS = ['.comments-node[id]', '.CommentFrame-node[id]'];
+const COMMENT_CONTAINER_SELECTORS = ['.comments-node', '.CommentFrame-node'];
 const FEED_CARD_SELECTORS = ['.LWPostsItem-postsItem', '.PostsItem2-root', '.PostsItem-root'];
 const COMMENT_BODY_SELECTORS = [
   '.CommentsItem-content',
@@ -16,6 +16,8 @@ const COMMENT_BODY_SELECTORS = [
 const POST_BODY_SELECTORS = ['#postBody', '.PostsPage-postsPage', '.PostsPage-post'];
 const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS = [
   '.CommentsItem-meta',
+  '.CommentsItemMeta-root',
+  '.CommentsItemDate-root',
   '.CommentFrame-meta',
   '.CommentMeta',
   '.comment-meta',
@@ -46,6 +48,7 @@ const EXCLUDED_REGION_SELECTORS = [
   '.SearchBar-root',
   '.GlobalSidebar-root',
 ];
+const COMMENT_PERMALINK_ROOT_SELECTOR = '.CommentPermalink-root';
 
 const joinSelector = (selectors: string[]): string => selectors.join(', ');
 const COMMENT_CONTAINER_SELECTOR = joinSelector(COMMENT_CONTAINER_SELECTORS);
@@ -93,6 +96,15 @@ const parseCommentIdFromHref = (href: string): string | null => {
   return null;
 };
 
+const getCommentIdFromCurrentUrl = (): string | null => {
+  try {
+    const url = new URL(window.location.href);
+    return extractCommentId(url.searchParams.get('commentId'));
+  } catch {
+    return null;
+  }
+};
+
 const parsePostIdFromPath = (pathOrHref: string): string | null => {
   const match = pathOrHref.match(/\/posts\/([A-Za-z0-9_-]+)/i);
   return match?.[1] || null;
@@ -118,7 +130,6 @@ const isInBodyContent = (el: HTMLElement): boolean => !!el.closest(BODY_CONTENT_
 const getStructuralCommentLinkId = (anchor: HTMLAnchorElement): string | null => {
   const commentId = parseCommentIdFromHref(anchor.href || anchor.getAttribute('href') || '');
   if (!commentId) return null;
-  if (isInBodyContent(anchor)) return null;
   if (!anchor.closest(STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR)) return null;
   return commentId;
 };
@@ -167,6 +178,34 @@ const buildPostTarget = (postId: string, sourceEl: HTMLElement | null, container
 const getCommentContainer = (el: HTMLElement): HTMLElement | null =>
   el.closest(COMMENT_CONTAINER_SELECTOR) as HTMLElement | null;
 
+const getCommentIdFromContainer = (container: HTMLElement): string | null => {
+  const fromContainerId = extractCommentId(container.id);
+  if (fromContainerId) return fromContainerId;
+
+  const structuralContexts = container.querySelectorAll(
+    STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR
+  ) as NodeListOf<HTMLElement>;
+
+  for (const contextEl of structuralContexts) {
+    if (contextEl.closest(COMMENT_CONTAINER_SELECTOR) !== container) continue;
+    const anchors = contextEl.querySelectorAll('a[href]') as NodeListOf<HTMLAnchorElement>;
+    for (const anchor of anchors) {
+      const fromAnchor = parseCommentIdFromHref(anchor.href || anchor.getAttribute('href') || '');
+      if (fromAnchor) return fromAnchor;
+    }
+  }
+
+  const permalinkRoot = container.closest(COMMENT_PERMALINK_ROOT_SELECTOR) as HTMLElement | null;
+  if (permalinkRoot) {
+    const focalCommentContainer = permalinkRoot.querySelector(COMMENT_CONTAINER_SELECTOR) as HTMLElement | null;
+    if (focalCommentContainer === container) {
+      return getCommentIdFromCurrentUrl();
+    }
+  }
+
+  return null;
+};
+
 const resolvePostContainer = (el: HTMLElement): HTMLElement | null =>
   (el.closest(FEED_CARD_SELECTOR) as HTMLElement | null)
   || (el.closest(POST_BODY_SELECTORS.join(', ')) as HTMLElement | null)
@@ -197,7 +236,7 @@ export const resolveForumAITargetFromElement = (rawEl: EventTarget | null): Foru
 
   const commentContainer = getCommentContainer(el);
   if (commentContainer) {
-    const commentId = extractCommentId(commentContainer.id);
+    const commentId = getCommentIdFromContainer(commentContainer);
     if (commentId) {
       return buildCommentTarget(commentId, commentContainer, commentContainer);
     }

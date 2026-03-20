@@ -46,6 +46,91 @@ const createForumHtml = ({ commentId, postId, commentClass }: NativeForumFixture
   </html>
 `;
 
+const createCommentPermalinkHtml = (
+  { commentId, postId }: Pick<NativeForumFixture, 'commentId' | 'postId'>
+): string => `
+  <!doctype html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body>
+      <div class="Header-rightHeaderItems">
+        <div class="SearchBar-root">Search</div>
+      </div>
+      <main>
+        <div class="CommentPermalink-root">
+          <div class="comments-node CommentFrame-node CommentFrame-answerLeafComment">
+            <div class="CommentsItem-root recent-comments-node">
+              <div class="CommentsItem-body">
+                <div class="CommentsItemMeta-root">
+                  <span class="CommentsItemDate-root">
+                    <a href="/posts/${postId}/example-post?commentId=${commentId}">
+                      <time datetime="2026-03-19T20:07:30.178Z">1d</time>
+                    </a>
+                  </span>
+                </div>
+                <div class="CommentBody-root">
+                  <p id="permalink-comment-body">Permalink comment ${commentId}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <article id="postBody">
+          <h1><a id="post-title-link" href="/posts/${postId}/example-post">Example Post</a></h1>
+          <div id="post-body-text">Post body text</div>
+        </article>
+      </main>
+    </body>
+  </html>
+`;
+
+const createCommentPermalinkWithReplyHtml = (
+  { commentId, postId }: Pick<NativeForumFixture, 'commentId' | 'postId'>
+): string => `
+  <!doctype html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body>
+      <div class="Header-rightHeaderItems">
+        <div class="SearchBar-root">Search</div>
+      </div>
+      <main>
+        <div class="CommentPermalink-root">
+          <div class="comments-node CommentFrame-node CommentFrame-answerLeafComment">
+            <div class="CommentsItem-root recent-comments-node">
+              <div class="CommentsItem-body">
+                <div class="CommentsItemMeta-root">
+                  <span class="CommentsItemDate-root">
+                    <a href="/posts/${postId}/example-post?commentId=${commentId}">
+                      <time datetime="2026-03-19T20:07:30.178Z">1d</time>
+                    </a>
+                  </span>
+                </div>
+                <div class="CommentBody-root">
+                  <p id="permalink-comment-body-with-reply">Permalink comment ${commentId}</p>
+                </div>
+              </div>
+            </div>
+            <div class="comments-node CommentFrame-node CommentFrame-answerLeafComment">
+              <div class="CommentsItem-root recent-comments-node">
+                <div class="CommentsItem-body">
+                  <div class="CommentBody-root">
+                    <p id="permalink-reply-body">Visible reply</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <article id="postBody">
+          <h1><a id="post-title-link" href="/posts/${postId}/example-post">Example Post</a></h1>
+          <div id="post-body-text">Post body text</div>
+        </article>
+      </main>
+    </body>
+  </html>
+`;
+
 const mockGraphQLResponse = (
   commentId: string,
   postId: string,
@@ -184,6 +269,13 @@ const installGmMocks = async (page: Page) => {
 const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
+const getStoredPayloadByPrefix = async (page: Page, keyPrefix: string): Promise<string | null> =>
+  page.evaluate((prefix) => {
+    const calls = (window as any).__GM_CALLS || {};
+    const key = Object.keys(calls).find((candidate: string) => candidate.startsWith(prefix));
+    return key ? String(calls[key]) : null;
+  }, keyPrefix);
+
 const setupNativeForumPage = async (
   page: Page,
   fixture: NativeForumFixture,
@@ -286,6 +378,104 @@ test.describe('Forum AI Hotkeys', () => {
 
     await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
     await expect.poll(async () => page.evaluate(() => Object.keys((window as any).__GM_CALLS || {}).find((k: string) => k.startsWith('ai_studio_prompt_payload:')) || null)).not.toBeNull();
+  });
+
+  test('[PR-AI-09][PR-HK-08] Comment permalink page: g over comment body sends focal comment thread', async ({ page }) => {
+    const host = 'www.lesswrong.com';
+    const commentId = 'c-lw-permalink';
+    const postId = 'p-lw-permalink';
+    const pageUrl = `https://${host}/posts/${postId}/example-post?commentId=${commentId}`;
+    const graphUrl = `https://${host}/graphql`;
+    const graphData = mockGraphQLResponse(commentId, postId, `Post ${postId}`);
+
+    await page.route(pageUrl, async (route) => {
+      await route.fulfill({
+        contentType: 'text/html',
+        body: createCommentPermalinkHtml({ commentId, postId }),
+      });
+    });
+
+    await page.route(graphUrl, async (route) => {
+      const body = route.request().postDataJSON() as { query?: string };
+      const query = body?.query || '';
+
+      if (query.includes('GetComment')) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { comment: graphData.comment } }) });
+        return;
+      }
+      if (query.includes('GetPost')) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { post: graphData.post } }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: {} }) });
+    });
+
+    await page.goto(pageUrl);
+    await installGmMocks(page);
+
+    const scriptContent = getScriptContent();
+    await page.evaluate(scriptContent);
+    await expect(page.locator('#pr-reader-link')).toBeVisible();
+
+    await page.locator('#permalink-comment-body').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    await expect.poll(async () => getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')).not.toBeNull();
+
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="${commentId}"`);
+    expect(payload).toMatch(new RegExp(`<comment id="${commentId}"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="${postId}"[^>]*is_focal="true"`));
+  });
+
+  test('[PR-AI-09][PR-HK-08] Comment permalink with visible reply still resolves focal permalink comment', async ({ page }) => {
+    const host = 'www.lesswrong.com';
+    const commentId = 'c-lw-permalink-reply';
+    const postId = 'p-lw-permalink-reply';
+    const pageUrl = `https://${host}/posts/${postId}/example-post?commentId=${commentId}`;
+    const graphUrl = `https://${host}/graphql`;
+    const graphData = mockGraphQLResponse(commentId, postId, `Post ${postId}`);
+
+    await page.route(pageUrl, async (route) => {
+      await route.fulfill({
+        contentType: 'text/html',
+        body: createCommentPermalinkWithReplyHtml({ commentId, postId }),
+      });
+    });
+
+    await page.route(graphUrl, async (route) => {
+      const body = route.request().postDataJSON() as { query?: string };
+      const query = body?.query || '';
+
+      if (query.includes('GetComment')) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { comment: graphData.comment } }) });
+        return;
+      }
+      if (query.includes('GetPost')) {
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: { post: graphData.post } }) });
+        return;
+      }
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: {} }) });
+    });
+
+    await page.goto(pageUrl);
+    await installGmMocks(page);
+
+    const scriptContent = getScriptContent();
+    await page.evaluate(scriptContent);
+    await expect(page.locator('#pr-reader-link')).toBeVisible();
+
+    await page.locator('#permalink-comment-body-with-reply').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    await expect.poll(async () => getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')).not.toBeNull();
+
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="${commentId}"`);
+    expect(payload).toMatch(new RegExp(`<comment id="${commentId}"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="${postId}"[^>]*is_focal="true"`));
   });
 
   test('[PR-HK-08] Does not send when pressing g over unrelated area even if URL has commentId', async ({ page }) => {

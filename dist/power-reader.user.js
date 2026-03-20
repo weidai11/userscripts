@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.723
+// @version    1.2.724
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1874,7 +1874,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.723"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.724"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9091,7 +9091,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9271,7 +9271,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -12900,7 +12900,7 @@ getPromptPrefix: getAIStudioPrefix,
     window.addEventListener("hashchange", scheduleInjectLinks, { signal });
     window.addEventListener("beforeunload", () => observer.disconnect(), { signal });
   };
-  const COMMENT_CONTAINER_SELECTORS = [".comments-node[id]", ".CommentFrame-node[id]"];
+  const COMMENT_CONTAINER_SELECTORS = [".comments-node", ".CommentFrame-node"];
   const FEED_CARD_SELECTORS = [".LWPostsItem-postsItem", ".PostsItem2-root", ".PostsItem-root"];
   const COMMENT_BODY_SELECTORS = [
     ".CommentsItem-content",
@@ -12912,6 +12912,8 @@ getPromptPrefix: getAIStudioPrefix,
   const POST_BODY_SELECTORS = ["#postBody", ".PostsPage-postsPage", ".PostsPage-post"];
   const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS = [
     ".CommentsItem-meta",
+    ".CommentsItemMeta-root",
+    ".CommentsItemDate-root",
     ".CommentFrame-meta",
     ".CommentMeta",
     ".comment-meta",
@@ -12942,6 +12944,7 @@ getPromptPrefix: getAIStudioPrefix,
     ".SearchBar-root",
     ".GlobalSidebar-root"
   ];
+  const COMMENT_PERMALINK_ROOT_SELECTOR = ".CommentPermalink-root";
   const joinSelector = (selectors) => selectors.join(", ");
   const COMMENT_CONTAINER_SELECTOR = joinSelector(COMMENT_CONTAINER_SELECTORS);
   const FEED_CARD_SELECTOR = joinSelector(FEED_CARD_SELECTORS);
@@ -12977,6 +12980,14 @@ getPromptPrefix: getAIStudioPrefix,
     }
     return null;
   };
+  const getCommentIdFromCurrentUrl = () => {
+    try {
+      const url = new URL(window.location.href);
+      return extractCommentId(url.searchParams.get("commentId"));
+    } catch {
+      return null;
+    }
+  };
   const parsePostIdFromPath = (pathOrHref) => {
     const match = pathOrHref.match(/\/posts\/([A-Za-z0-9_-]+)/i);
     return match?.[1] || null;
@@ -12997,7 +13008,6 @@ getPromptPrefix: getAIStudioPrefix,
   const getStructuralCommentLinkId = (anchor) => {
     const commentId = parseCommentIdFromHref(anchor.href || anchor.getAttribute("href") || "");
     if (!commentId) return null;
-    if (isInBodyContent(anchor)) return null;
     if (!anchor.closest(STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR)) return null;
     return commentId;
   };
@@ -13034,6 +13044,29 @@ getPromptPrefix: getAIStudioPrefix,
     containerEl
   });
   const getCommentContainer = (el) => el.closest(COMMENT_CONTAINER_SELECTOR);
+  const getCommentIdFromContainer = (container) => {
+    const fromContainerId = extractCommentId(container.id);
+    if (fromContainerId) return fromContainerId;
+    const structuralContexts = container.querySelectorAll(
+      STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTOR
+    );
+    for (const contextEl of structuralContexts) {
+      if (contextEl.closest(COMMENT_CONTAINER_SELECTOR) !== container) continue;
+      const anchors = contextEl.querySelectorAll("a[href]");
+      for (const anchor of anchors) {
+        const fromAnchor = parseCommentIdFromHref(anchor.href || anchor.getAttribute("href") || "");
+        if (fromAnchor) return fromAnchor;
+      }
+    }
+    const permalinkRoot = container.closest(COMMENT_PERMALINK_ROOT_SELECTOR);
+    if (permalinkRoot) {
+      const focalCommentContainer = permalinkRoot.querySelector(COMMENT_CONTAINER_SELECTOR);
+      if (focalCommentContainer === container) {
+        return getCommentIdFromCurrentUrl();
+      }
+    }
+    return null;
+  };
   const resolvePostContainer = (el) => el.closest(FEED_CARD_SELECTOR) || el.closest(POST_BODY_SELECTORS.join(", ")) || null;
   const resolveForumAITargetFromElement = (rawEl) => {
     const el = getClosestElement(rawEl);
@@ -13057,7 +13090,7 @@ getPromptPrefix: getAIStudioPrefix,
     }
     const commentContainer = getCommentContainer(el);
     if (commentContainer) {
-      const commentId = extractCommentId(commentContainer.id);
+      const commentId = getCommentIdFromContainer(commentContainer);
       if (commentId) {
         return buildCommentTarget(commentId, commentContainer, commentContainer);
       }
@@ -16814,7 +16847,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19204,7 +19237,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.723"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
