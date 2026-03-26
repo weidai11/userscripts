@@ -638,7 +638,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-AI-05]** **Depth**: Recursively fetches parent comments up to the root (no fixed depth cap), with cycle-safe traversal to avoid infinite loops on malformed parent links.
 - **[PR-AI-06]** **Grounding**: Automatically disables Google Search grounding in AI Studio.
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
-- **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
+- **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. If 2 seconds after submission the URL path still starts with `/max`, it MUST retry submission once. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
 - **[PR-AI-09]** **Native Forum Handoff**: On native LW/EAF pages (non-`/reader`), `g/G/m/M` hotkeys MUST use the same payload + tab handoff pipeline as reader mode, resolving hovered comment/post targets from forum DOM/permalink context.
 
 ---

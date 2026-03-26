@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.724
+// @version    1.2.725
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -227,6 +227,8 @@ reset: () => {
   const ARENA_INPUT_DETECTED_DELAY_MS = 2e3;
   const ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS = 8e3;
   const ARENA_SEND_BUTTON_POLL_INTERVAL_MS = 200;
+  const ARENA_SUBMIT_RETRY_DELAY_MS = 2e3;
+  const ARENA_RETRY_SETTLE_DELAY_MS = 500;
   const ARENA_FALLBACK_PAYLOAD_KEY = "arena_max_prompt_payload";
   const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
     "textarea[name='message']",
@@ -491,6 +493,9 @@ reset: () => {
     dispatchEnterSequence({ ctrlKey: true, metaKey: false });
     dispatchEnterSequence({ ctrlKey: false, metaKey: true });
   }
+  function shouldRetryArenaSubmit() {
+    return window.location.pathname.startsWith("/max");
+  }
   async function handleArenaMax() {
     const payloadStorageKey = getPayloadStorageKeyFromHash();
     const storageKey = payloadStorageKey || ARENA_FALLBACK_PAYLOAD_KEY;
@@ -505,7 +510,24 @@ reset: () => {
     try {
       const textarea = await injectPrompt(payload);
       await automateRun(textarea);
-      Logger.info("Arena Max: Prompt submitted. Continue in this tab.");
+      await sleep$1(ARENA_SUBMIT_RETRY_DELAY_MS);
+      let retryTextarea = textarea;
+      if (shouldRetryArenaSubmit()) {
+        retryTextarea = findArenaTextarea() ?? textarea;
+        const hasPendingPrompt = retryTextarea.isConnected && retryTextarea.value.trim().length > 0;
+        if (hasPendingPrompt) {
+          Logger.warn("Arena Max: still on /max 2s after submit; retrying once.");
+          await automateRun(retryTextarea);
+          await sleep$1(ARENA_RETRY_SETTLE_DELAY_MS);
+        }
+      }
+      const finalTextarea = findArenaTextarea() ?? retryTextarea;
+      const stillPendingAfterRetry = shouldRetryArenaSubmit() && finalTextarea.isConnected && finalTextarea.value.trim().length > 0;
+      if (stillPendingAfterRetry) {
+        Logger.warn("Arena Max: prompt still pending after retry.");
+      } else {
+        Logger.info("Arena Max: Prompt submitted. Continue in this tab.");
+      }
     } catch (error) {
       Logger.error("Arena Max: Automation failed", error);
     } finally {
@@ -1874,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.724"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.725"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9091,7 +9113,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9271,7 +9293,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -16847,7 +16869,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19237,7 +19259,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.724"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

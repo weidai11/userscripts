@@ -9,6 +9,8 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const ARENA_INPUT_DETECTED_DELAY_MS = 2000;
 const ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS = 8000;
 const ARENA_SEND_BUTTON_POLL_INTERVAL_MS = 200;
+const ARENA_SUBMIT_RETRY_DELAY_MS = 2000;
+const ARENA_RETRY_SETTLE_DELAY_MS = 500;
 const ARENA_FALLBACK_PAYLOAD_KEY = 'arena_max_prompt_payload';
 
 const ARENA_TEXTAREA_PRIMARY_SELECTORS = [
@@ -327,6 +329,10 @@ async function automateRun(textarea: HTMLTextAreaElement) {
     dispatchEnterSequence({ ctrlKey: false, metaKey: true });
 }
 
+function shouldRetryArenaSubmit(): boolean {
+    return window.location.pathname.startsWith('/max');
+}
+
 /**
  * Main handler for Arena Max automation.
  */
@@ -346,8 +352,31 @@ export async function handleArenaMax() {
     try {
         const textarea = await injectPrompt(payload);
         await automateRun(textarea);
+        await sleep(ARENA_SUBMIT_RETRY_DELAY_MS);
+        let retryTextarea = textarea;
+        if (shouldRetryArenaSubmit()) {
+            retryTextarea = findArenaTextarea() ?? textarea;
+            const hasPendingPrompt =
+                retryTextarea.isConnected &&
+                retryTextarea.value.trim().length > 0;
+            if (hasPendingPrompt) {
+                Logger.warn('Arena Max: still on /max 2s after submit; retrying once.');
+                await automateRun(retryTextarea);
+                await sleep(ARENA_RETRY_SETTLE_DELAY_MS);
+            }
+        }
 
-        Logger.info('Arena Max: Prompt submitted. Continue in this tab.');
+        const finalTextarea = findArenaTextarea() ?? retryTextarea;
+        const stillPendingAfterRetry =
+            shouldRetryArenaSubmit() &&
+            finalTextarea.isConnected &&
+            finalTextarea.value.trim().length > 0;
+
+        if (stillPendingAfterRetry) {
+            Logger.warn('Arena Max: prompt still pending after retry.');
+        } else {
+            Logger.info('Arena Max: Prompt submitted. Continue in this tab.');
+        }
     } catch (error) {
         Logger.error('Arena Max: Automation failed', error);
     } finally {
