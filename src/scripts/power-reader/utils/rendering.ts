@@ -37,7 +37,7 @@ export { renderReactions };
 import { getPostScoreColor } from './colors';
 import { getAgeInHours, calculateNormalizedScore, clampScore, getFontSizePercent } from './scoring';
 import { getAuthorHandle } from './author';
-import { isLinkpostCategory, normalizeLinkpostUrl } from './linkpost';
+import { getRenderableLinkpostUrl } from './linkpost';
 
 /**
  * Calculate header style for a post
@@ -77,7 +77,7 @@ export const renderPostHeader = (
   const metadataHtml = renderMetadata(post, { state, isFullPost });
   const headerStyle = calculatePostHeaderStyle(post);
   const escapedTitle = escapeHtml(post.title);
-  const linkpostUrl = isLinkpostCategory(post.postCategory) ? normalizeLinkpostUrl(post.linkUrl) : null;
+  const linkpostUrl = getRenderableLinkpostUrl(post.postCategory, post.linkUrl, post.pageUrl);
   const linkpostHtml = linkpostUrl
     ? `<a class="pr-post-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>`
     : '';

@@ -22,7 +22,7 @@ import {
 } from '../utils/descendantConfirm';
 import { consumeAIPayloadKey, registerAIPayloadKey } from '../utils/aiPayloadStorage';
 import { randomBase36 } from '../utils/random';
-import { isLinkpostCategory, normalizeLinkpostUrl } from '../utils/linkpost';
+import { getRenderableLinkpostUrl } from '../utils/linkpost';
 
 declare const GM_setValue: ((key: string, value: any) => void) | undefined;
 declare const GM_openInTab: ((url: string, options?: { active?: boolean }) => void) | undefined;
@@ -40,6 +40,7 @@ interface AIContentRef {
 interface AIThreadItem {
   _id: string;
   title?: string | null;
+  pageUrl?: string | null;
   linkUrl?: string | null;
   postCategory?: string | null;
   author?: string | null;
@@ -467,8 +468,11 @@ const toXml = (
   const author = getAuthorLabelForAI(item, 'unknown');
   const md = item.contents?.markdown || item.htmlBody || '(no content)';
   const titleAttr = type === 'post' && item.title ? ` title="${escapeXmlAttr(item.title)}"` : '';
-  const linkUrlTag = type === 'post' && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl)
-    ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>\n`
+  const renderableLinkpostUrl = type === 'post'
+    ? getRenderableLinkpostUrl(item.postCategory, item.linkUrl, item.pageUrl)
+    : null;
+  const linkUrlTag = renderableLinkpostUrl
+    ? `${childIndent}<link_url>${escapeXmlText(renderableLinkpostUrl)}</link_url>\n`
     : '';
   const postedAtTag = postedAtToXml(item, childIndent);
 

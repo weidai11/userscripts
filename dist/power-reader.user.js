@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.725
+// @version    1.2.726
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.725"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.726"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -4874,6 +4874,31 @@ reactionsHtml,
       return null;
     }
   };
+  const normalizeComparableUrl = (raw) => {
+    const normalized = normalizeLinkpostUrl(raw);
+    if (!normalized) return null;
+    try {
+      const url = new URL(normalized);
+      let path = url.pathname.replace(/\/+$/, "");
+      if (!path) path = "/";
+      return `${url.origin}${path}`;
+    } catch {
+      return null;
+    }
+  };
+  const isSelfLinkpostUrl = (linkUrl, pageUrl) => {
+    const linkComparable = normalizeComparableUrl(linkUrl);
+    const pageComparable = normalizeComparableUrl(pageUrl);
+    if (!linkComparable || !pageComparable) return false;
+    return linkComparable === pageComparable;
+  };
+  const getRenderableLinkpostUrl = (postCategory, linkUrl, pageUrl) => {
+    if (!isLinkpostCategory(postCategory)) return null;
+    const normalizedLink = normalizeLinkpostUrl(linkUrl);
+    if (!normalizedLink) return null;
+    if (isSelfLinkpostUrl(normalizedLink, pageUrl)) return null;
+    return normalizedLink;
+  };
   const escapeHtml = (unsafe) => {
     return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   };
@@ -4909,7 +4934,7 @@ reactionsHtml,
     const metadataHtml = renderMetadata(post, { state: state2, isFullPost });
     const headerStyle = calculatePostHeaderStyle(post);
     const escapedTitle = escapeHtml(post.title);
-    const linkpostUrl = isLinkpostCategory(post.postCategory) ? normalizeLinkpostUrl(post.linkUrl) : null;
+    const linkpostUrl = getRenderableLinkpostUrl(post.postCategory, post.linkUrl, post.pageUrl);
     const linkpostHtml = linkpostUrl ? `<a class="pr-post-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
     const classes = [
       "pr-post-header",
@@ -9113,7 +9138,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9293,7 +9318,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11978,7 +12003,8 @@ currentCommentId = null;
     const author = getAuthorLabelForAI(item, "unknown");
     const md = item.contents?.markdown || item.htmlBody || "(no content)";
     const titleAttr = type === "post" && item.title ? ` title="${escapeXmlAttr(item.title)}"` : "";
-    const linkUrlTag = type === "post" && isLinkpostCategory(item.postCategory) && isNonEmptyText(item.linkUrl) ? `${childIndent}<link_url>${escapeXmlText(normalizeLinkpostUrl(item.linkUrl) || item.linkUrl)}</link_url>
+    const renderableLinkpostUrl = type === "post" ? getRenderableLinkpostUrl(item.postCategory, item.linkUrl, item.pageUrl) : null;
+    const linkUrlTag = renderableLinkpostUrl ? `${childIndent}<link_url>${escapeXmlText(renderableLinkpostUrl)}</link_url>
 ` : "";
     const postedAtTag = postedAtToXml(item, childIndent);
     let xml = `${indent}<${type} id="${escapeXmlAttr(item._id)}" author="${escapeXmlAttr(author)}"${isFocal ? ' is_focal="true"' : ""}${titleAttr}>
@@ -15251,7 +15277,7 @@ getPromptPrefix: getAIStudioPrefix,
     const snippetTerms = options.snippetTerms ?? [];
     const snippetPattern = options.snippetPattern;
     const isPost2 = "title" in item;
-    const linkpostUrl = isPost2 && isLinkpostCategory(item.postCategory) ? normalizeLinkpostUrl(item.linkUrl) : null;
+    const linkpostUrl = isPost2 ? getRenderableLinkpostUrl(item.postCategory, item.linkUrl, item.pageUrl) : null;
     const linkpostHtml = linkpostUrl ? ` <a class="pr-index-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
     let title;
     if (isPost2) {
@@ -16869,7 +16895,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19259,7 +19285,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.725"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

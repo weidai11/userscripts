@@ -184,6 +184,34 @@ test.describe('Power Reader Arena Max Integration', () => {
         await expect(page.locator('.pr-post-linkpost-url')).toHaveCount(0);
     });
 
+    test('[PR-AI-11] does not render linkpost badge when linkUrl points to the same post URL', async ({ page }) => {
+        const selfUrl = 'https://www.lesswrong.com/posts/p1/post-1';
+        const comments = [
+            {
+                _id: 'c1', postId: 'p1', postedAt: new Date().toISOString(),
+                htmlBody: '<p>Self-linkpost comment</p>', baseScore: 10,
+                user: { _id: 'u1', username: 'Author', karma: 100 },
+                post: {
+                    _id: 'p1',
+                    title: 'Post 1',
+                    pageUrl: selfUrl,
+                    linkUrl: selfUrl,
+                    postCategory: 'linkpost',
+                    baseScore: 10,
+                    user: { karma: 100 }
+                },
+                contents: { markdown: 'Self-linkpost comment markdown' }
+            }
+        ];
+
+        await initPowerReader(page, {
+            testMode: true,
+            comments
+        });
+
+        await expect(page.locator('.pr-post-linkpost-url')).toHaveCount(0);
+    });
+
     test('[PR-AI-03] Arena responses are not rendered in-reader', async ({ page }) => {
         const comments = [
             {

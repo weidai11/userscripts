@@ -13,3 +13,38 @@ export const normalizeLinkpostUrl = (raw?: string | null): string | null => {
     return null;
   }
 };
+
+const normalizeComparableUrl = (raw?: string | null): string | null => {
+  const normalized = normalizeLinkpostUrl(raw);
+  if (!normalized) return null;
+  try {
+    const url = new URL(normalized);
+    let path = url.pathname.replace(/\/+$/, '');
+    if (!path) path = '/';
+    return `${url.origin}${path}`;
+  } catch {
+    return null;
+  }
+};
+
+export const isSelfLinkpostUrl = (
+  linkUrl?: string | null,
+  pageUrl?: string | null
+): boolean => {
+  const linkComparable = normalizeComparableUrl(linkUrl);
+  const pageComparable = normalizeComparableUrl(pageUrl);
+  if (!linkComparable || !pageComparable) return false;
+  return linkComparable === pageComparable;
+};
+
+export const getRenderableLinkpostUrl = (
+  postCategory: unknown,
+  linkUrl?: string | null,
+  pageUrl?: string | null
+): string | null => {
+  if (!isLinkpostCategory(postCategory)) return null;
+  const normalizedLink = normalizeLinkpostUrl(linkUrl);
+  if (!normalizedLink) return null;
+  if (isSelfLinkpostUrl(normalizedLink, pageUrl)) return null;
+  return normalizedLink;
+};
