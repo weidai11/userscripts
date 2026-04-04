@@ -423,6 +423,155 @@ return { data: {} };
         expect(selectorChecks.postAfterValues.every((v: unknown) => typeof v === 'string' && v.length > 0)).toBe(true);
     });
 
+    test('[PR-UARCH-15] cursor pagination does not jump to outlier max timestamp and skip middle history', async ({ page }) => {
+        const username = `CursorJumpGuard_${Date.now()}`;
+        const userId = 'u-cursor-jump-guard';
+        const userObj = {
+            _id: userId,
+            username,
+            displayName: 'Cursor Jump Guard',
+            slug: 'cursor-jump-guard',
+            karma: 100
+        };
+        const postObj = {
+            _id: 'p-cursor-guard',
+            title: 'Cursor Guard Post',
+            slug: 'cursor-guard-post',
+            pageUrl: 'https://lesswrong.com/posts/p-cursor-guard/cursor-guard-post',
+            postedAt: '2019-01-01T00:00:00.000Z',
+            modifiedAt: '2026-01-01T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 2,
+            commentCount: 4,
+            user: userObj
+        };
+
+        const commentEarly = {
+            _id: 'c-cursor-early',
+            postedAt: '2019-03-01T00:00:00.000Z',
+            lastEditedAt: '2020-05-03T09:48:55.597Z',
+            htmlBody: '<p>Early comment</p>',
+            baseScore: 3,
+            voteCount: 1,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            pageUrl: `${postObj.pageUrl}#c-cursor-early`,
+            author: username,
+            rejected: false,
+            topLevelCommentId: 'c-cursor-early',
+            user: userObj,
+            postId: postObj._id,
+            parentCommentId: null,
+            parentComment: null,
+            post: postObj,
+            contents: { markdown: 'Early comment' }
+        };
+        const commentOutlier = {
+            _id: 'c-cursor-outlier',
+            postedAt: '2019-04-01T00:00:00.000Z',
+            lastEditedAt: '2026-01-07T23:45:47.549Z',
+            htmlBody: '<p>Outlier edited comment</p>',
+            baseScore: 4,
+            voteCount: 1,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            pageUrl: `${postObj.pageUrl}#c-cursor-outlier`,
+            author: username,
+            rejected: false,
+            topLevelCommentId: 'c-cursor-outlier',
+            user: userObj,
+            postId: postObj._id,
+            parentCommentId: null,
+            parentComment: null,
+            post: postObj,
+            contents: { markdown: 'Outlier edited comment' }
+        };
+        const commentTail = {
+            _id: 'c-cursor-tail',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            lastEditedAt: '2022-04-12T18:31:57.108Z',
+            htmlBody: '<p>Tail boundary comment</p>',
+            baseScore: 5,
+            voteCount: 1,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            pageUrl: `${postObj.pageUrl}#c-cursor-tail`,
+            author: username,
+            rejected: false,
+            topLevelCommentId: 'c-cursor-tail',
+            user: userObj,
+            postId: postObj._id,
+            parentCommentId: null,
+            parentComment: null,
+            post: postObj,
+            contents: { markdown: 'Tail boundary comment' }
+        };
+        const commentMiddle = {
+            _id: 'c-cursor-middle',
+            postedAt: '2024-08-15T00:00:00.000Z',
+            lastEditedAt: '2024-08-15T00:00:00.000Z',
+            htmlBody: '<p>Middle history comment that must not be skipped</p>',
+            baseScore: 9,
+            voteCount: 2,
+            descendentCount: 0,
+            directChildrenCount: 0,
+            pageUrl: `${postObj.pageUrl}#c-cursor-middle`,
+            author: username,
+            rejected: false,
+            topLevelCommentId: 'c-cursor-middle',
+            user: userObj,
+            postId: postObj._id,
+            parentCommentId: null,
+            parentComment: null,
+            post: postObj,
+            contents: { markdown: 'Middle history comment that must not be skipped' }
+        };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  window.__COMMENT_AFTER_VALUES__ = window.__COMMENT_AFTER_VALUES__ || [];
+  window.__COMMENT_AFTER_VALUES__.push(variables.after ?? null);
+  if (!variables.after) {
+    return { data: { comments: { results: [${JSON.stringify(commentEarly)}, ${JSON.stringify(commentOutlier)}, ${JSON.stringify(commentTail)}] } } };
+  }
+  if (variables.after === '${commentTail.lastEditedAt}') {
+    return { data: { comments: { results: [${JSON.stringify(commentMiddle)}] } } };
+  }
+  if (variables.after === '${commentMiddle.lastEditedAt}') {
+    return { data: { comments: { results: [] } } };
+  }
+  if (variables.after === '${commentOutlier.lastEditedAt}') {
+    // Simulates the observed skip path when cursor jumps to the max outlier timestamp.
+    return { data: { comments: { results: [${JSON.stringify(commentOutlier)}] } } };
+  }
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        await expect(page.locator('#archive-feed')).toContainText('Middle history comment that must not be skipped');
+
+        const afterValues = await page.evaluate(() => (window as any).__COMMENT_AFTER_VALUES__ || []);
+        expect(afterValues).toContain(commentTail.lastEditedAt);
+        expect(afterValues).toContain(commentMiddle.lastEditedAt);
+        expect(afterValues).not.toContain(commentOutlier.lastEditedAt);
+    });
+
 test('[PR-UARCH-22] canonical state sync preserves fetched context across rerenders', async ({ page }) => {
   const username = 'canonical-sync-test';
   const userId = 'u-canonical-sync';
@@ -951,4 +1100,3 @@ return { data: {} };
         await expect(page.locator('.pr-comment[data-id="c-second-page"]')).toBeVisible();
     });
 });
-

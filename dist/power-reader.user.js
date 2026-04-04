@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.726
+// @version    1.2.727
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.726"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.727"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -9138,7 +9138,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.727"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9318,7 +9318,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.727"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -13951,17 +13951,21 @@ getPromptPrefix: getAIStudioPrefix,
     if (aMs !== null && bMs !== null) return aMs - bMs;
     return a.localeCompare(b);
   };
-  const getLatestCursorTimestampFromBatch = (rawItems, baselineCursor, cursorField) => {
+  const getAdvancingCursorBoundsFromBatch = (rawItems, baselineCursor, cursorField) => {
+    let earliest = null;
     let latest = null;
     for (const item of rawItems) {
       const timestamp = getCursorTimestampValue(item, cursorField);
       if (!timestamp) continue;
       if (baselineCursor && compareTimestamps(timestamp, baselineCursor) <= 0) continue;
+      if (!earliest || compareTimestamps(timestamp, earliest) < 0) {
+        earliest = timestamp;
+      }
       if (!latest || compareTimestamps(timestamp, latest) > 0) {
         latest = timestamp;
       }
     }
-    return latest;
+    return { earliest, latest };
   };
   const summarizeBatchForCursorDebug = (rawItems, cursorField) => {
     const seenIds = new Set();
@@ -14166,14 +14170,31 @@ getPromptPrefix: getAIStudioPrefix,
         if (onProgress) onProgress(allItems.length);
         if (hasMore) {
           const batchSummary = summarizeBatchForCursorDebug(rawResults, activeCursorField);
-          const nextCursorTail = getCursorTimestampFromBatch(rawResults, activeCursorField);
-          const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor, activeCursorField);
+          const nextCursorTail = batchSummary.lastTimestamp;
+          const tailAdvances = Boolean(
+            nextCursorTail && (!afterCursor || compareTimestamps(nextCursorTail, afterCursor) > 0)
+          );
+          const cursorBounds = getAdvancingCursorBoundsFromBatch(
+            rawResults,
+            afterCursor,
+            activeCursorField
+          );
+          const nextCursorEarliest = cursorBounds.earliest;
+          const nextCursorLatest = cursorBounds.latest;
           if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
             Logger.debug(
-              `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
+              `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); preferring boundary-safe cursor.`
             );
           }
-          const nextCursor = nextCursorLatest;
+          let nextCursor = null;
+          if (tailAdvances) {
+            nextCursor = nextCursorTail;
+          } else if (nextCursorEarliest) {
+            nextCursor = nextCursorEarliest;
+            Logger.warn(
+              `Archive ${key}: tail cursor did not advance (tail=${nextCursorTail}, after=${afterCursor}); using earliest advancing cursor (${nextCursorEarliest}).`
+            );
+          }
           if (!nextCursor) {
             const tailDidNotAdvance = Boolean(
               batchSummary.lastId && batchSummary.lastTimestamp && previousBatchTail?.id && previousBatchTail?.timestamp && batchSummary.lastId === previousBatchTail.id && batchSummary.lastTimestamp === previousBatchTail.timestamp
@@ -16895,7 +16916,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.727"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19285,7 +19306,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.726"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.727"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

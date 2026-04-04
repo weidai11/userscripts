@@ -111,23 +111,27 @@ const compareTimestamps = (a: string, b: string): number => {
     return a.localeCompare(b);
 };
 
-const getLatestCursorTimestampFromBatch = <T extends { postedAt: string }>(
+const getAdvancingCursorBoundsFromBatch = <T extends { postedAt: string }>(
     rawItems: Array<T | null | undefined>,
     baselineCursor: string | null,
     cursorField: CursorField
-): string | null => {
+): { earliest: string | null; latest: string | null } => {
+    let earliest: string | null = null;
     let latest: string | null = null;
 
     for (const item of rawItems) {
         const timestamp = getCursorTimestampValue(item, cursorField);
         if (!timestamp) continue;
         if (baselineCursor && compareTimestamps(timestamp, baselineCursor) <= 0) continue;
+        if (!earliest || compareTimestamps(timestamp, earliest) < 0) {
+            earliest = timestamp;
+        }
         if (!latest || compareTimestamps(timestamp, latest) > 0) {
             latest = timestamp;
         }
     }
 
-    return latest;
+    return { earliest, latest };
 };
 
 const summarizeBatchForCursorDebug = <T extends { postedAt: string; _id: string }>(
@@ -404,20 +408,37 @@ async function fetchCollectionAdaptively<T extends { postedAt: string; _id: stri
             if (onProgress) onProgress(allItems.length);
 
             if (hasMore) {
-                // Update cursor to the latest timestamp in the batch that is
-                // strictly newer than the current cursor.
+                // Update cursor conservatively to avoid skipping unseen records when
+                // pages include out-of-order timestamps.
                 // We intentionally avoid stopping early on short non-empty batches.
                 // Some partial-response paths may return fewer items than requested
                 // before the true end of collection.
                 const batchSummary = summarizeBatchForCursorDebug(rawResults, activeCursorField);
-                const nextCursorTail = getCursorTimestampFromBatch(rawResults, activeCursorField);
-                const nextCursorLatest = getLatestCursorTimestampFromBatch(rawResults, afterCursor, activeCursorField);
+                const nextCursorTail = batchSummary.lastTimestamp;
+                const tailAdvances = Boolean(
+                    nextCursorTail && (!afterCursor || compareTimestamps(nextCursorTail, afterCursor) > 0)
+                );
+                const cursorBounds = getAdvancingCursorBoundsFromBatch(
+                    rawResults,
+                    afterCursor,
+                    activeCursorField
+                );
+                const nextCursorEarliest = cursorBounds.earliest;
+                const nextCursorLatest = cursorBounds.latest;
                 if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
                     Logger.debug(
-                        `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); using latest cursor.`
+                        `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); preferring boundary-safe cursor.`
                     );
                 }
-                const nextCursor = nextCursorLatest;
+                let nextCursor: string | null = null;
+                if (tailAdvances) {
+                    nextCursor = nextCursorTail;
+                } else if (nextCursorEarliest) {
+                    nextCursor = nextCursorEarliest;
+                    Logger.warn(
+                        `Archive ${key}: tail cursor did not advance (tail=${nextCursorTail}, after=${afterCursor}); using earliest advancing cursor (${nextCursorEarliest}).`
+                    );
+                }
                 if (!nextCursor) {
                     const tailDidNotAdvance = Boolean(
                         batchSummary.lastId &&

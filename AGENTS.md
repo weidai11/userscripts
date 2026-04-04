@@ -5,17 +5,18 @@ Userscripts for LessWrong and EA Forum
 - Architecture: Site takeover (`window.stop()`), React DOM clearing, custom GraphQL client.
 
 # Pre-push Checklist
-1. Increment version.
-2. Run `jj st` and confirm no temporary files are included.
-3. Run `jj --no-pager diff --git`. Do a quick sanity check on the diff.
-4. Generate the commit message from the actual diff, then set it with `jj desc -m "..."`.
-5. Include relevant requirement IDs in commit messages when applicable (e.g., `PR-UARCH-*`, `PR-PREV-*`).
-6. Run `npm run check:eol` (if it fails, run `npm run fix:eol`; for full cleanup use `npm run fix:eol -- --all`)
-7. Run `npm run lint:changed`
-8. Run `npm run lint:app`
-9. Run `npm test`
-10. Run `jj bookmark set main`
-11. Run `jj git push` (don't run this without explicit user direction)
+1. Run `npm audit --audit-level=high` (analyze risks of fixing/updating vs not, then proceed accordingly)
+2. Increment version.
+3. Run `jj st` and confirm no temporary files are included.
+4. Run `jj --no-pager diff --git`. Do a quick sanity check on the diff.
+5. Generate the commit message from the actual diff, then set it with `jj desc -m "..."`.
+6. Include relevant requirement IDs in commit messages when applicable (e.g., `PR-UARCH-*`, `PR-PREV-*`).
+7. Run `npm run check:eol` (if it fails, run `npm run fix:eol`; for full cleanup use `npm run fix:eol -- --all`)
+8. Run `npm run lint:changed`
+9. Run `npm run lint:app`
+10. Run `npm test`
+11. Run `jj bookmark set main`
+12. Run `jj git push` (don't run this without explicit user direction)
 
 # Key Commands
 - Build: `npm run build:power-reader`
