@@ -224,7 +224,7 @@ reset: () => {
     runBtn.click();
   }
   const sleep$1 = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const ARENA_INPUT_DETECTED_DELAY_MS = 2e3;
+  const ARENA_INPUT_DETECTED_DELAY_MS = 2500;
   const ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS = 8e3;
   const ARENA_SEND_BUTTON_POLL_INTERVAL_MS = 200;
   const ARENA_SUBMIT_RETRY_DELAY_MS = 2e3;
@@ -4942,15 +4942,13 @@ reactionsHtml,
       isSticky ? "pr-sticky-header-content" : ""
 ].filter(Boolean).join(" ");
     const commentCount = post.commentCount || 0;
-    let loadedCount = 0;
     let isLastPost = false;
     if (state2) {
-      loadedCount = state2.comments.filter((c) => c.postId === post._id).length;
       isLastPost = state2.posts.length > 0 && state2.posts[state2.posts.length - 1]._id === post._id;
     }
     const eTooltip = isFullPost ? "Collapse post body" : "Expand/load post body";
-    const aDisabled = commentCount === 0 || commentCount > 0 && loadedCount >= commentCount;
-    const aTooltip = commentCount === 0 ? "No comments to load" : aDisabled ? `All ${commentCount} comments already loaded` : `Load all ${commentCount} comments for this post`;
+    const aDisabled = commentCount === 0;
+    const aTooltip = commentCount === 0 ? "No comments to load" : `Load/reveal all ${commentCount} comments for this post`;
     const cDisabled = commentCount === 0;
     const cTooltip = cDisabled ? "No comments to scroll to" : "Scroll to first comment";
     const nDisabled = isLastPost;
@@ -4963,7 +4961,7 @@ reactionsHtml,
         <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio in a new tab (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
         <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max in a new tab (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
         <span class="pr-post-action text-btn ${""}" data-action="toggle-post-body" title="${eTooltip}">[e]</span>
-        <span class="pr-post-action text-btn ${aDisabled ? "disabled" : ""}" data-action="load-all-comments" title="${aTooltip}">[a]</span>
+        <span class="pr-post-action text-btn ${aDisabled ? "disabled" : ""}" data-action="load-all-comments" data-comment-count="${commentCount}" title="${aTooltip}">[a]</span>
         <span class="pr-post-action text-btn ${cDisabled ? "disabled" : ""}" data-action="scroll-to-comments" title="${cTooltip}">[c]</span>
         <span class="pr-post-action text-btn ${nDisabled ? "disabled" : ""}" data-action="scroll-to-next-post" title="${nTooltip}">[n]</span>
       </span>
@@ -4978,6 +4976,33 @@ reactionsHtml,
     return String(Math.floor(parsed));
   };
   const DEFAULT_HEADER_HEIGHT = 60;
+  const parseCommentCount = (raw) => {
+    const parsed = Number.parseInt(raw || "", 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+    return parsed;
+  };
+  const updateLoadAllCommentsButton = (header, postEl) => {
+    if (!header) return;
+    const aBtn = header.querySelector('[data-action="load-all-comments"]');
+    if (!aBtn) return;
+    const postAttr = postEl?.getAttribute("data-comment-count");
+    const buttonAttr = aBtn.getAttribute("data-comment-count");
+    const commentCount = parseCommentCount(postAttr ?? buttonAttr);
+    if (commentCount === 0) {
+      aBtn.classList.add("disabled");
+      aBtn.title = "No comments to load";
+      return;
+    }
+    const renderedBodyCount = postEl ? postEl.querySelectorAll(".pr-post-comments .pr-comment-body").length : 0;
+    const allCommentsVisible = renderedBodyCount >= commentCount;
+    if (allCommentsVisible) {
+      aBtn.classList.add("disabled");
+      aBtn.title = `All ${commentCount} comments already visible`;
+    } else {
+      aBtn.classList.remove("disabled");
+      aBtn.title = `Load/reveal all ${commentCount} comments for this post`;
+    }
+  };
   const smartScrollTo = (el, isPost2) => {
     const postContainer = el.closest(".pr-post");
     if (!postContainer) {
@@ -5070,12 +5095,14 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
       }
       const header = post.querySelector(".pr-post-header");
       updateNextPostButton(header, post);
+      updateLoadAllCommentsButton(header, post);
     });
     const stickyHeader2 = document.querySelector(".pr-sticky-header .pr-post-header");
     if (stickyHeader2) {
       const stickyPostId = stickyHeader2.getAttribute("data-post-id");
       const stickyPostEl = stickyPostId ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`) : null;
       updateNextPostButton(stickyHeader2, stickyPostEl);
+      updateLoadAllCommentsButton(stickyHeader2, stickyPostEl);
     }
   };
   const fallbackReactionLabel = (reactionName) => {
@@ -5684,6 +5711,7 @@ baseScore: 0,
     <div class="pr-post pr-item ${isReadPost ? "read" : ""}" 
          data-post-id="${group.postId}" 
          data-id="${group.postId}"
+         data-comment-count="${postToRender.commentCount || 0}"
          data-posted-at-ms="${postPostedAtMs}"
          data-author="${escapeHtml(authorHandle)}">
       ${headerHtml}
@@ -6030,6 +6058,7 @@ refresh() {
           }
         }
       }
+      refreshPostActionButtons(postId);
       if (titleH2 && postId) {
         setupHoverPreview(
           titleH2,
@@ -15234,7 +15263,7 @@ getPromptPrefix: getAIStudioPrefix,
       const headerHtml = renderPostHeader(post, { isFullPost: true, state: state2 });
       const bodyHtml = post.htmlBody ? renderPostBody(post, false) : "";
       return `
-      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
+      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}" data-comment-count="${post.commentCount || 0}">
         ${headerHtml}
         ${bodyHtml}
       </div>

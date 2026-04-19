@@ -560,7 +560,7 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
     const headerHtml = renderPostHeader(post, { isFullPost: true, state });
     const bodyHtml = post.htmlBody ? renderPostBody(post, false) : '';
     return `
-      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}">
+      <div class="pr-archive-item pr-post pr-item" data-id="${post._id}" data-post-id="${post._id}" data-comment-count="${post.commentCount || 0}">
         ${headerHtml}
         ${bodyHtml}
       </div>

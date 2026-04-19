@@ -2,6 +2,77 @@ import { test, expect } from '@playwright/test';
 import { initPowerReader } from './helpers/setup';
 
 test.describe('Reproduction: [a] hotkey placeholder issue', () => {
+    test('[a] should stay enabled when comments are loaded but not all are visible', async ({ page }) => {
+        const posts = [{
+            _id: 'p1',
+            title: 'Loaded but partially visible post',
+            commentCount: 4,
+            wordCount: 100,
+            htmlBody: '<p>Content</p>',
+            postedAt: '2025-01-01T00:00:00.000Z'
+        }];
+
+        const comments = [
+            {
+                _id: 'c-old-1',
+                postId: 'p1',
+                htmlBody: 'Old comment 1',
+                postedAt: '2025-01-01T00:01:00.000Z',
+                user: { _id: 'u1', username: 'User1', displayName: 'User 1' },
+                baseScore: 10,
+                directChildrenCount: 0
+            },
+            {
+                _id: 'c-old-2',
+                postId: 'p1',
+                htmlBody: 'Old comment 2',
+                postedAt: '2025-01-01T00:02:00.000Z',
+                user: { _id: 'u2', username: 'User2', displayName: 'User 2' },
+                baseScore: 10,
+                directChildrenCount: 0
+            },
+            {
+                _id: 'c-old-3',
+                postId: 'p1',
+                htmlBody: 'Old comment 3',
+                postedAt: '2025-01-01T00:03:00.000Z',
+                user: { _id: 'u3', username: 'User3', displayName: 'User 3' },
+                baseScore: 10,
+                directChildrenCount: 0
+            },
+            {
+                _id: 'c-unread',
+                postId: 'p1',
+                htmlBody: 'Unread comment',
+                postedAt: '2026-02-01T00:00:00.000Z',
+                user: { _id: 'u-new', username: 'NewUser', displayName: 'New User' },
+                baseScore: 10,
+                directChildrenCount: 0
+            }
+        ];
+
+        await initPowerReader(page, {
+            posts,
+            comments,
+            testMode: true,
+            storage: {
+                'power-reader-read-from': '2026-01-01T00:00:00.000Z'
+            }
+        });
+
+        const post = page.locator('.pr-post[data-id="p1"]');
+        await expect(post).toBeVisible({ timeout: 10000 });
+
+        const btnA = post.locator('[data-action="load-all-comments"]');
+        await expect(btnA).toBeVisible();
+        await expect(btnA).not.toHaveClass(/disabled/);
+
+        await btnA.click();
+
+        await expect(post.locator('.pr-comment .pr-comment-body')).toHaveCount(4, { timeout: 10000 });
+        await expect(btnA).toHaveClass(/disabled/);
+    });
+
     test('Comments loaded via [a] hotkey should be visible even if they are old/read', async ({ page }) => {
         const posts = [{
             _id: 'p1',

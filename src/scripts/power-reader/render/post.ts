@@ -214,6 +214,7 @@ export const renderPostGroup = (group: PostGroup, state: ReaderState): string =>
     <div class="pr-post pr-item ${isReadPost ? 'read' : ''}" 
          data-post-id="${group.postId}" 
          data-id="${group.postId}"
+         data-comment-count="${postToRender.commentCount || 0}"
          data-posted-at-ms="${postPostedAtMs}"
          data-author="${escapeHtml(authorHandle)}">
       ${headerHtml}

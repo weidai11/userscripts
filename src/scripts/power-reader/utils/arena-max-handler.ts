@@ -6,7 +6,7 @@ declare const GM_deleteValue: (key: string) => void;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-const ARENA_INPUT_DETECTED_DELAY_MS = 2000;
+const ARENA_INPUT_DETECTED_DELAY_MS = 2500;
 const ARENA_SEND_BUTTON_ENABLE_TIMEOUT_MS = 8000;
 const ARENA_SEND_BUTTON_POLL_INTERVAL_MS = 200;
 const ARENA_SUBMIT_RETRY_DELAY_MS = 2000;

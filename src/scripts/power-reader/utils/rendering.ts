@@ -93,20 +93,18 @@ export const renderPostHeader = (
   // Logic for disabling buttons
   const commentCount = post.commentCount || 0;
 
-  let loadedCount = 0;
   let isLastPost = false;
   if (state) {
-    loadedCount = state.comments.filter(c => c.postId === post._id).length;
     isLastPost = state.posts.length > 0 && state.posts[state.posts.length - 1]._id === post._id;
   }
 
   const eDisabled = false; // Will be refined by DOM check after render
   const eTooltip = isFullPost ? "Collapse post body" : "Expand/load post body";
 
-  const aDisabled = commentCount === 0 || (commentCount > 0 && loadedCount >= commentCount);
+  const aDisabled = commentCount === 0;
   const aTooltip = commentCount === 0
     ? "No comments to load"
-    : (aDisabled ? `All ${commentCount} comments already loaded` : `Load all ${commentCount} comments for this post`);
+    : `Load/reveal all ${commentCount} comments for this post`;
 
   const cDisabled = commentCount === 0;
   const cTooltip = cDisabled
@@ -126,7 +124,7 @@ export const renderPostHeader = (
         <span class="pr-post-action text-btn" data-action="send-to-ai-studio" title="Send thread to AI Studio in a new tab (Shortkey: g, Shift-G includes descendants and fetches them if needed)">[g]</span>
         <span class="pr-post-action text-btn" data-action="send-to-arena-max" title="Send thread to Arena.ai Max in a new tab (Shortkey: m, Shift-M includes descendants and fetches them if needed)">[m]</span>
         <span class="pr-post-action text-btn ${eDisabled ? 'disabled' : ''}" data-action="toggle-post-body" title="${eTooltip}">[e]</span>
-        <span class="pr-post-action text-btn ${aDisabled ? 'disabled' : ''}" data-action="load-all-comments" title="${aTooltip}">[a]</span>
+        <span class="pr-post-action text-btn ${aDisabled ? 'disabled' : ''}" data-action="load-all-comments" data-comment-count="${commentCount}" title="${aTooltip}">[a]</span>
         <span class="pr-post-action text-btn ${cDisabled ? 'disabled' : ''}" data-action="scroll-to-comments" title="${cTooltip}">[c]</span>
         <span class="pr-post-action text-btn ${nDisabled ? 'disabled' : ''}" data-action="scroll-to-next-post" title="${nTooltip}">[n]</span>
       </span>

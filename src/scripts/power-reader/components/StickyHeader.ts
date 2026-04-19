@@ -3,6 +3,7 @@ import {
     createPostPreviewFetcher,
     createAuthorPreviewFetcher
 } from '../utils/preview';
+import { refreshPostActionButtons } from '../utils/dom';
 import { renderPostHeader } from '../utils/rendering';
 import { getAuthorHandle } from '../utils/author';
 import { getState } from '../state';
@@ -129,6 +130,8 @@ export class StickyHeader {
                 }
             }
         }
+
+        refreshPostActionButtons(postId);
 
         // Add hover preview to sticky header title (and whitespace)
         if (titleH2 && postId) {

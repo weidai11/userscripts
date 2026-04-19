@@ -17,6 +17,41 @@ export const toPostedAtEpochMs = (postedAt?: string | null): string => {
  */
 const DEFAULT_HEADER_HEIGHT = 60;
 
+const parseCommentCount = (raw: string | null): number => {
+    const parsed = Number.parseInt(raw || '', 10);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+    return parsed;
+};
+
+const updateLoadAllCommentsButton = (header: HTMLElement | null, postEl: Element | null): void => {
+    if (!header) return;
+    const aBtn = header.querySelector('[data-action="load-all-comments"]') as HTMLElement;
+    if (!aBtn) return;
+
+    const postAttr = postEl?.getAttribute('data-comment-count');
+    const buttonAttr = aBtn.getAttribute('data-comment-count');
+    const commentCount = parseCommentCount(postAttr ?? buttonAttr);
+
+    if (commentCount === 0) {
+        aBtn.classList.add('disabled');
+        aBtn.title = 'No comments to load';
+        return;
+    }
+
+    const renderedBodyCount = postEl
+        ? postEl.querySelectorAll('.pr-post-comments .pr-comment-body').length
+        : 0;
+    const allCommentsVisible = renderedBodyCount >= commentCount;
+
+    if (allCommentsVisible) {
+        aBtn.classList.add('disabled');
+        aBtn.title = `All ${commentCount} comments already visible`;
+    } else {
+        aBtn.classList.remove('disabled');
+        aBtn.title = `Load/reveal all ${commentCount} comments for this post`;
+    }
+};
+
 export const smartScrollTo = (el: HTMLElement, isPost: boolean): void => {
     const postContainer = el.closest('.pr-post') as HTMLElement;
 
@@ -137,6 +172,7 @@ export const refreshPostActionButtons = (target?: string | HTMLElement): void =>
 
         const header = post.querySelector('.pr-post-header') as HTMLElement;
         updateNextPostButton(header, post);
+        updateLoadAllCommentsButton(header, post);
     });
 
     // Update sticky header button state if visible
@@ -147,6 +183,6 @@ export const refreshPostActionButtons = (target?: string | HTMLElement): void =>
             ? document.querySelector(`.pr-post[data-id="${stickyPostId}"]`)
             : null;
         updateNextPostButton(stickyHeader, stickyPostEl);
+        updateLoadAllCommentsButton(stickyHeader, stickyPostEl);
     }
 };
-
