@@ -55,6 +55,13 @@ export const POST_FIELDS_LITE = /* GraphQL */ `
       slug
       karma
     }
+    coauthors {
+      _id
+      username
+      displayName
+      slug
+      karma
+    }
     extendedScore
     afExtendedScore
     votingSystem
@@ -539,6 +546,13 @@ export type Post = {
     slug: string;
     karma: number;
   };
+  coauthors?: Array<{
+    _id: string;
+    username: string;
+    displayName: string;
+    slug: string;
+    karma: number;
+  }> | null;
   extendedScore: NamesAttachedReactionsScore | null;
   afExtendedScore: any;
   votingSystem?: string | null;

@@ -23,6 +23,7 @@ const slugByAuthorId = new Map<string, string>();
 type UserWithOptionalSlug = {
   _id?: string | null;
   username?: string | null;
+  displayName?: string | null;
   slug?: string | null;
 };
 
@@ -57,7 +58,18 @@ const indexSlugsFromState = (state: ReaderState): void => {
     const normalized = slug.trim();
     if (!normalized) continue;
     slugByAuthorId.set(authorId, normalized);
+
+    const coauthors = (post.coauthors || []) as Array<UserWithOptionalSlug | null>;
+    for (const coauthor of coauthors) {
+      const coauthorId = coauthor?._id;
+      const coauthorSlug = coauthor?.slug;
+      if (!coauthorId || typeof coauthorSlug !== 'string') continue;
+      const normalizedCoauthorSlug = coauthorSlug.trim();
+      if (!normalizedCoauthorSlug) continue;
+      slugByAuthorId.set(coauthorId, normalizedCoauthorSlug);
+    }
   }
+
 };
 
 const resolveSlugFromState = (authorId: string, state?: ReaderState): string | null => {
@@ -70,8 +82,11 @@ const resolveSlugFromState = (authorId: string, state?: ReaderState): string | n
   return slugByAuthorId.get(authorId) ?? null;
 };
 
-const getAuthorProfileLink = (item: Post | Comment, fallbackHandle: string, state?: ReaderState): string => {
-  const user = item.user as unknown as UserWithOptionalSlug | null | undefined;
+const getAuthorProfileLinkForUser = (
+  user: UserWithOptionalSlug | null | undefined,
+  fallbackHandle: string,
+  state?: ReaderState
+): string => {
   const slug = user?.slug;
   if (typeof slug === 'string' && slug.trim().length > 0) {
     return `/users/${encodeURIComponent(slug.trim())}`;
@@ -91,6 +106,61 @@ const getAuthorProfileLink = (item: Post | Comment, fallbackHandle: string, stat
   }
 
   return '#';
+};
+
+const getAuthorProfileLink = (item: Post | Comment, fallbackHandle: string, state?: ReaderState): string => {
+  const user = item.user as unknown as UserWithOptionalSlug | null | undefined;
+  return getAuthorProfileLinkForUser(user, fallbackHandle, state);
+};
+
+type RenderableAuthor = {
+  _id: string;
+  displayName: string;
+  profileLink: string;
+};
+
+const buildPostAuthors = (post: Post, state?: ReaderState): RenderableAuthor[] => {
+  const primaryUser = post.user as unknown as UserWithOptionalSlug | null | undefined;
+  const coauthors = (post.coauthors || []) as Array<UserWithOptionalSlug | null>;
+  const candidates = [primaryUser, ...coauthors];
+  const fallbackPrimaryHandle = getAuthorHandle(post);
+  const seen = new Set<string>();
+  const authors: RenderableAuthor[] = [];
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (!candidate) continue;
+
+    const id = typeof candidate._id === 'string' ? candidate._id : '';
+    const username = typeof candidate.username === 'string' ? candidate.username.trim() : '';
+    const displayName = typeof candidate.displayName === 'string' ? candidate.displayName.trim() : '';
+    const fallbackHandle = i === 0 ? fallbackPrimaryHandle : '';
+    const handle = username || fallbackHandle || displayName;
+    const visibleName = displayName || username || fallbackHandle;
+    if (!handle || !visibleName) continue;
+
+    const dedupeKey = id
+      ? `id:${id}`
+      : username
+        ? `username:${username.toLowerCase()}`
+        : `name:${visibleName.toLowerCase()}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    authors.push({
+      _id: id,
+      displayName: visibleName,
+      profileLink: getAuthorProfileLinkForUser(candidate, handle, state),
+    });
+  }
+
+  if (authors.length > 0) return authors;
+
+  return [{
+    _id: primaryUser?._id || '',
+    displayName: fallbackPrimaryHandle,
+    profileLink: getAuthorProfileLink(post, fallbackPrimaryHandle, state),
+  }];
 };
 
 /**
@@ -155,6 +225,17 @@ export const renderMetadata = (
   const timeStr = date.toLocaleString().replace(/ ?GMT.*/, '');
 
   const authorLink = getAuthorProfileLink(item, authorHandle, state);
+  const authorsHtml = isPost
+    ? buildPostAuthors(item as Post, state)
+      .map(author =>
+        `<a href="${escapeHtml(author.profileLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(author._id)}">${escapeHtml(author.displayName)}</a>`
+      )
+      .join(', ')
+    : `<a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(authorId)}">${escapeHtml(authorName)}</a>`;
+  const hasCoauthors = isPost && (((item as Post).coauthors?.length || 0) > 0);
+  const authorRole = hasCoauthors ? 'primary author' : 'author';
+  const authorDownTitle = `Mark ${authorRole} as disliked (auto-hide their future comments)`;
+  const authorUpTitle = `Mark ${authorRole} as preferred (highlight their future comments)`;
 
   let containerClass = isPost ? 'pr-comment-meta pr-post-meta' : 'pr-comment-meta';
   if (extraClass) containerClass += ` ${extraClass}`;
@@ -166,14 +247,14 @@ export const renderMetadata = (
         <span class="pr-author-down ${authorPref < 0 ? 'active-down' : ''}" 
               data-action="author-down" 
               data-author="${escapeHtml(authorHandle)}"
-              title="Mark author as disliked (auto-hide their future comments)">↓</span>
+              title="${authorDownTitle}">&#8595;</span>
       </span>
-      <a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${authorId}">${escapeHtml(authorName)}</a>
+      ${authorsHtml}
       <span class="pr-author-controls">
         <span class="pr-author-up ${authorPref > 0 ? 'active-up' : ''}" 
               data-action="author-up" 
               data-author="${escapeHtml(authorHandle)}"
-              title="Mark author as preferred (highlight their future comments)">↑</span>
+              title="${authorUpTitle}">&#8593;</span>
       </span>
       <span class="pr-timestamp">
         <a href="${item.pageUrl || '#'}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
@@ -182,3 +263,4 @@ export const renderMetadata = (
     </div>
   `;
 };
+

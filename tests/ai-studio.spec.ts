@@ -134,4 +134,32 @@ test.describe('Power Reader AI Studio Integration', () => {
         });
         expect(payload).toContain(customPrefix);
     });
+
+    test('AI status messaging does not replace base status stats and auto-clears', async ({ page }) => {
+        await initPowerReader(page, {
+            testMode: true,
+            onInit: `
+                window.GM_openInTab = () => {};
+            `
+        });
+
+        const comment = page.locator('.pr-comment').first();
+        await comment.hover();
+
+        const unreadBefore = await page.locator('#pr-unread-count').textContent();
+        expect(unreadBefore).not.toBeNull();
+
+        await page.keyboard.press('g');
+
+        const transient = page.locator('.pr-status .pr-ai-transient-status');
+        await expect(transient).toBeVisible();
+        await expect(transient).toContainText('[AI Studio]');
+
+        // Status counters should still be present while transient message is shown.
+        await expect(page.locator('#pr-unread-count')).toBeVisible();
+        await expect(page.locator('#pr-sync-status-label')).toBeVisible();
+
+        // Transient status should clear automatically.
+        await expect(transient).toBeHidden({ timeout: 4000 });
+    });
 });

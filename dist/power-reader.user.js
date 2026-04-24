@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.728
+// @version    1.2.729
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.728"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.729"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -2151,6 +2151,13 @@ reset: () => {
     commentCount
     wordCount
     user {
+      _id
+      username
+      displayName
+      slug
+      karma
+    }
+    coauthors {
       _id
       username
       displayName
@@ -4666,6 +4673,15 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       const normalized = slug.trim();
       if (!normalized) continue;
       slugByAuthorId.set(authorId, normalized);
+      const coauthors = post.coauthors || [];
+      for (const coauthor of coauthors) {
+        const coauthorId = coauthor?._id;
+        const coauthorSlug = coauthor?.slug;
+        if (!coauthorId || typeof coauthorSlug !== "string") continue;
+        const normalizedCoauthorSlug = coauthorSlug.trim();
+        if (!normalizedCoauthorSlug) continue;
+        slugByAuthorId.set(coauthorId, normalizedCoauthorSlug);
+      }
     }
   };
   const resolveSlugFromState = (authorId, state2) => {
@@ -4675,8 +4691,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
     indexSlugsFromState(state2);
     return slugByAuthorId.get(authorId) ?? null;
   };
-  const getAuthorProfileLink = (item, fallbackHandle, state2) => {
-    const user = item.user;
+  const getAuthorProfileLinkForUser = (user, fallbackHandle, state2) => {
     const slug = user?.slug;
     if (typeof slug === "string" && slug.trim().length > 0) {
       return `/users/${encodeURIComponent(slug.trim())}`;
@@ -4693,6 +4708,43 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       return `/users/${encodeURIComponent(candidate || trimmed)}`;
     }
     return "#";
+  };
+  const getAuthorProfileLink = (item, fallbackHandle, state2) => {
+    const user = item.user;
+    return getAuthorProfileLinkForUser(user, fallbackHandle, state2);
+  };
+  const buildPostAuthors = (post, state2) => {
+    const primaryUser = post.user;
+    const coauthors = post.coauthors || [];
+    const candidates = [primaryUser, ...coauthors];
+    const fallbackPrimaryHandle = getAuthorHandle(post);
+    const seen = new Set();
+    const authors = [];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (!candidate) continue;
+      const id = typeof candidate._id === "string" ? candidate._id : "";
+      const username = typeof candidate.username === "string" ? candidate.username.trim() : "";
+      const displayName = typeof candidate.displayName === "string" ? candidate.displayName.trim() : "";
+      const fallbackHandle = i === 0 ? fallbackPrimaryHandle : "";
+      const handle = username || fallbackHandle || displayName;
+      const visibleName = displayName || username || fallbackHandle;
+      if (!handle || !visibleName) continue;
+      const dedupeKey = id ? `id:${id}` : username ? `username:${username.toLowerCase()}` : `name:${visibleName.toLowerCase()}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      authors.push({
+        _id: id,
+        displayName: visibleName,
+        profileLink: getAuthorProfileLinkForUser(candidate, handle, state2)
+      });
+    }
+    if (authors.length > 0) return authors;
+    return [{
+      _id: primaryUser?._id || "",
+      displayName: fallbackPrimaryHandle,
+      profileLink: getAuthorProfileLink(post, fallbackPrimaryHandle, state2)
+    }];
   };
   const renderMetadata = (item, options = {}) => {
     const { state: state2, isFullPost = true, style = "", extraClass = "", children = "" } = options;
@@ -4735,6 +4787,13 @@ reactionsHtml,
     const date = new Date(postedAt);
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     const authorLink = getAuthorProfileLink(item, authorHandle, state2);
+    const authorsHtml = isPost2 ? buildPostAuthors(item, state2).map(
+      (author) => `<a href="${escapeHtml(author.profileLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(author._id)}">${escapeHtml(author.displayName)}</a>`
+    ).join(", ") : `<a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(authorId)}">${escapeHtml(authorName)}</a>`;
+    const hasCoauthors = isPost2 && (item.coauthors?.length || 0) > 0;
+    const authorRole = hasCoauthors ? "primary author" : "author";
+    const authorDownTitle = `Mark ${authorRole} as disliked (auto-hide their future comments)`;
+    const authorUpTitle = `Mark ${authorRole} as preferred (highlight their future comments)`;
     let containerClass = isPost2 ? "pr-comment-meta pr-post-meta" : "pr-comment-meta";
     if (extraClass) containerClass += ` ${extraClass}`;
     return `
@@ -4744,14 +4803,14 @@ reactionsHtml,
         <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" 
               data-action="author-down" 
               data-author="${escapeHtml(authorHandle)}"
-              title="Mark author as disliked (auto-hide their future comments)">↓</span>
+              title="${authorDownTitle}">&#8595;</span>
       </span>
-      <a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${authorId}">${escapeHtml(authorName)}</a>
+      ${authorsHtml}
       <span class="pr-author-controls">
         <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" 
               data-action="author-up" 
               data-author="${escapeHtml(authorHandle)}"
-              title="Mark author as preferred (highlight their future comments)">↑</span>
+              title="${authorUpTitle}">&#8593;</span>
       </span>
       <span class="pr-timestamp">
         <a href="${item.pageUrl || "#"}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
@@ -6160,12 +6219,14 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   class ReadTracker {
     static UNREAD_ITEM_SELECTOR = ".pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)";
     static BOTTOM_MARGIN_PX = 150;
+    static RESUME_PROCESS_DELAY_MS = 120;
     scrollMarkDelay;
     commentsDataGetter;
     postsDataGetter;
     initialBatchNewestDateGetter;
     pendingReadTimeouts = {};
     scrollTimeout = null;
+    resumeProcessTimeout = null;
     scrollListenerAdded = false;
     isCheckingForMore = false;
     lastCheckedIso = null;
@@ -6181,10 +6242,26 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     init() {
       if (this.scrollListenerAdded) return;
       window.addEventListener("scroll", () => this.handleScroll(), { passive: true });
+      window.addEventListener("focus", () => this.scheduleResumeProcessing(), { passive: true });
+      window.addEventListener("pageshow", () => this.scheduleResumeProcessing(), { passive: true });
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          this.scheduleResumeProcessing();
+        }
+      }, { passive: true });
       this.scrollListenerAdded = true;
       this.hasAdvancedThisBatch = false;
       setTimeout(() => this.processScroll(), 500);
       setTimeout(() => this.checkInitialState(), 1e3);
+    }
+    scheduleResumeProcessing() {
+      if (this.resumeProcessTimeout !== null) {
+        window.clearTimeout(this.resumeProcessTimeout);
+      }
+      this.resumeProcessTimeout = window.setTimeout(() => {
+        this.resumeProcessTimeout = null;
+        this.processScroll();
+      }, ReadTracker.RESUME_PROCESS_DELAY_MS);
     }
     checkInitialState() {
       const unreadCountEl = document.getElementById("pr-unread-count");
@@ -9167,7 +9244,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.728"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9347,7 +9424,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.728"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -11760,24 +11837,62 @@ currentCommentId = null;
     }
     handleScrollToRoot(target, topLevelId);
   };
+  const READER_STATUS_MESSAGE_CLASS = "pr-ai-transient-status";
+  const READER_STATUS_AUTO_CLEAR_MS = 7e3;
+  const READER_STATUS_AUTO_CLEAR_TEST_MS = 1200;
+  let readerStatusClearTimer = null;
+  let readerStatusMessageVersion = 0;
+  const isPRTestMode = () => {
+    return !!window.__PR_TEST_MODE__;
+  };
+  const getReaderStatusAutoClearMs = () => isPRTestMode() ? READER_STATUS_AUTO_CLEAR_TEST_MS : READER_STATUS_AUTO_CLEAR_MS;
+  const ensureReaderStatusMessageEl = (statusEl) => {
+    let messageEl = statusEl.querySelector(`.${READER_STATUS_MESSAGE_CLASS}`);
+    if (messageEl) return messageEl;
+    messageEl = document.createElement("span");
+    messageEl.className = READER_STATUS_MESSAGE_CLASS;
+    messageEl.style.fontWeight = "600";
+    statusEl.appendChild(messageEl);
+    return messageEl;
+  };
   const readerStatusReporter = {
     setMessage(message, color) {
       const statusEl = document.querySelector(".pr-status");
       if (!statusEl) return;
-      statusEl.textContent = "";
-      if (!color) {
-        statusEl.textContent = message;
-        return;
+      readerStatusMessageVersion += 1;
+      const currentVersion = readerStatusMessageVersion;
+      const messageEl = ensureReaderStatusMessageEl(statusEl);
+      const hasExistingContent = Array.from(statusEl.childNodes).some((node) => {
+        if (node === messageEl) return false;
+        return (node.textContent || "").trim().length > 0;
+      });
+      messageEl.textContent = hasExistingContent ? ` | ${message}` : message;
+      if (color) {
+        messageEl.style.color = color;
+      } else {
+        messageEl.style.color = "";
       }
-      const span = document.createElement("span");
-      span.style.color = color;
-      span.textContent = message;
-      statusEl.appendChild(span);
+      if (readerStatusClearTimer !== null) {
+        window.clearTimeout(readerStatusClearTimer);
+        readerStatusClearTimer = null;
+      }
+      readerStatusClearTimer = window.setTimeout(() => {
+        if (readerStatusMessageVersion !== currentVersion) return;
+        readerStatusReporter.clear();
+      }, getReaderStatusAutoClearMs());
     },
     clear() {
       const statusEl = document.querySelector(".pr-status");
       if (!statusEl) return;
-      statusEl.textContent = "";
+      readerStatusMessageVersion += 1;
+      const messageEl = statusEl.querySelector(`.${READER_STATUS_MESSAGE_CLASS}`);
+      if (messageEl) {
+        messageEl.remove();
+      }
+      if (readerStatusClearTimer !== null) {
+        window.clearTimeout(readerStatusClearTimer);
+        readerStatusClearTimer = null;
+      }
     }
   };
   const isNonEmptyText = (value) => typeof value === "string" && value.trim().length > 0;
@@ -16945,7 +17060,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.728"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19335,7 +19450,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.728"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

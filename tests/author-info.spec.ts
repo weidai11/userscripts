@@ -62,6 +62,50 @@ test.describe('Author Info Features', () => {
         await expect(authorLink).toHaveAttribute('href', '/users/wei-dai');
     });
 
+    test('[PR-AUTH-10] Post metadata renders all coauthors for multi-author posts', async ({ page }) => {
+        const posts = [
+            {
+                _id: 'p-multi-1',
+                title: 'Multi-author test post',
+                postedAt: new Date().toISOString(),
+                user: {
+                    _id: 'u-primary',
+                    username: 'primary_author',
+                    displayName: 'Primary Author',
+                    slug: 'primary-author',
+                    karma: 1000
+                },
+                coauthors: [
+                    {
+                        _id: 'u-co-1',
+                        username: 'co_author_one',
+                        displayName: 'Coauthor One',
+                        slug: 'coauthor-one',
+                        karma: 900
+                    },
+                    {
+                        _id: 'u-co-2',
+                        username: 'co_author_two',
+                        displayName: 'Coauthor Two',
+                        slug: 'coauthor-two',
+                        karma: 800
+                    }
+                ]
+            }
+        ];
+
+        await initPowerReader(page, { posts, comments: [] }, 'https://forum.effectivealtruism.org/reader');
+
+        const postAuthors = page.locator('.pr-post[data-id="p-multi-1"] .pr-post-meta .pr-author');
+        await expect(postAuthors).toHaveCount(3);
+        await expect(postAuthors.nth(0)).toHaveText('Primary Author');
+        await expect(postAuthors.nth(0)).toHaveAttribute('href', '/users/primary-author');
+        await expect(postAuthors.nth(1)).toHaveText('Coauthor One');
+        await expect(postAuthors.nth(1)).toHaveAttribute('href', '/users/coauthor-one');
+        await expect(postAuthors.nth(2)).toHaveText('Coauthor Two');
+        await expect(postAuthors.nth(2)).toHaveAttribute('href', '/users/coauthor-two');
+    });
+
     test('[PR-AUTH-09] Author hover should show preview with bio', async ({ page }) => {
         const prPage = new PowerReaderPage(page);
         const comments = [
@@ -203,5 +247,4 @@ test.describe('Author Info Features', () => {
         await expect(archiveLink).toHaveAttribute('href', '/archive?username=noslug_user');
     });
 });
-
 

@@ -24,6 +24,7 @@ const RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS: GraphQLQueryOptions = {
 export class ReadTracker {
     private static readonly UNREAD_ITEM_SELECTOR = '.pr-item:not(.read):not(.context), .pr-comment:not(.read):not(.context), .pr-post:not(.read):not(.context)';
     private static readonly BOTTOM_MARGIN_PX = 150;
+    private static readonly RESUME_PROCESS_DELAY_MS = 120;
 
     private scrollMarkDelay: number;
     private commentsDataGetter: () => { postedAt: string, _id: string }[];
@@ -31,6 +32,7 @@ export class ReadTracker {
     private initialBatchNewestDateGetter: () => string | null;
     private pendingReadTimeouts: Record<string, number> = {};
     private scrollTimeout: number | null = null;
+    private resumeProcessTimeout: number | null = null;
     private scrollListenerAdded: boolean = false;
     private isCheckingForMore: boolean = false;
     private lastCheckedIso: string | null = null;
@@ -52,6 +54,13 @@ export class ReadTracker {
     public init() {
         if (this.scrollListenerAdded) return;
         window.addEventListener('scroll', () => this.handleScroll(), { passive: true });
+        window.addEventListener('focus', () => this.scheduleResumeProcessing(), { passive: true });
+        window.addEventListener('pageshow', () => this.scheduleResumeProcessing(), { passive: true });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                this.scheduleResumeProcessing();
+            }
+        }, { passive: true });
         this.scrollListenerAdded = true;
         this.hasAdvancedThisBatch = false;
 
@@ -61,6 +70,16 @@ export class ReadTracker {
 
         // Initial check for session advancement if all items were already read
         setTimeout(() => this.checkInitialState(), 1000);
+    }
+
+    private scheduleResumeProcessing() {
+        if (this.resumeProcessTimeout !== null) {
+            window.clearTimeout(this.resumeProcessTimeout);
+        }
+        this.resumeProcessTimeout = window.setTimeout(() => {
+            this.resumeProcessTimeout = null;
+            this.processScroll();
+        }, ReadTracker.RESUME_PROCESS_DELAY_MS) as unknown as number;
     }
 
     private checkInitialState() {

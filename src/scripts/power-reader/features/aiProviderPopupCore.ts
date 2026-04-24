@@ -98,26 +98,70 @@ export interface AISendOptions {
   expectedHref?: string;
 }
 
+const READER_STATUS_MESSAGE_CLASS = 'pr-ai-transient-status';
+const READER_STATUS_AUTO_CLEAR_MS = 7000;
+const READER_STATUS_AUTO_CLEAR_TEST_MS = 1200;
+let readerStatusClearTimer: number | null = null;
+let readerStatusMessageVersion = 0;
+
+const isPRTestMode = (): boolean => {
+  return !!(window as unknown as { __PR_TEST_MODE__?: boolean }).__PR_TEST_MODE__;
+};
+
+const getReaderStatusAutoClearMs = (): number =>
+  isPRTestMode() ? READER_STATUS_AUTO_CLEAR_TEST_MS : READER_STATUS_AUTO_CLEAR_MS;
+
+const ensureReaderStatusMessageEl = (statusEl: HTMLElement): HTMLSpanElement => {
+  let messageEl = statusEl.querySelector(`.${READER_STATUS_MESSAGE_CLASS}`) as HTMLSpanElement | null;
+  if (messageEl) return messageEl;
+
+  messageEl = document.createElement('span');
+  messageEl.className = READER_STATUS_MESSAGE_CLASS;
+  messageEl.style.fontWeight = '600';
+  statusEl.appendChild(messageEl);
+  return messageEl;
+};
+
 const readerStatusReporter: StatusReporter = {
   setMessage(message: string, color?: string): void {
     const statusEl = document.querySelector('.pr-status') as HTMLElement | null;
     if (!statusEl) return;
 
-    statusEl.textContent = '';
-    if (!color) {
-      statusEl.textContent = message;
-      return;
+    readerStatusMessageVersion += 1;
+    const currentVersion = readerStatusMessageVersion;
+    const messageEl = ensureReaderStatusMessageEl(statusEl);
+    const hasExistingContent = Array.from(statusEl.childNodes).some((node) => {
+      if (node === messageEl) return false;
+      return (node.textContent || '').trim().length > 0;
+    });
+    messageEl.textContent = hasExistingContent ? ` | ${message}` : message;
+    if (color) {
+      messageEl.style.color = color;
+    } else {
+      messageEl.style.color = '';
     }
 
-    const span = document.createElement('span');
-    span.style.color = color;
-    span.textContent = message;
-    statusEl.appendChild(span);
+    if (readerStatusClearTimer !== null) {
+      window.clearTimeout(readerStatusClearTimer);
+      readerStatusClearTimer = null;
+    }
+    readerStatusClearTimer = window.setTimeout(() => {
+      if (readerStatusMessageVersion !== currentVersion) return;
+      readerStatusReporter.clear();
+    }, getReaderStatusAutoClearMs());
   },
   clear(): void {
     const statusEl = document.querySelector('.pr-status') as HTMLElement | null;
     if (!statusEl) return;
-    statusEl.textContent = '';
+    readerStatusMessageVersion += 1;
+    const messageEl = statusEl.querySelector(`.${READER_STATUS_MESSAGE_CLASS}`) as HTMLElement | null;
+    if (messageEl) {
+      messageEl.remove();
+    }
+    if (readerStatusClearTimer !== null) {
+      window.clearTimeout(readerStatusClearTimer);
+      readerStatusClearTimer = null;
+    }
   },
 };
 

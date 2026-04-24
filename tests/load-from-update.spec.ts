@@ -128,3 +128,61 @@ test('Power Reader updates loadFrom when reaching bottom of page', async ({ page
     const loadFrom = await page.evaluate(() => (window as any).__GM_CALLS?.['power-reader-read-from']);
     expect(loadFrom).toBe(expected);
 });
+
+test('Read tracking resumes on focus and advances session when everything is already read at bottom', async ({ page }) => {
+    const expected = '2026-02-02T12:00:00.001Z';
+    await initPowerReader(page, {
+        testMode: true,
+        storage: {
+            'power-reader-read-from': '2026-02-01T00:00:00.000Z',
+            'power-reader-read': '{}'
+        },
+        comments: [
+            {
+                _id: 'c1',
+                postId: 'p1',
+                pageUrl: 'https://www.lesswrong.com/posts/p1/post',
+                htmlBody: '<p>Older</p>',
+                postedAt: '2026-02-02T10:00:00.000Z',
+                baseScore: 5,
+                user: { _id: 'u1', username: 'User1' },
+                post: { _id: 'p1', title: 'Post' }
+            },
+            {
+                _id: 'c2',
+                postId: 'p1',
+                pageUrl: 'https://www.lesswrong.com/posts/p1/post',
+                htmlBody: '<p>Newest</p>',
+                postedAt: '2026-02-02T12:00:00.000Z',
+                baseScore: 10,
+                user: { _id: 'u2', username: 'User2' },
+                post: { _id: 'p1', title: 'Post' }
+            }
+        ],
+        onInit: `
+            // Avoid background auto-marking; this test explicitly simulates read completion.
+            window.PR_TEST_SCROLL_DELAY = 60000;
+        `
+    });
+
+    // Let the initial one-time check run while unread count is non-zero.
+    await page.waitForTimeout(1300);
+
+    await page.evaluate(() => {
+        const spacer = document.createElement('div');
+        spacer.style.height = '3000px';
+        document.body.appendChild(spacer);
+        window.scrollTo(0, document.body.scrollHeight);
+
+        document.querySelectorAll('.pr-item, .pr-comment, .pr-post').forEach((el) => {
+            el.classList.add('read');
+        });
+        const unread = document.getElementById('pr-unread-count');
+        if (unread) unread.textContent = '0';
+        window.dispatchEvent(new Event('focus'));
+    });
+
+    await page.waitForFunction((val) => (window as any).__GM_CALLS?.['power-reader-read-from'] === val, expected, { timeout: 10000 });
+    const loadFrom = await page.evaluate(() => (window as any).__GM_CALLS?.['power-reader-read-from']);
+    expect(loadFrom).toBe(expected);
+});

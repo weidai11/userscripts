@@ -305,6 +305,7 @@ Comments under a post are organized hierarchically:
 
 **[PR-AUTH-03]** **Full Name Display**: Authors are now displayed using their `displayName` (full name) instead of their `username` (short name/handle) whenever available.
 **[PR-AUTH-04]** **Profile Links**: Author names are clickable links that open the user's profile (`/users/slug`) in a new tab.
+**[PR-AUTH-10]** **Multi-Author Post Metadata**: Post headers MUST render all listed authors (primary author plus coauthors) when coauthor data is available.
 **[PR-AUTH-09]** **Hover Previews**: Hovering over an author's name shows a preview popup containing:
 - Display Name and Username
 - Total Karma
