@@ -770,6 +770,10 @@ The Power Reader supports a dedicated "User Archive" mode for browsing a user's 
 - **[PR-UARCH-51] Idle Search Status Collapse**: The archive search status row (`#archive-search-status`) remains hidden when there are no messages and only appears for active diagnostics/info chips.
 - **[PR-UARCH-52] Compact Toolbar Density**: Archive top controls use compact icon actions, horizontal view tabs, and grouped spacing to reduce vertical footprint without removing existing sort/scope/view functionality.
 - **[PR-UARCH-53] No-Query Baseline Facets**: When the query is empty, archive facets render immediately from cached per-scope baseline aggregates keyed by sync watermark (and `all`-scope context count). If a fresh exact baseline is unavailable, sampled counts are shown first and refined asynchronously when feasible.
+- **[PR-UARCH-54] Archive Export Controls**: Archive toolbar includes export actions for Markdown (`MD`), JavaScript payload (`JS`), and browser-viewable HTML (`HTML`).
+- **[PR-UARCH-55] Current-View Export Scope**: `MD` and `JS` exports use the current archive result set after search/scope/sort resolution (the same corpus currently active in the archive UI), and preserve export metadata for query/scope/sort.
+- **[PR-UARCH-56] Full-Archive HTML Export**: `HTML` export always includes the full authored archive dataset from IndexedDB (`items` store), independent of current search/scope filters, and UI labeling MUST clearly communicate this behavior.
+- **[PR-UARCH-57] Shared JS Payload Path + Blob Downloads**: `JS` and `HTML` exports share one core JS payload generation path, and all archive exports use native browser download APIs (`Blob`, `URL.createObjectURL`, anchor download) for large-dataset-safe client-side generation.
 - **Detailed Specification**: See **[ARCH_USER_ARCHIVE.md](../../../../ARCH_USER_ARCHIVE.md)** for implementation architecture notes.
 
 ### 27. User Archive Link Injection

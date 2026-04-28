@@ -2906,4 +2906,239 @@ return { data: {} };
     await page.keyboard.press('ArrowLeft');
     await expectArchiveViewSelected(page, 'card');
   });
+
+  test('[PR-UARCH-54][PR-UARCH-55][PR-UARCH-57] MD/JS export current archive results with UI scope/query metadata', async ({ page }) => {
+    const userId = 'u-export-current';
+    const username = 'ExportCurrent_User';
+    const userObj = { _id: userId, username, displayName: 'Export Current User', slug: 'export-current-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
+const win = window;
+win.__TEST_DOWNLOADS__ = [];
+const blobMap = new Map();
+const nativeCreateObjectURL = URL.createObjectURL.bind(URL);
+const nativeRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+URL.createObjectURL = (blob) => {
+  const url = nativeCreateObjectURL(blob);
+  blobMap.set(url, blob);
+  return url;
+};
+URL.revokeObjectURL = (url) => {
+  blobMap.delete(url);
+  nativeRevokeObjectURL(url);
+};
+HTMLAnchorElement.prototype.click = function () {
+  const href = this.href;
+  const blob = blobMap.get(href);
+  const download = this.download;
+  if (!blob) {
+    win.__TEST_DOWNLOADS__.push({ download, href, text: null, type: null, size: 0 });
+    return;
+  }
+  blob.text().then((text) => {
+    win.__TEST_DOWNLOADS__.push({ download, href, text, type: blob.type, size: blob.size });
+  });
+};
+`,
+      onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-export-hit',
+            title: 'Needle Post',
+            slug: 'needle-post',
+            pageUrl: 'https://lesswrong.com/posts/p-export-hit',
+            postedAt: '2025-01-12T12:00:00Z',
+            baseScore: 12,
+            voteCount: 2,
+            commentCount: 0,
+            htmlBody: '<p>Needle HTML body</p>',
+            contents: { markdown: 'Needle markdown body' },
+            user: ${JSON.stringify(userObj)}
+          },
+          {
+            _id: 'p-export-miss',
+            title: 'Unrelated Post',
+            slug: 'unrelated-post',
+            pageUrl: 'https://lesswrong.com/posts/p-export-miss',
+            postedAt: '2025-01-11T12:00:00Z',
+            baseScore: 1,
+            voteCount: 1,
+            commentCount: 0,
+            htmlBody: '<p>Other HTML body</p>',
+            contents: { markdown: 'Other markdown body' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+    });
+
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await page.locator('#archive-search').fill('needle');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.pr-item')).toHaveCount(1);
+    await selectArchiveScope(page, 'all');
+    await expectArchiveScopeSelected(page, 'all');
+
+    await page.locator('#archive-export-js').click();
+    await page.locator('#archive-export-md').click();
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_DOWNLOADS__.length)).toBe(2);
+
+    const jsExport = await page.evaluate(() => {
+      const downloads = (window as any).__TEST_DOWNLOADS__ as Array<{ download: string; text: string | null }>;
+      const jsDownload = downloads.find(entry => typeof entry.download === 'string' && entry.download.endsWith('.js'));
+      if (!jsDownload?.text) return null;
+      const sandbox: Record<string, unknown> = {};
+      const fn = new Function('globalThis', `${jsDownload.text}; return globalThis.__PR_ARCHIVE_EXPORT__;`);
+      return fn(sandbox) as any;
+    });
+
+    expect(jsExport).toBeTruthy();
+    expect(jsExport.source.mode).toBe('current-view');
+    expect(jsExport.source.scope).toBe('all');
+    expect(jsExport.source.query).toContain('needle');
+    expect(jsExport.counts.items).toBe(1);
+    expect(jsExport.items.map((item: any) => item._id)).toEqual(['p-export-hit']);
+    expect(jsExport.items[0].contents.markdown).toBe('Needle markdown body');
+    expect(jsExport.items[0].htmlBody).toContain('Needle HTML body');
+
+    const markdownExport = await page.evaluate(() => {
+      const downloads = (window as any).__TEST_DOWNLOADS__ as Array<{ download: string; text: string | null }>;
+      const mdDownload = downloads.find(entry => typeof entry.download === 'string' && entry.download.endsWith('.md'));
+      return mdDownload?.text ?? null;
+    });
+
+    expect(markdownExport).toContain('Needle markdown body');
+    expect(markdownExport).not.toContain('Other markdown body');
+    expect(markdownExport).toContain('Export Mode: current-view');
+  });
+
+  test('[PR-UARCH-56][PR-UARCH-57] HTML export always includes full authored archive and embeds shared JS payload', async ({ page }) => {
+    const userId = 'u-export-full';
+    const username = 'ExportFull_User';
+    const userObj = { _id: userId, username, displayName: 'Export Full User', slug: 'export-full-user', karma: 100 };
+
+    await setupMockEnvironment(page, {
+      mockHtml: '<html><head></head><body><div id="app">Original Site Content</div></body></html>',
+      testMode: true,
+      onInit: `
+const win = window;
+win.__TEST_DOWNLOADS__ = [];
+const blobMap = new Map();
+const nativeCreateObjectURL = URL.createObjectURL.bind(URL);
+const nativeRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+URL.createObjectURL = (blob) => {
+  const url = nativeCreateObjectURL(blob);
+  blobMap.set(url, blob);
+  return url;
+};
+URL.revokeObjectURL = (url) => {
+  blobMap.delete(url);
+  nativeRevokeObjectURL(url);
+};
+HTMLAnchorElement.prototype.click = function () {
+  const href = this.href;
+  const blob = blobMap.get(href);
+  const download = this.download;
+  if (!blob) {
+    win.__TEST_DOWNLOADS__.push({ download, href, text: null, type: null, size: 0 });
+    return;
+  }
+  blob.text().then((text) => {
+    win.__TEST_DOWNLOADS__.push({ download, href, text, type: blob.type, size: blob.size });
+  });
+};
+`,
+      onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  return {
+    data: {
+      posts: {
+        results: [
+          {
+            _id: 'p-full-1',
+            title: 'First Full Export Post',
+            slug: 'first-full-export-post',
+            pageUrl: 'https://lesswrong.com/posts/p-full-1',
+            postedAt: '2025-01-15T12:00:00Z',
+            baseScore: 10,
+            voteCount: 1,
+            commentCount: 0,
+            htmlBody: '<p>First body</p>',
+            contents: { markdown: 'First markdown' },
+            user: ${JSON.stringify(userObj)}
+          },
+          {
+            _id: 'p-full-2',
+            title: 'Second Full Export Post',
+            slug: 'second-full-export-post',
+            pageUrl: 'https://lesswrong.com/posts/p-full-2',
+            postedAt: '2025-01-14T12:00:00Z',
+            baseScore: 9,
+            voteCount: 1,
+            commentCount: 0,
+            htmlBody: '<p>Second body</p>',
+            contents: { markdown: 'Second markdown' },
+            user: ${JSON.stringify(userObj)}
+          }
+        ]
+      }
+    }
+  };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+    });
+
+    await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
+    await page.evaluate(scriptContent);
+    await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+    await waitForArchiveRenderComplete(page);
+
+    await page.locator('#archive-search').fill('first');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.pr-item')).toHaveCount(1);
+
+    await page.locator('#archive-export-html').click();
+    await expect.poll(async () => page.evaluate(() => (window as any).__TEST_DOWNLOADS__.length)).toBe(1);
+
+    const htmlExport = await page.evaluate(() => {
+      const downloads = (window as any).__TEST_DOWNLOADS__ as Array<{ download: string; text: string | null }>;
+      const htmlDownload = downloads.find(entry => typeof entry.download === 'string' && entry.download.endsWith('.html'));
+      return htmlDownload?.text ?? null;
+    });
+
+    expect(htmlExport).toContain('First Full Export Post');
+    expect(htmlExport).toContain('Second Full Export Post');
+    expect(htmlExport).toContain('"mode": "full-archive"');
+    expect(htmlExport).toContain('__PR_ARCHIVE_EXPORT__');
+  });
 });

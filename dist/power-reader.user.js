@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.729
+// @version    1.2.730
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1862,12 +1862,12 @@ reset: () => {
       }
       return originalCreateElement(tagName, options);
     };
-    document.createElementNS = function(namespaceURI, qualifiedName, options) {
+    document.createElementNS = ((namespaceURI, qualifiedName, options) => {
       if (isScriptTag(qualifiedName)) {
         return createBlockedScriptPlaceholder(namespaceURI);
       }
       return originalCreateElementNS(namespaceURI, qualifiedName, options);
-    };
+    });
     const scriptObserver = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.729"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.730"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -3979,9 +3979,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       }
       return `
       <div class="pr-preview-header">
-        <strong>${escapeHtml$1(post.title || "")}</strong>
+        <strong>${escapeHtml$2(post.title || "")}</strong>
         <span style="color: #666; margin-left: 10px;">
-          by ${escapeHtml$1(getAuthorHandle(post, "Unknown"))} · ${post.baseScore} points
+          by ${escapeHtml$2(getAuthorHandle(post, "Unknown"))} · ${post.baseScore} points
         </span>
       </div>
       <div class="pr-preview-content">
@@ -4009,7 +4009,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     return `
     <div class="pr-preview-header">
-      <strong>${escapeHtml$1(getAuthorHandle(comment, "Unknown"))}</strong>
+      <strong>${escapeHtml$2(getAuthorHandle(comment, "Unknown"))}</strong>
       <span style="color: #666; margin-left: 10px;">
         ${comment.baseScore} points · ${timeStr}
       </span>
@@ -4043,7 +4043,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     return true;
   }
-  function escapeHtml$1(str) {
+  function escapeHtml$2(str) {
     const div = document.createElement("div");
     div.textContent = str;
     return div.innerHTML;
@@ -4135,13 +4135,13 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         );
         const tag = response.tags?.results?.[0];
         if (!tag) {
-          return `<div class="pr-preview-loading">Wiki tag "${escapeHtml$1(slug)}" not found</div>`;
+          return `<div class="pr-preview-loading">Wiki tag "${escapeHtml$2(slug)}" not found</div>`;
         }
         const title = tag.name || slug;
         const content = tag.description?.htmlHighlight || "<i>(No wiki description)</i>";
         return `
         <div class="pr-preview-header">
-          <strong>Wiki: ${escapeHtml$1(title)}</strong>
+          <strong>Wiki: ${escapeHtml$2(title)}</strong>
         </div>
         <div class="pr-preview-content">
           ${content}
@@ -4149,7 +4149,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       `;
       } catch (e) {
         Logger.error("Wiki GraphQL fetch failed:", e);
-        return `<i>Failed to load wiki preview for: ${escapeHtml$1(slug)}</i>`;
+        return `<i>Failed to load wiki preview for: ${escapeHtml$2(slug)}</i>`;
       }
     };
   }
@@ -4181,9 +4181,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     <div class="pr-preview-header">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
         <div style="flex: 1;">
-            <strong>${escapeHtml$1(user.displayName || user.username || "Unknown")}</strong>
+            <strong>${escapeHtml$2(user.displayName || user.username || "Unknown")}</strong>
             <div style="color: #666; font-size: 0.9em;">
-                ${Math.round(user.karma)} karma · @${escapeHtml$1(user.username || "")}
+                ${Math.round(user.karma)} karma · @${escapeHtml$2(user.username || "")}
             </div>
         </div>
         <a href="${archiveLink}" 
@@ -4536,7 +4536,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
       <span class="pr-agreement-score pr-tooltip-target" 
             data-tooltip-label="Agreement Score: ${agreementScore}"
             data-tooltip-description="Net agreement from ${agreementVoteCount} votes."
-            ${agreementUsers ? `data-tooltip-users="${escapeHtml(agreementUsers)}"` : ""}>${agreementScore}</span>
+            ${agreementUsers ? `data-tooltip-users="${escapeHtml$1(agreementUsers)}"` : ""}>${agreementScore}</span>
       ${showButtons ? `
       <span class="pr-vote-btn ${isAgreed ? "agree-active" : ""} ${agreeVote === "bigUpvote" ? "strong-vote" : ""}" 
             data-action="agree" 
@@ -4614,7 +4614,7 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         transform: scale(${scale}) translate(${tx}px, ${ty}px);
         padding: ${padding}px;
       `;
-        const labelAttr = `data-tooltip-label="${escapeHtml(reaction.label)}"`;
+        const labelAttr = `data-tooltip-label="${escapeHtml$1(reaction.label)}"`;
         const descriptionLines = [];
         if (reaction.description) {
           descriptionLines.push(reaction.description);
@@ -4624,14 +4624,14 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         } else if (totals.pro > 0) {
           descriptionLines.push(`Total: ${totals.pro}`);
         }
-        const descAttr = `data-tooltip-description="${escapeHtml(descriptionLines.join("\n"))}"`;
+        const descAttr = `data-tooltip-description="${escapeHtml$1(descriptionLines.join("\n"))}"`;
         const userList = reactionEntries.map((u) => {
           const name = u.displayName || u.userName || u.username || u.userId;
           const quotesStr = formatQuotesForTooltip(u.quotes);
           const stance = u.reactType === "disagreed" ? " [Opposed]" : " [Reacted]";
           return name + stance + (quotesStr ? ` (${quotesStr})` : "");
         }).join("\n");
-        const usersAttr = userList ? `data-tooltip-users="${escapeHtml(userList)}"` : "";
+        const usersAttr = userList ? `data-tooltip-users="${escapeHtml$1(userList)}"` : "";
         const countText = String(Math.max(totals.net, 0));
         html += `
         <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
@@ -4788,8 +4788,8 @@ reactionsHtml,
     const timeStr = date.toLocaleString().replace(/ ?GMT.*/, "");
     const authorLink = getAuthorProfileLink(item, authorHandle, state2);
     const authorsHtml = isPost2 ? buildPostAuthors(item, state2).map(
-      (author) => `<a href="${escapeHtml(author.profileLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(author._id)}">${escapeHtml(author.displayName)}</a>`
-    ).join(", ") : `<a href="${escapeHtml(authorLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml(authorId)}">${escapeHtml(authorName)}</a>`;
+      (author) => `<a href="${escapeHtml$1(author.profileLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml$1(author._id)}">${escapeHtml$1(author.displayName)}</a>`
+    ).join(", ") : `<a href="${escapeHtml$1(authorLink)}" target="_blank" class="pr-author" data-author-id="${escapeHtml$1(authorId)}">${escapeHtml$1(authorName)}</a>`;
     const hasCoauthors = isPost2 && (item.coauthors?.length || 0) > 0;
     const authorRole = hasCoauthors ? "primary author" : "author";
     const authorDownTitle = `Mark ${authorRole} as disliked (auto-hide their future comments)`;
@@ -4802,18 +4802,18 @@ reactionsHtml,
       <span class="pr-author-controls">
         <span class="pr-author-down ${authorPref < 0 ? "active-down" : ""}" 
               data-action="author-down" 
-              data-author="${escapeHtml(authorHandle)}"
+              data-author="${escapeHtml$1(authorHandle)}"
               title="${authorDownTitle}">&#8595;</span>
       </span>
       ${authorsHtml}
       <span class="pr-author-controls">
         <span class="pr-author-up ${authorPref > 0 ? "active-up" : ""}" 
               data-action="author-up" 
-              data-author="${escapeHtml(authorHandle)}"
+              data-author="${escapeHtml$1(authorHandle)}"
               title="${authorUpTitle}">&#8593;</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl || "#"}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
+        <a href="${item.pageUrl || "#"}" target="_blank"><time datetime="${escapeHtml$1(postedAt)}">${timeStr}</time></a>
       </span>
       ${children}
     </div>
@@ -4958,7 +4958,7 @@ reactionsHtml,
     if (isSelfLinkpostUrl(normalizedLink, pageUrl)) return null;
     return normalizedLink;
   };
-  const escapeHtml = (unsafe) => {
+  const escapeHtml$1 = (unsafe) => {
     return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   };
   const readQuoteText = (quoteEntry) => {
@@ -4992,9 +4992,9 @@ reactionsHtml,
     const { isSticky = false, isFullPost = false, state: state2 } = options;
     const metadataHtml = renderMetadata(post, { state: state2, isFullPost });
     const headerStyle = calculatePostHeaderStyle(post);
-    const escapedTitle = escapeHtml(post.title);
+    const escapedTitle = escapeHtml$1(post.title);
     const linkpostUrl = getRenderableLinkpostUrl(post.postCategory, post.linkUrl, post.pageUrl);
-    const linkpostHtml = linkpostUrl ? `<a class="pr-post-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
+    const linkpostHtml = linkpostUrl ? `<a class="pr-post-linkpost-url" href="${escapeHtml$1(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
     const classes = [
       "pr-post-header",
       !isFullPost ? "header-clickable" : "",
@@ -5501,7 +5501,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     return `
     <div class="pr-comment pr-item context pr-context-placeholder"
          data-id="${comment._id}"
-         data-author="${escapeHtml(authorHandle)}"
+         data-author="${escapeHtml$1(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ""}"
          data-post-id="${comment.postId}"
          data-posted-at-ms="${postedAtMs}">
@@ -5605,7 +5605,7 @@ behavior: window.__PR_TEST_MODE__ ? "instant" : "smooth"
     return `
     <div class="${classes}" 
          data-id="${comment._id}" 
-         data-author="${escapeHtml(authorHandle)}"
+         data-author="${escapeHtml$1(authorHandle)}"
          data-parent-id="${comment.parentCommentId || ""}"
          data-post-id="${comment.postId}"
          data-posted-at-ms="${postedAtMs}"
@@ -5772,7 +5772,7 @@ baseScore: 0,
          data-id="${group.postId}"
          data-comment-count="${postToRender.commentCount || 0}"
          data-posted-at-ms="${postPostedAtMs}"
-         data-author="${escapeHtml(authorHandle)}">
+         data-author="${escapeHtml$1(authorHandle)}">
       ${headerHtml}
       ${postBodyHtml}
       <div class="pr-post-comments">
@@ -9244,7 +9244,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9424,7 +9424,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -12850,7 +12850,7 @@ getPromptPrefix: getAIStudioPrefix,
     const description = target.getAttribute("data-tooltip-description") || "";
     const users = target.getAttribute("data-tooltip-users") || "";
     if (!label && !description && !users) return;
-    const format = (text) => escapeHtml(text).replace(/\n/g, "<br/>").replace(/\\n/g, "<br/>");
+    const format = (text) => escapeHtml$1(text).replace(/\n/g, "<br/>").replace(/\\n/g, "<br/>");
     let content = "";
     if (label) {
       content += `<strong>${format(label)}</strong>`;
@@ -14026,6 +14026,396 @@ getPromptPrefix: getAIStudioPrefix,
     if (removed > 0) {
       Logger.info(`Pruned ${removed} contextual cache records for ${username}`);
     }
+  };
+  const isPostItem = (item) => "title" in item;
+  const countByType = (items) => {
+    let posts = 0;
+    let comments = 0;
+    for (const item of items) {
+      if (isPostItem(item)) {
+        posts += 1;
+      } else {
+        comments += 1;
+      }
+    }
+    return { posts, comments };
+  };
+  const getItemType = (item) => isPostItem(item) ? "post" : "comment";
+  const stripHtml = (value) => value.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "").replace(/<\s*br\s*\/?>/gi, "\n").replace(/<\/\s*(p|div|li|blockquote|h[1-6]|ul|ol)\s*>/gi, "\n").replace(/<[^>]+>/g, "").replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim();
+  const getMarkdownOrFallbackText = (item) => {
+    const markdown = item.contents?.markdown;
+    if (typeof markdown === "string" && markdown.trim().length > 0) {
+      return markdown.trim();
+    }
+    const htmlBody = item.htmlBody;
+    if (typeof htmlBody === "string" && htmlBody.trim().length > 0) {
+      return stripHtml(htmlBody);
+    }
+    return "";
+  };
+  const normalizePostedAtMs = (value) => {
+    if (!value) return Number.NEGATIVE_INFINITY;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  };
+  const sortChronologically = (items) => [...items].sort((a, b) => {
+    const aTime = normalizePostedAtMs(a.postedAt);
+    const bTime = normalizePostedAtMs(b.postedAt);
+    if (aTime === bTime) return 0;
+    return aTime < bTime ? -1 : 1;
+  });
+  const escapeMarkdownInline = (value) => value.replace(/[\\`*_{}()[\]#+\-.!|>]/g, "\\$&");
+  const formatItemTitle = (item) => {
+    if (isPostItem(item)) {
+      return item.title || "(untitled post)";
+    }
+    return `Comment by ${item.user?.displayName || item.user?.username || item.author || "unknown author"}`;
+  };
+  const formatItemUrl = (item) => {
+    if (item.pageUrl && typeof item.pageUrl === "string") return item.pageUrl;
+    if (isPostItem(item) && item.slug) return `/posts/${item._id}/${item.slug}`;
+    return "";
+  };
+  const formatExportMeta = (payload) => [
+    "# Power Reader Archive Export",
+    "",
+    `- Username: ${payload.username}`,
+    `- Exported At (UTC): ${payload.exportedAt}`,
+    `- Export Mode: ${payload.source.mode}`,
+    `- Scope: ${payload.source.scope}`,
+    `- Sort: ${payload.source.sort}`,
+    `- Query: ${payload.source.query || "(empty)"}`,
+    `- Items: ${payload.counts.items} (posts: ${payload.counts.posts}, comments: ${payload.counts.comments})`,
+    ""
+  ];
+  const createArchiveExportPayload = (username, items, source) => {
+    const { posts, comments } = countByType(items);
+    return {
+      schemaVersion: 1,
+      exportType: "power-reader-archive",
+      exportedAt: ( new Date()).toISOString(),
+      username,
+      source,
+      counts: {
+        items: items.length,
+        posts,
+        comments
+      },
+      items: [...items]
+    };
+  };
+  const buildArchiveMarkdown = (payload) => {
+    const lines = formatExportMeta(payload);
+    const exportItems = payload.source.mode === "current-view" ? [...payload.items] : sortChronologically(payload.items);
+    for (const item of exportItems) {
+      const type = getItemType(item);
+      const title = formatItemTitle(item);
+      const date = item.postedAt || "unknown";
+      const score = Number.isFinite(item.baseScore) ? item.baseScore : 0;
+      const url = formatItemUrl(item);
+      const author = item.user?.displayName || item.user?.username || item.author || "unknown";
+      const bodyText = getMarkdownOrFallbackText(item);
+      lines.push(`## [${type.toUpperCase()}] ${escapeMarkdownInline(title)}`);
+      lines.push("");
+      lines.push(`- ID: \`${item._id}\``);
+      lines.push(`- Posted At: ${date}`);
+      lines.push(`- Score: ${score}`);
+      lines.push(`- Author: ${escapeMarkdownInline(author)}`);
+      if (url) {
+        lines.push(`- URL: ${url}`);
+      }
+      lines.push("");
+      if (bodyText) {
+        lines.push(bodyText);
+        lines.push("");
+      }
+      lines.push("---");
+      lines.push("");
+    }
+    return lines.join("\n");
+  };
+  const buildArchiveJsExportSource = (payload) => {
+    const json = JSON.stringify(payload, null, 2);
+    return [
+      "/* Power Reader Archive Export */",
+      "(() => {",
+      `  const data = ${json};`,
+      '  const root = (typeof globalThis === "object" && globalThis) ? globalThis : (typeof window === "object" ? window : {});',
+      "  root.__PR_ARCHIVE_EXPORT__ = data;",
+      "})();",
+      ""
+    ].join("\n");
+  };
+  const escapeHtml = (value) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const escapeForInlineScript = (value) => value.replace(/<\/script/gi, "<\\/script");
+  const buildArchiveHtmlExport = (payload) => {
+    const jsExportSource = buildArchiveJsExportSource(payload);
+    const inlineDataScript = escapeForInlineScript(jsExportSource);
+    return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Power Reader Archive Export - ${escapeHtml(payload.username)}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1115;
+      --card: #171a21;
+      --text: #f5f7fb;
+      --muted: #9ea6b6;
+      --border: #2a3140;
+      --accent: #63a1ff;
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: color-mix(in oklab, var(--bg) 90%, black 10%);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 0;
+      margin-bottom: 12px;
+      backdrop-filter: blur(4px);
+    }
+    .toolbar-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: 1fr auto auto;
+      align-items: center;
+    }
+    .search {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--text);
+    }
+    .select {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--text);
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
+    .item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 10px;
+      background: var(--card);
+    }
+    .item h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+    .item-meta {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .item a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    .item a:hover {
+      text-decoration: underline;
+    }
+    details {
+      margin-top: 8px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #0b0d12;
+      color: var(--text);
+      overflow: auto;
+    }
+    .html-body {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #0b0d12;
+      overflow: auto;
+    }
+    @media (max-width: 760px) {
+      .toolbar-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="toolbar">
+      <div class="toolbar-grid">
+        <input id="search" class="search" type="text" placeholder="Filter by title/body/author">
+        <select id="type" class="select" aria-label="Type filter">
+          <option value="all">All</option>
+          <option value="post">Posts</option>
+          <option value="comment">Comments</option>
+        </select>
+        <select id="sort" class="select" aria-label="Sort">
+          <option value="date-desc">Date (Newest)</option>
+          <option value="date-asc">Date (Oldest)</option>
+          <option value="score-desc">Score (High-Low)</option>
+          <option value="score-asc">Score (Low-High)</option>
+        </select>
+      </div>
+    </div>
+    <h1>Power Reader Archive Export</h1>
+    <div id="meta" class="meta"></div>
+    <div id="results"></div>
+  </div>
+  <script>${inlineDataScript}<\/script>
+  <script>
+    (() => {
+      const payload = globalThis.__PR_ARCHIVE_EXPORT__;
+      if (!payload || !Array.isArray(payload.items)) {
+        document.getElementById('results').textContent = 'Invalid export payload.';
+        return;
+      }
+
+      const searchInput = document.getElementById('search');
+      const typeSelect = document.getElementById('type');
+      const sortSelect = document.getElementById('sort');
+      const metaEl = document.getElementById('meta');
+      const resultsEl = document.getElementById('results');
+
+      const formatDate = (value) => {
+        const date = new Date(value || '');
+        return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'unknown';
+      };
+
+      const isPost = (item) => Object.prototype.hasOwnProperty.call(item, 'title');
+      const getType = (item) => isPost(item) ? 'post' : 'comment';
+      const getAuthor = (item) => item?.user?.displayName || item?.user?.username || item?.author || 'unknown';
+      const getTextBody = (item) => {
+        const md = item?.contents?.markdown;
+        if (typeof md === 'string' && md.trim().length > 0) return md;
+        const html = typeof item?.htmlBody === 'string' ? item.htmlBody : '';
+        return html.replace(/<\\s*br\\s*\\/?>/gi, '\\n').replace(/<[^>]+>/g, ' ');
+      };
+      const sanitizeHtmlBody = (value) => {
+        if (typeof value !== 'string' || value.length === 0) return '';
+        const template = document.createElement('template');
+        template.innerHTML = value;
+        template.content.querySelectorAll('script, style, iframe, object, embed, meta[http-equiv], link').forEach((el) => el.remove());
+        template.content.querySelectorAll('*').forEach((el) => {
+          for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase();
+            const val = attr.value.trim().toLowerCase();
+            if (name.startsWith('on')) {
+              el.removeAttribute(attr.name);
+              continue;
+            }
+            if ((name === 'href' || name === 'src' || name === 'action' || name === 'xlink:href') && val.startsWith('javascript:')) {
+              el.removeAttribute(attr.name);
+            }
+          }
+        });
+        return template.innerHTML;
+      };
+      const escapeText = (value) => String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+      const escapeAttr = (value) => escapeText(value);
+      const sourceSort = typeof payload?.source?.sort === 'string' ? payload.source.sort : '';
+      if (sourceSort === 'date-asc') sortSelect.value = 'date-asc';
+      else if (sourceSort === 'score') sortSelect.value = 'score-desc';
+      else if (sourceSort === 'score-asc') sortSelect.value = 'score-asc';
+
+      const render = () => {
+        const query = (searchInput.value || '').trim().toLowerCase();
+        const type = typeSelect.value;
+        const sort = sortSelect.value;
+        const filtered = payload.items.filter((item) => {
+          if (type !== 'all' && getType(item) !== type) return false;
+          if (!query) return true;
+          const text = [
+            isPost(item) ? (item.title || '') : '',
+            getAuthor(item),
+            getTextBody(item)
+          ].join(' ').toLowerCase();
+          return text.includes(query);
+        });
+
+        filtered.sort((a, b) => {
+          const aTime = Date.parse(a.postedAt || '') || 0;
+          const bTime = Date.parse(b.postedAt || '') || 0;
+          const aScore = Number.isFinite(a.baseScore) ? a.baseScore : 0;
+          const bScore = Number.isFinite(b.baseScore) ? b.baseScore : 0;
+          switch (sort) {
+            case 'date-asc': return aTime - bTime;
+            case 'score-desc': return bScore - aScore;
+            case 'score-asc': return aScore - bScore;
+            case 'date-desc':
+            default: return bTime - aTime;
+          }
+        });
+
+        metaEl.textContent = [
+          'User: ' + payload.username,
+          'Exported: ' + payload.exportedAt,
+          'Mode: ' + payload.source.mode,
+          'Items: ' + filtered.length + ' / ' + payload.items.length
+        ].join(' | ');
+
+        resultsEl.innerHTML = filtered.map((item) => {
+          const typeLabel = getType(item).toUpperCase();
+          const title = isPost(item) ? (item.title || '(untitled post)') : ('Comment by ' + getAuthor(item));
+          const url = typeof item.pageUrl === 'string' ? item.pageUrl : '';
+          const markdown = (typeof item?.contents?.markdown === 'string' && item.contents.markdown.trim().length > 0)
+            ? item.contents.markdown
+            : '';
+          const htmlBody = sanitizeHtmlBody(item?.htmlBody);
+          const hasMarkdown = markdown.length > 0;
+          const hasHtml = htmlBody.length > 0;
+          return '<article class="item">'
+            + '<h3>[' + typeLabel + '] ' + escapeText(title) + '</h3>'
+            + '<div class="item-meta">ID: ' + item._id
+            + ' | Posted: ' + formatDate(item.postedAt)
+            + ' | Score: ' + (Number.isFinite(item.baseScore) ? item.baseScore : 0)
+            + ' | Author: ' + escapeText(getAuthor(item))
+            + (url ? ' | <a href="' + escapeAttr(url) + '" target="_blank" rel="noopener noreferrer">Open</a>' : '')
+            + '</div>'
+            + (hasMarkdown ? '<details open><summary>Markdown</summary><pre>' + escapeText(markdown) + '</pre></details>' : '')
+            + (hasHtml ? '<details><summary>HTML</summary><div class="html-body">' + htmlBody + '</div></details>' : '')
+            + '</article>';
+        }).join('');
+      };
+
+      searchInput.addEventListener('input', render);
+      typeSelect.addEventListener('change', render);
+      sortSelect.addEventListener('change', render);
+      render();
+    })();
+  <\/script>
+</body>
+</html>`;
   };
   const fetchUserId = async (username) => {
     try {
@@ -15394,7 +15784,7 @@ getPromptPrefix: getAIStudioPrefix,
       const headerHtml = renderPostHeader(placeholderPostForTopLevelComment(comment, state2), { state: state2 });
       const nestedCommentHtml2 = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
       return `
-      <div class="pr-archive-item pr-archive-top-level-comment">
+      <div class="pr-archive-item pr-archive-top-level-comment pr-item" data-id="${comment._id}">
         ${headerHtml}
         ${nestedCommentHtml2}
       </div>
@@ -15402,7 +15792,7 @@ getPromptPrefix: getAIStudioPrefix,
     }
     const parentComment = { ...parentCommentRaw, contextType: "stub" };
     const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state2)}</div>`;
-    return `<div class="pr-archive-item">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
+    return `<div class="pr-archive-item pr-item" data-id="${comment._id}">${renderComment(parentComment, state2, nestedCommentHtml)}</div>`;
   };
   const stripHtmlTags = (value) => value.replace(/<[^>]+>/g, "");
   const extractSnippet = (text, maxLen, snippetTerms, snippetPattern) => {
@@ -15443,7 +15833,7 @@ getPromptPrefix: getAIStudioPrefix,
     const snippetPattern = options.snippetPattern;
     const isPost2 = "title" in item;
     const linkpostUrl = isPost2 ? getRenderableLinkpostUrl(item.postCategory, item.linkUrl, item.pageUrl) : null;
-    const linkpostHtml = linkpostUrl ? ` <a class="pr-index-linkpost-url" href="${escapeHtml(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
+    const linkpostHtml = linkpostUrl ? ` <a class="pr-index-linkpost-url" href="${escapeHtml$1(linkpostUrl)}" target="_blank" rel="noopener noreferrer" title="Open original linkpost URL">[link]</a>` : "";
     let title;
     if (isPost2) {
       title = item.title;
@@ -15454,12 +15844,12 @@ getPromptPrefix: getAIStudioPrefix,
     const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName(item)}`;
     const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
     return `
-        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
+        <div class="pr-archive-index-item pr-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
             <div class="pr-index-score" style="color: ${item.baseScore > 0 ? "var(--pr-highlight)" : "inherit"}">
                 ${item.baseScore || 0}
             </div>
             <div class="pr-index-title">
-                ${escapeHtml(title)}${linkpostHtml}
+                ${escapeHtml$1(title)}${linkpostHtml}
             </div>
             <div class="pr-index-meta">
                 ${context} • ${date}
@@ -16593,6 +16983,34 @@ sortCanonicalItems() {
             align-items: center;
             flex-wrap: wrap;
         }
+        .pr-export-controls {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            margin-left: 4px;
+            padding-left: 8px;
+            border-left: 1px solid var(--pr-border-subtle, #ddd);
+        }
+        .pr-export-btn {
+            padding: 6px 9px;
+            font-size: 0.82em;
+            min-width: 46px;
+            justify-content: center;
+        }
+        .pr-export-btn[data-export-kind="html"] {
+            border-color: #b06a00;
+            color: #b06a00;
+            font-weight: 600;
+        }
+        .pr-export-note {
+            font-size: 0.75em;
+            color: var(--pr-text-tertiary, #999);
+            white-space: nowrap;
+        }
+        .pr-export-controls.is-busy .pr-export-btn {
+            opacity: 0.65;
+            pointer-events: none;
+        }
         .pr-archive-sort-select {
             margin: 0 8px;
         }
@@ -17060,7 +17478,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -17078,6 +17496,26 @@ sortCanonicalItems() {
                             aria-controls="archive-search-help-popover">?</button>
                     <button id="archive-resync" class="pr-button pr-icon-btn" type="button"
                             title="Force re-download all data" aria-label="Resync">🔄</button>
+                    <div id="archive-export-controls" class="pr-export-controls">
+                        <button id="archive-export-md" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="md"
+                                title="Export current results as Markdown (chronological)">
+                            MD
+                        </button>
+                        <button id="archive-export-js" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="js"
+                                title="Export current results as JavaScript data payload">
+                            JS
+                        </button>
+                        <button id="archive-export-html" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="html"
+                                title="Export full authored archive as HTML viewer (ignores current filters/scope)">
+                            HTML
+                        </button>
+                        <span class="pr-export-note" title="HTML export always includes full authored archive">
+                            HTML=All
+                        </span>
+                    </div>
                     <div id="archive-search-help-popover" class="pr-search-help-popover pr-help pr-is-hidden"
                          role="region" aria-label="Search syntax reference">
                         <div class="pr-help-content">
@@ -17191,6 +17629,10 @@ sortCanonicalItems() {
       const statusBadgeEl = document.getElementById("archive-status-badge");
       const resetBtn = document.getElementById("archive-reset-filters");
       const resyncBtn = document.getElementById("archive-resync");
+      const exportControlsEl = document.getElementById("archive-export-controls");
+      const exportMdBtn = document.getElementById("archive-export-md");
+      const exportJsBtn = document.getElementById("archive-export-js");
+      const exportHtmlBtn = document.getElementById("archive-export-html");
       const searchHelpBtn = document.getElementById("archive-search-help-btn");
       const searchHelpPopoverEl = document.getElementById("archive-search-help-popover");
       const errorContainer = document.getElementById("archive-error-container");
@@ -17287,6 +17729,95 @@ sortCanonicalItems() {
       };
       renderTopStatusLine();
       let activeItems = state2.items;
+      let lastResolvedScope = "authored";
+      let lastCanonicalQuery = searchInput.value;
+      let isExportInProgress = false;
+      const ILLEGAL_FILENAME_CHARS = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
+      const sanitizeFileSegment = (value) => {
+        const withNormalizedWhitespace = value.trim().replace(/\s+/g, "_");
+        let mapped = "";
+        for (const ch of withNormalizedWhitespace) {
+          const code = ch.charCodeAt(0);
+          mapped += code < 32 || ILLEGAL_FILENAME_CHARS.has(ch) ? "-" : ch;
+        }
+        return mapped.replace(/_+/g, "_").replace(/^-+|-+$/g, "").slice(0, 64) || "archive";
+      };
+      const createExportFilename = (suffix, extension) => {
+        const timestamp = ( new Date()).toISOString().replace(/[:.]/g, "-");
+        return `power-reader-archive-${sanitizeFileSegment(username)}-${suffix}-${timestamp}.${extension}`;
+      };
+      const triggerBlobDownload = (filename, mimeType, content) => {
+        const blob2 = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob2);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        link.rel = "noopener";
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      };
+      const setExportBusyState = (busy) => {
+        isExportInProgress = busy;
+        exportControlsEl?.classList.toggle("is-busy", busy);
+        if (exportMdBtn) exportMdBtn.disabled = busy;
+        if (exportJsBtn) exportJsBtn.disabled = busy;
+        if (exportHtmlBtn) exportHtmlBtn.disabled = busy;
+      };
+      const buildCurrentViewExportSource = () => ({
+        mode: "current-view",
+        scope: lastResolvedScope,
+        sort: state2.sortBy,
+        query: lastCanonicalQuery
+      });
+      const runArchiveExport = async (runner) => {
+        if (isExportInProgress) return;
+        setExportBusyState(true);
+        try {
+          await runner();
+        } catch (error) {
+          Logger.error("Archive export failed", error);
+          const message = error instanceof Error ? error.message : String(error);
+          alert(`Export failed: ${message}`);
+        } finally {
+          setExportBusyState(false);
+        }
+      };
+      const handleExportMarkdown = async () => {
+        const payload = createArchiveExportPayload(username, activeItems, buildCurrentViewExportSource());
+        const markdown = buildArchiveMarkdown(payload);
+        triggerBlobDownload(
+          createExportFilename("current-view", "md"),
+          "text/markdown;charset=utf-8",
+          markdown
+        );
+      };
+      const handleExportJs = async () => {
+        const payload = createArchiveExportPayload(username, activeItems, buildCurrentViewExportSource());
+        const jsSource = buildArchiveJsExportSource(payload);
+        triggerBlobDownload(
+          createExportFilename("current-view", "js"),
+          "text/javascript;charset=utf-8",
+          jsSource
+        );
+      };
+      const handleExportHtml = async () => {
+        const stored = await loadArchiveData(username);
+        const payload = createArchiveExportPayload(username, stored.items, {
+          mode: "full-archive",
+          scope: "authored",
+          sort: "date",
+          query: ""
+        });
+        const html = buildArchiveHtmlExport(payload);
+        triggerBlobDownload(
+          createExportFilename("full-archive", "html"),
+          "text/html;charset=utf-8",
+          html
+        );
+      };
       let workerClient;
       try {
         workerClient = createSearchWorkerClient();
@@ -17954,6 +18485,8 @@ sortCanonicalItems() {
           }
           activeItems = result.items;
           activeItemById = new Map(activeItems.map((item) => [item._id, item]));
+          lastResolvedScope = result.resolvedScope;
+          lastCanonicalQuery = result.canonicalQuery;
           activeDebugRelevanceSignalsById = debugExplain ? result.debugExplain?.relevanceSignalsById || {} : null;
           ensureSearchResultContextLoaded(activeItems);
           if (!useDedicatedScopeParam && result.resolvedScope !== "authored") {
@@ -18116,6 +18649,15 @@ sortCanonicalItems() {
         writeCurrentToolbarUrlState("");
         await refreshView();
         searchInput.focus();
+      });
+      exportMdBtn?.addEventListener("click", () => {
+        void runArchiveExport(handleExportMarkdown);
+      });
+      exportJsBtn?.addEventListener("click", () => {
+        void runArchiveExport(handleExportJs);
+      });
+      exportHtmlBtn?.addEventListener("click", () => {
+        void runArchiveExport(handleExportHtml);
       });
       let isSearchHelpPopoverOpen = false;
       const handleSearchHelpDocumentPointerDown = (event) => {
@@ -18446,7 +18988,7 @@ sortCanonicalItems() {
         errorContainer.innerHTML = `
         <div class="pr-archive-error">
           <div class="pr-archive-error-title">⚠️ Sync Failed</div>
-          <div class="pr-archive-error-message">${escapeHtml(errorMessage)}</div>
+          <div class="pr-archive-error-message">${escapeHtml$1(errorMessage)}</div>
           <div class="pr-archive-error-actions">
             <button id="archive-retry-once" class="pr-button">Retry Once</button>
             <button id="archive-retry-auto" class="pr-button" style="display: ${isAutoRetryEnabled ? "none" : "inline-block"}">Auto-Retry with Backoff</button>
@@ -19450,7 +19992,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.729"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

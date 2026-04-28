@@ -582,7 +582,7 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
     const headerHtml = renderPostHeader(placeholderPostForTopLevelComment(comment, state), { state });
     const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
     return `
-      <div class="pr-archive-item pr-archive-top-level-comment">
+      <div class="pr-archive-item pr-archive-top-level-comment pr-item" data-id="${comment._id}">
         ${headerHtml}
         ${nestedCommentHtml}
       </div>
@@ -593,7 +593,7 @@ export const renderCardItem = (item: Post | Comment, state: ReaderState): string
   // Contextual parents in card view are ALWAYS rendered as header-only stubs to keep the feed compact.
   const parentComment = { ...parentCommentRaw, contextType: 'stub' } as Comment;
   const nestedCommentHtml = `<div class="pr-replies">${renderComment(comment, state)}</div>`;
-  return `<div class="pr-archive-item">${renderComment(parentComment, state, nestedCommentHtml)}</div>`;
+  return `<div class="pr-archive-item pr-item" data-id="${comment._id}">${renderComment(parentComment, state, nestedCommentHtml)}</div>`;
 };
 
 /**
@@ -671,7 +671,7 @@ export const renderIndexItem = (
   const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : '';
 
   return `
-        <div class="pr-archive-index-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
+        <div class="pr-archive-index-item pr-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
             <div class="pr-index-score" style="color: ${item.baseScore > 0 ? 'var(--pr-highlight)' : 'inherit'}">
                 ${item.baseScore || 0}
             </div>

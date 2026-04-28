@@ -11,6 +11,13 @@ import {
   type ArchiveBaselineFacetSnapshot,
   type ArchiveFacetScope
 } from './storage';
+import {
+  buildArchiveHtmlExport,
+  buildArchiveJsExportSource,
+  buildArchiveMarkdown,
+  createArchiveExportPayload,
+  type ArchiveExportSource
+} from './export';
 import { fetchUserId, fetchUserPosts, fetchUserComments } from './loader';
 import { escapeHtml } from '../utils/rendering';
 import { renderArchiveFeed, updateRenderLimit, resetRenderLimit, renderCardItem, renderIndexItem } from './render';
@@ -221,6 +228,34 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
+        }
+        .pr-export-controls {
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            margin-left: 4px;
+            padding-left: 8px;
+            border-left: 1px solid var(--pr-border-subtle, #ddd);
+        }
+        .pr-export-btn {
+            padding: 6px 9px;
+            font-size: 0.82em;
+            min-width: 46px;
+            justify-content: center;
+        }
+        .pr-export-btn[data-export-kind="html"] {
+            border-color: #b06a00;
+            color: #b06a00;
+            font-weight: 600;
+        }
+        .pr-export-note {
+            font-size: 0.75em;
+            color: var(--pr-text-tertiary, #999);
+            white-space: nowrap;
+        }
+        .pr-export-controls.is-busy .pr-export-btn {
+            opacity: 0.65;
+            pointer-events: none;
         }
         .pr-archive-sort-select {
             margin: 0 8px;
@@ -708,6 +743,26 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
                             aria-controls="archive-search-help-popover">?</button>
                     <button id="archive-resync" class="pr-button pr-icon-btn" type="button"
                             title="Force re-download all data" aria-label="Resync">🔄</button>
+                    <div id="archive-export-controls" class="pr-export-controls">
+                        <button id="archive-export-md" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="md"
+                                title="Export current results as Markdown (chronological)">
+                            MD
+                        </button>
+                        <button id="archive-export-js" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="js"
+                                title="Export current results as JavaScript data payload">
+                            JS
+                        </button>
+                        <button id="archive-export-html" class="pr-button pr-export-btn" type="button"
+                                data-export-kind="html"
+                                title="Export full authored archive as HTML viewer (ignores current filters/scope)">
+                            HTML
+                        </button>
+                        <span class="pr-export-note" title="HTML export always includes full authored archive">
+                            HTML=All
+                        </span>
+                    </div>
                     <div id="archive-search-help-popover" class="pr-search-help-popover pr-help pr-is-hidden"
                          role="region" aria-label="Search syntax reference">
                         <div class="pr-help-content">
@@ -822,6 +877,10 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     const statusBadgeEl = document.getElementById('archive-status-badge');
     const resetBtn = document.getElementById('archive-reset-filters') as HTMLButtonElement;
     const resyncBtn = document.getElementById('archive-resync');
+    const exportControlsEl = document.getElementById('archive-export-controls') as HTMLDivElement | null;
+    const exportMdBtn = document.getElementById('archive-export-md') as HTMLButtonElement | null;
+    const exportJsBtn = document.getElementById('archive-export-js') as HTMLButtonElement | null;
+    const exportHtmlBtn = document.getElementById('archive-export-html') as HTMLButtonElement | null;
     const searchHelpBtn = document.getElementById('archive-search-help-btn') as HTMLButtonElement | null;
     const searchHelpPopoverEl = document.getElementById('archive-search-help-popover');
     const errorContainer = document.getElementById('archive-error-container');
@@ -943,6 +1002,107 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     renderTopStatusLine();
 
     let activeItems = state.items;
+    let lastResolvedScope: ArchiveSearchScope = 'authored';
+    let lastCanonicalQuery = searchInput.value;
+    let isExportInProgress = false;
+    const ILLEGAL_FILENAME_CHARS = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
+
+    const sanitizeFileSegment = (value: string): string => {
+      const withNormalizedWhitespace = value.trim().replace(/\s+/g, '_');
+      let mapped = '';
+      for (const ch of withNormalizedWhitespace) {
+        const code = ch.charCodeAt(0);
+        mapped += (code < 32 || ILLEGAL_FILENAME_CHARS.has(ch)) ? '-' : ch;
+      }
+      return mapped
+        .replace(/_+/g, '_')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 64) || 'archive';
+    };
+
+    const createExportFilename = (suffix: string, extension: string): string => {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      return `power-reader-archive-${sanitizeFileSegment(username)}-${suffix}-${timestamp}.${extension}`;
+    };
+
+    const triggerBlobDownload = (filename: string, mimeType: string, content: string): void => {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.rel = 'noopener';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    };
+
+    const setExportBusyState = (busy: boolean): void => {
+      isExportInProgress = busy;
+      exportControlsEl?.classList.toggle('is-busy', busy);
+      if (exportMdBtn) exportMdBtn.disabled = busy;
+      if (exportJsBtn) exportJsBtn.disabled = busy;
+      if (exportHtmlBtn) exportHtmlBtn.disabled = busy;
+    };
+
+    const buildCurrentViewExportSource = (): ArchiveExportSource => ({
+      mode: 'current-view',
+      scope: lastResolvedScope,
+      sort: state.sortBy,
+      query: lastCanonicalQuery
+    });
+
+    const runArchiveExport = async (runner: () => Promise<void>): Promise<void> => {
+      if (isExportInProgress) return;
+      setExportBusyState(true);
+      try {
+        await runner();
+      } catch (error) {
+        Logger.error('Archive export failed', error);
+        const message = error instanceof Error ? error.message : String(error);
+        alert(`Export failed: ${message}`);
+      } finally {
+        setExportBusyState(false);
+      }
+    };
+
+    const handleExportMarkdown = async (): Promise<void> => {
+      const payload = createArchiveExportPayload(username, activeItems, buildCurrentViewExportSource());
+      const markdown = buildArchiveMarkdown(payload);
+      triggerBlobDownload(
+        createExportFilename('current-view', 'md'),
+        'text/markdown;charset=utf-8',
+        markdown
+      );
+    };
+
+    const handleExportJs = async (): Promise<void> => {
+      const payload = createArchiveExportPayload(username, activeItems, buildCurrentViewExportSource());
+      const jsSource = buildArchiveJsExportSource(payload);
+      triggerBlobDownload(
+        createExportFilename('current-view', 'js'),
+        'text/javascript;charset=utf-8',
+        jsSource
+      );
+    };
+
+    const handleExportHtml = async (): Promise<void> => {
+      const stored = await loadArchiveData(username);
+      const payload = createArchiveExportPayload(username, stored.items, {
+        mode: 'full-archive',
+        scope: 'authored',
+        sort: 'date',
+        query: ''
+      });
+      const html = buildArchiveHtmlExport(payload);
+      triggerBlobDownload(
+        createExportFilename('full-archive', 'html'),
+        'text/html;charset=utf-8',
+        html
+      );
+    };
     let workerClient: SearchWorkerClient;
     try {
       workerClient = createSearchWorkerClient();
@@ -1810,6 +1970,8 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
         activeItems = result.items;
         activeItemById = new Map(activeItems.map(item => [item._id, item]));
+        lastResolvedScope = result.resolvedScope;
+        lastCanonicalQuery = result.canonicalQuery;
         activeDebugRelevanceSignalsById = debugExplain
           ? (result.debugExplain?.relevanceSignalsById || {})
           : null;
@@ -2013,6 +2175,18 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
       writeCurrentToolbarUrlState('');
       await refreshView();
       searchInput.focus();
+    });
+
+    exportMdBtn?.addEventListener('click', () => {
+      void runArchiveExport(handleExportMarkdown);
+    });
+
+    exportJsBtn?.addEventListener('click', () => {
+      void runArchiveExport(handleExportJs);
+    });
+
+    exportHtmlBtn?.addEventListener('click', () => {
+      void runArchiveExport(handleExportHtml);
     });
 
     let isSearchHelpPopoverOpen = false;

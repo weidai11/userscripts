@@ -5,6 +5,7 @@ export type ArchiveItem = Post | Comment;
 export type ArchiveItemType = 'post' | 'comment';
 export type ArchiveCorpusName = 'authored' | 'context';
 export type ArchiveSearchScope = 'authored' | 'all';
+export type ArchiveSearchSortMode = ArchiveSortBy;
 
 export type ArchiveSearchDoc = {
   id: string;

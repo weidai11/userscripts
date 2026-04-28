@@ -260,7 +260,7 @@ const executeAgainstCorpus = (
           }
         }
         if (matched) {
-          const matchedForSignals = candidateOrdinals && !matchedAlreadyConstrained
+          const matchedForSignals: Uint32Array = candidateOrdinals && !matchedAlreadyConstrained
             ? intersectSortedArrays(candidateOrdinals, matched)
             : matched;
           for (let i = 0; i < matchedForSignals.length; i++) {

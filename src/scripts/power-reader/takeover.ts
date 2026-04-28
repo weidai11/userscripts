@@ -41,16 +41,16 @@ export const executeTakeover = (): void => {
     return originalCreateElement(tagName, options);
   };
 
-  document.createElementNS = function (
+  document.createElementNS = ((
     namespaceURI: string | null,
     qualifiedName: string,
     options?: ElementCreationOptions
-  ): Element {
+  ) => {
     if (isScriptTag(qualifiedName)) {
       return createBlockedScriptPlaceholder(namespaceURI);
     }
     return originalCreateElementNS(namespaceURI, qualifiedName, options);
-  };
+  }) as Document['createElementNS'];
 
   const scriptObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
