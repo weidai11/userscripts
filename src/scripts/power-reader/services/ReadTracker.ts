@@ -39,6 +39,7 @@ export class ReadTracker {
     private recheckTimer: number | null = null;
     private countdownSeconds: number = 0;
     private hasAdvancedThisBatch: boolean = false;
+    private hasSeenScrollEvent: boolean = false;
     constructor(
         scrollMarkDelay: number,
         commentsDataGetter: () => { postedAt: string, _id: string }[],
@@ -95,6 +96,7 @@ export class ReadTracker {
     }
 
     private handleScroll() {
+        this.hasSeenScrollEvent = true;
         if (this.scrollTimeout) {
             return;
         }
@@ -208,10 +210,13 @@ export class ReadTracker {
             }
         }
 
-        // Auto-advance session if at bottom AND everything is read
+        // [PR-READ-03] Session advancement is keyed to reaching bottom-of-page,
+        // not to exhausting unread count. To avoid startup auto-advance for
+        // short-content views, require either a user scroll event or zero unread.
         const currentComments = this.commentsDataGetter();
-        if (isAtBottom && items.length === 0 && currentComments.length > 0) {
-            Logger.debug('processScroll: at bottom and all read, advancing');
+        const shouldAdvanceAtBottom = isAtBottom && currentComments.length > 0 && (this.hasSeenScrollEvent || items.length === 0);
+        if (shouldAdvanceAtBottom) {
+            Logger.debug(`processScroll: at bottom, advancing (unreadItems=${items.length}, hasSeenScrollEvent=${this.hasSeenScrollEvent})`);
             this.advanceAndCheck(currentComments);
         }
     }

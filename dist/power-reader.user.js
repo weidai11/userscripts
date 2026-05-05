@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.730
+// @version    1.2.731
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.730"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.731"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -6233,6 +6233,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     recheckTimer = null;
     countdownSeconds = 0;
     hasAdvancedThisBatch = false;
+    hasSeenScrollEvent = false;
     constructor(scrollMarkDelay, commentsDataGetter, postsDataGetter = () => [], initialBatchNewestDateGetter = () => null) {
       this.scrollMarkDelay = scrollMarkDelay;
       this.commentsDataGetter = commentsDataGetter;
@@ -6274,6 +6275,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       }
     }
     handleScroll() {
+      this.hasSeenScrollEvent = true;
       if (this.scrollTimeout) {
         return;
       }
@@ -6364,8 +6366,9 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         }
       }
       const currentComments = this.commentsDataGetter();
-      if (isAtBottom && items.length === 0 && currentComments.length > 0) {
-        Logger.debug("processScroll: at bottom and all read, advancing");
+      const shouldAdvanceAtBottom = isAtBottom && currentComments.length > 0 && (this.hasSeenScrollEvent || items.length === 0);
+      if (shouldAdvanceAtBottom) {
+        Logger.debug(`processScroll: at bottom, advancing (unreadItems=${items.length}, hasSeenScrollEvent=${this.hasSeenScrollEvent})`);
         this.advanceAndCheck(currentComments);
       }
     }
@@ -9244,7 +9247,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9424,7 +9427,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -17478,7 +17481,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19992,7 +19995,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.730"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

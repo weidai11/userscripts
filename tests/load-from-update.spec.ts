@@ -186,3 +186,58 @@ test('Read tracking resumes on focus and advances session when everything is alr
     const loadFrom = await page.evaluate(() => (window as any).__GM_CALLS?.['power-reader-read-from']);
     expect(loadFrom).toBe(expected);
 });
+
+test('[PR-READ-03] session advances at bottom even when unread items remain', async ({ page }) => {
+    const expected = '2026-02-03T12:00:00.001Z';
+    await initPowerReader(page, {
+        testMode: true,
+        storage: {
+            'power-reader-read-from': '2026-02-01T00:00:00.000Z',
+            'power-reader-read': '{}'
+        },
+        comments: [
+            {
+                _id: 'c1',
+                postId: 'p1',
+                pageUrl: 'https://www.lesswrong.com/posts/p1/post',
+                htmlBody: '<p>Older</p>',
+                postedAt: '2026-02-03T10:00:00.000Z',
+                baseScore: 5,
+                user: { _id: 'u1', username: 'User1' },
+                post: { _id: 'p1', title: 'Post' }
+            },
+            {
+                _id: 'c2',
+                postId: 'p1',
+                pageUrl: 'https://www.lesswrong.com/posts/p1/post',
+                htmlBody: '<p>Newest</p>',
+                postedAt: '2026-02-03T12:00:00.000Z',
+                baseScore: 10,
+                user: { _id: 'u2', username: 'User2' },
+                post: { _id: 'p1', title: 'Post' }
+            }
+        ],
+        onInit: `
+            // Keep unread items from being auto-marked; this test verifies
+            // bottom-of-page advancement without requiring unread exhaustion.
+            window.PR_TEST_SCROLL_DELAY = 60000;
+        `
+    });
+
+    await page.evaluate(() => {
+        const spacer = document.createElement('div');
+        spacer.style.height = '5000px';
+        document.body.appendChild(spacer);
+        window.scrollTo(0, document.body.scrollHeight);
+        window.dispatchEvent(new Event('scroll'));
+    });
+
+    await expect.poll(async () => {
+        const text = await page.locator('#pr-unread-count').textContent();
+        return Number.parseInt(text || '0', 10);
+    }).toBeGreaterThan(0);
+
+    await page.waitForFunction((val) => (window as any).__GM_CALLS?.['power-reader-read-from'] === val, expected, { timeout: 10000 });
+    const loadFrom = await page.evaluate(() => (window as any).__GM_CALLS?.['power-reader-read-from']);
+    expect(loadFrom).toBe(expected);
+});
