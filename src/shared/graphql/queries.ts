@@ -364,17 +364,16 @@ export const GET_THREAD_COMMENTS = /* GraphQL */ `
 `;
 
 export const GET_USER_POSTS = /* GraphQL */ `
-  query GetUserPosts($userId: String!, $limit: Int, $after: String) {
+  query GetUserPosts($userId: String!, $limit: Int, $offset: Int) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "oldest"
-          timeField: "modifiedAt"
-          after: $after
+          sortedBy: "new"
         }
       },
-      limit: $limit
+      limit: $limit,
+      offset: $offset
     ) {
       results {
         ...PostFieldsFull
@@ -384,17 +383,19 @@ export const GET_USER_POSTS = /* GraphQL */ `
   ${POST_FIELDS_FULL}
 `;
 
-export const GET_USER_POSTS_FALLBACK = /* GraphQL */ `
-  query GetUserPostsFallback($userId: String!, $limit: Int, $after: String) {
+export const GET_USER_POSTS_INCREMENTAL = /* GraphQL */ `
+  query GetUserPostsIncremental($userId: String!, $limit: Int, $offset: Int, $after: String) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "oldest"
+          timeField: "modifiedAt"
+          sortedBy: "new"
           after: $after
         }
       },
-      limit: $limit
+      limit: $limit,
+      offset: $offset
     ) {
       results {
         ...PostFieldsFull

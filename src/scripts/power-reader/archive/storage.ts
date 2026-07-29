@@ -210,11 +210,15 @@ export const saveArchiveData = async (
   const existingMetadataRequest = metadataStore.get(username);
   const existingMetadata = await requestToPromise(existingMetadataRequest) as ArchiveMetadataRecord | undefined;
 
+  // Explicit null clears a watermark; undefined preserves the stored value.
+  const pickWatermark = (next: string | null | undefined, stored: string | null | undefined): string | null =>
+    next === undefined ? stored ?? null : next;
+
   const updatedMetadata: ArchiveMetadataRecord = {
     username,
-    lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
-    lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
-    lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null,
+    lastSyncDate: pickWatermark(watermarks.lastSyncDate, existingMetadata?.lastSyncDate),
+    lastSyncDate_comments: pickWatermark(watermarks.lastSyncDate_comments, existingMetadata?.lastSyncDate_comments),
+    lastSyncDate_posts: pickWatermark(watermarks.lastSyncDate_posts, existingMetadata?.lastSyncDate_posts),
     baselineFacets: normalizeBaselineFacets(existingMetadata?.baselineFacets)
   };
 

@@ -110,9 +110,14 @@ test.describe('Power Reader Archive Sync', () => {
                     return { data: { comments: { results: [] } } };
                 }
                 if (query.includes('GetUserPosts')) {
-                    return new Promise((resolve) => {
-                        setTimeout(() => resolve({ data: { posts: { results: [${JSON.stringify(delayedPost)}] } } }), 6500);
-                    });
+                    // Return data only at offset 0 so the scan ends with an
+                    // empty batch (no artificial offset clamp).
+                    if ((variables.offset || 0) === 0) {
+                        return new Promise((resolve) => {
+                            setTimeout(() => resolve({ data: { posts: { results: [${JSON.stringify(delayedPost)}] } } }), 6500);
+                        });
+                    }
+                    return { data: { posts: { results: [] } } };
                 }
             `
         });
@@ -175,6 +180,9 @@ test.describe('Power Reader Archive Sync', () => {
                 if (query.includes('GetUserPosts')) {
                     // Advance fake clock after sync started, before saveArchiveData runs.
                     window.__FAKE_NOW__ = '${syncEnd}';
+                    if ((variables.offset || 0) !== 0) {
+                        return { data: { posts: { results: [] } } };
+                    }
                     return {
                         data: {
                             posts: {
@@ -217,6 +225,9 @@ test.describe('Power Reader Archive Sync', () => {
                     return { data: { user: { _id: '${userId}', username: '${username}', displayName: 'Watermark Test' } } };
                 }
                 if (query.includes('GetUserPosts')) {
+                    if ((variables.offset || 0) !== 0) {
+                        return { data: { posts: { results: [] } } };
+                    }
                     return {
                         data: {
                             posts: {
@@ -269,6 +280,274 @@ test.describe('Power Reader Archive Sync', () => {
             expect(titles).toContain('In-Flight Post');
             expect(new Set(titles).size).toBe(2);
         }).toPass({ timeout: 10000 });
+    });
+
+    test('failed mid-comments scan restores the pre-sync comments watermark [PR-UARCH-15]', async ({ page }) => {
+        const username = `CommentsRestore_${Date.now()}`;
+        const userId = 'u-comments-restore';
+        const userObj = { _id: userId, username, displayName: 'Comments Restore', slug: 'comments-restore', karma: 100 };
+        const preSync = '2024-01-01T00:00:00.000Z';
+        const cachedPost = {
+            _id: 'p-comments-restore',
+            title: 'Cached Post',
+            slug: 'cached-post',
+            pageUrl: 'https://lesswrong.com/posts/p-comments-restore/cached-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: preSync,
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Cached</p>',
+            contents: { markdown: 'Cached' },
+            user: userObj,
+            username
+        };
+
+        // 100 comments with distinct lastEditedAt so the scan advances to a
+        // second request (whose failure kills the sync) without boundary
+        // expansion or a same-timestamp tail.
+        const comments = [];
+        for (let i = 0; i < 100; i++) {
+            comments.push({
+                _id: 'c-restore-' + i,
+                postId: 'p-comments-restore',
+                postedAt: new Date(Date.UTC(2023, 0, 1, 0, 0, i)).toISOString(),
+                lastEditedAt: new Date(Date.UTC(2024, 5, 1, 0, 0, i)).toISOString(),
+                user: userObj
+            });
+        }
+
+        // Seed IndexedDB with watermarks and one cached item before the script runs.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onInit: `window.__COMMENT_REQS__ = 0;`,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserComments')) {
+  window.__COMMENT_REQS__++;
+  if (window.__COMMENT_REQS__ === 1) {
+    // First batch succeeds and advances the comments watermark via its
+    // per-batch save; the second request fails mid-scan.
+    return { data: { comments: { results: ${JSON.stringify(comments)} } } };
+  }
+  return { errors: [{ message: 'Server boom' }], data: {} };
+}
+if (query.includes('GetUserPosts')) {
+  return { data: { posts: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(async ({ username, cachedPost, preSync }) => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open('PowerReaderArchive', 2);
+                request.onupgradeneeded = (event) => {
+                    const database = (event.target as IDBOpenDBRequest).result;
+                    if (!database.objectStoreNames.contains('items')) {
+                        const itemStore = database.createObjectStore('items', { keyPath: '_id' });
+                        itemStore.createIndex('username', 'username', { unique: false });
+                        itemStore.createIndex('postedAt', 'postedAt', { unique: false });
+                        itemStore.createIndex('userId', 'userId', { unique: false });
+                    }
+                    if (!database.objectStoreNames.contains('metadata')) {
+                        database.createObjectStore('metadata', { keyPath: 'username' });
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            const tx = db.transaction(['items', 'metadata'], 'readwrite');
+            tx.objectStore('items').put(cachedPost);
+            tx.objectStore('metadata').put({
+                username,
+                lastSyncDate: preSync,
+                lastSyncDate_comments: preSync,
+                lastSyncDate_posts: preSync
+            });
+            await new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); });
+        }, { username, cachedPost, preSync });
+
+        const readMetadata = async () => page.evaluate(async ({ username }) => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open('PowerReaderArchive', 2);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            const tx = db.transaction('metadata', 'readonly');
+            const req = tx.objectStore('metadata').get(username);
+            return await new Promise<any>((resolve, reject) => {
+                req.onsuccess = () => resolve(req.result ?? null);
+                req.onerror = () => reject(req.error);
+            });
+        }, { username });
+
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // Cached post stays visible and the sync surfaces the failure.
+        await expect(page.locator('.pr-item h2')).toHaveText('Cached Post');
+        await expect(page.locator('#archive-status')).toHaveClass(/status-error/);
+
+        // The comments watermark must be restored to the pre-sync value so the
+        // next sync re-scans from it instead of skipping the un-fetched tail;
+        // the posts watermark must be untouched by an incremental failure.
+        await expect.poll(readMetadata).toEqual(
+            expect.objectContaining({
+                lastSyncDate: preSync,
+                lastSyncDate_comments: preSync,
+                lastSyncDate_posts: preSync
+            })
+        );
+    });
+
+    test('truncated posts scan preserves the posts watermark while advancing the comments watermark [PR-UARCH-15]', async ({ page }) => {
+        const username = `PostsTruncateWatermark_${Date.now()}`;
+        const userId = 'u-posts-truncate-watermark';
+        const userObj = { _id: userId, username, displayName: 'Posts Truncate Watermark', slug: 'posts-truncate-watermark', karma: 100 };
+        const preSync = '2024-01-01T00:00:00.000Z';
+        const cachedPost = {
+            _id: 'p-truncate-seed',
+            title: 'Seeded Post',
+            slug: 'seeded-post',
+            pageUrl: 'https://lesswrong.com/posts/p-truncate-seed/seeded-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: preSync,
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Seeded</p>',
+            contents: { markdown: 'Seeded' },
+            user: userObj,
+            username
+        };
+
+        // Two full 100-item pages of DISTINCT posts newer than the watermark,
+        // then the API skip-limit rejection: the scan must stop gracefully as
+        // truncated (200 posts merged, posts watermark preserved).
+        const makePosts = (offsetBase: number) => {
+            const posts = [];
+            for (let i = 0; i < 100; i++) {
+                const id = 'p-truncate-' + offsetBase + '-' + i;
+                posts.push({
+                    _id: id,
+                    title: 'Truncate Post ' + offsetBase + '-' + i,
+                    slug: 'truncate-post-' + offsetBase + '-' + i,
+                    pageUrl: `https://lesswrong.com/posts/${id}/truncate-post-${offsetBase}-${i}`,
+                    postedAt: new Date(Date.UTC(2024, 5, 1, 0, 0, i)).toISOString(),
+                    modifiedAt: new Date(Date.UTC(2024, 5, 1, 0, 0, i)).toISOString(),
+                    baseScore: 10,
+                    voteCount: 3,
+                    commentCount: 0,
+                    htmlBody: '<p>Truncate</p>',
+                    contents: { markdown: 'Truncate' },
+                    user: userObj
+                });
+            }
+            return posts;
+        };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  const start = variables.offset || 0;
+  if (start >= 200) {
+    return { errors: [{ message: 'Exceeded maximum value for skip' }], data: {} };
+  }
+  const page0 = ${JSON.stringify(makePosts(0))};
+  const page1 = ${JSON.stringify(makePosts(100))};
+  return { data: { posts: { results: start === 0 ? page0 : page1 } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`, { waitUntil: 'commit' });
+        await page.evaluate(async ({ username, cachedPost, preSync }) => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open('PowerReaderArchive', 2);
+                request.onupgradeneeded = (event) => {
+                    const database = (event.target as IDBOpenDBRequest).result;
+                    if (!database.objectStoreNames.contains('items')) {
+                        const itemStore = database.createObjectStore('items', { keyPath: '_id' });
+                        itemStore.createIndex('username', 'username', { unique: false });
+                        itemStore.createIndex('postedAt', 'postedAt', { unique: false });
+                        itemStore.createIndex('userId', 'userId', { unique: false });
+                    }
+                    if (!database.objectStoreNames.contains('metadata')) {
+                        database.createObjectStore('metadata', { keyPath: 'username' });
+                    }
+                };
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            const tx = db.transaction(['items', 'metadata'], 'readwrite');
+            tx.objectStore('items').put(cachedPost);
+            tx.objectStore('metadata').put({
+                username,
+                lastSyncDate: preSync,
+                lastSyncDate_comments: preSync,
+                lastSyncDate_posts: preSync
+            });
+            await new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); });
+        }, { username, cachedPost, preSync });
+
+        const readMetadata = async () => page.evaluate(async ({ username }) => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                const request = indexedDB.open('PowerReaderArchive', 2);
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+            const tx = db.transaction('metadata', 'readonly');
+            const req = tx.objectStore('metadata').get(username);
+            return await new Promise<any>((resolve, reject) => {
+                req.onsuccess = () => resolve(req.result ?? null);
+                req.onerror = () => reject(req.error);
+            });
+        }, { username });
+
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // The truncation is surfaced, not fatal, and the final save has run.
+        // Normally the terminal status is "Sync complete" with the note; if
+        // the sync ever outlasts the network-idle render window, the initial
+        // snapshot renders mid-sync and the terminal status becomes the
+        // refresh-required variant — both preserve the truncation note.
+        await expect(page.locator('#archive-status')).toContainText('truncated at API offset limit');
+        await expect(page.locator('#archive-status')).toContainText(/Sync complete|Please refresh page to view latest content/);
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+
+        // The posts watermark stays at the pre-sync value so the next sync
+        // retries the full scan; the completed comments scan and the combined
+        // watermark advance to the sync start time. Polled so a slow CI that
+        // outlasts the network-idle render window still waits for the final
+        // save instead of reading pre-save metadata. The posts check alone
+        // would be trivially true from the seed; requiring the comments
+        // watermark to have advanced proves the final save actually ran.
+        await expect.poll(async () => {
+            const meta = await readMetadata();
+            return Boolean(
+                meta
+                && meta.lastSyncDate_posts === preSync
+                && meta.lastSyncDate_comments !== preSync
+                && meta.lastSyncDate !== preSync
+            );
+        }).toBe(true);
     });
 
     test('[PR-UARCH-04][PR-UARCH-07][PR-UARCH-15] archive sync uses edit-time fields and upserts edited same-id items', async ({ page }) => {
@@ -354,7 +633,7 @@ if (query.includes('GetUserComments')) {
 }
 if (query.includes('GetUserPosts')) {
   window.__POST_BATCH_COUNT__ = (window.__POST_BATCH_COUNT__ || 0) + 1;
-  if (!variables.after) {
+  if ((variables.offset || 0) === 0) {
     return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
   }
   return { data: { posts: { results: [] } } };
@@ -388,10 +667,14 @@ if (query.includes('GetUserComments')) {
   return { data: { comments: { results: [] } } };
 }
 if (query.includes('GetUserPosts')) {
-  window.__SEEN_POST_TIMEFIELD__ = query.includes('timeField: "modifiedAt"');
-  window.__POST_AFTER_VALUES__ = window.__POST_AFTER_VALUES__ || [];
-  window.__POST_AFTER_VALUES__.push(variables.after ?? null);
+  window.__POST_OFFSET_VALUES__ = window.__POST_OFFSET_VALUES__ || [];
+  window.__POST_OFFSET_VALUES__.push(variables.offset ?? null);
   window.__POST_BATCH_COUNT__ = (window.__POST_BATCH_COUNT__ || 0) + 1;
+  if (query.includes('GetUserPostsIncremental')) {
+    window.__POST_INCREMENTAL_SEEN__ = true;
+    window.__POST_INCREMENTAL_AFTER__ = variables.after ?? null;
+    window.__POST_TIMEFIELD_SEEN__ = query.includes('timeField: "modifiedAt"');
+  }
   if (window.__POST_BATCH_COUNT__ === 1) {
     return { data: { posts: { results: [${JSON.stringify(editedPost)}] } } };
   }
@@ -411,16 +694,544 @@ return { data: {} };
 
         const selectorChecks = await page.evaluate(() => ({
             commentTimeField: (window as any).__SEEN_COMMENT_TIMEFIELD__ === true,
-            postTimeField: (window as any).__SEEN_POST_TIMEFIELD__ === true,
-            commentAfterValues: (window as any).__COMMENT_AFTER_VALUES__ || [],
-            postAfterValues: (window as any).__POST_AFTER_VALUES__ || []
+            postOffsets: (window as any).__POST_OFFSET_VALUES__ || [],
+            postIncrementalSeen: (window as any).__POST_INCREMENTAL_SEEN__ === true,
+            postIncrementalAfter: (window as any).__POST_INCREMENTAL_AFTER__ ?? null,
+            postTimeField: (window as any).__POST_TIMEFIELD_SEEN__ === true,
+            commentAfterValues: (window as any).__COMMENT_AFTER_VALUES__ || []
         }));
         expect(selectorChecks.commentTimeField).toBe(true);
+        expect(selectorChecks.postOffsets.length).toBeGreaterThanOrEqual(1);
+        expect(selectorChecks.postOffsets[0]).toBe(0);
+        expect(selectorChecks.postIncrementalSeen).toBe(true);
         expect(selectorChecks.postTimeField).toBe(true);
+        expect(typeof selectorChecks.postIncrementalAfter).toBe('string');
+        expect((selectorChecks.postIncrementalAfter as string).length).toBeGreaterThan(0);
         expect(selectorChecks.commentAfterValues.length).toBeGreaterThan(0);
-        expect(selectorChecks.postAfterValues.length).toBeGreaterThan(0);
         expect(selectorChecks.commentAfterValues.every((v: unknown) => typeof v === 'string' && v.length > 0)).toBe(true);
-        expect(selectorChecks.postAfterValues.every((v: unknown) => typeof v === 'string' && v.length > 0)).toBe(true);
+    });
+
+    test('posts sync falls back to full offset scan when server rejects timeField [PR-UARCH-15]', async ({ page }) => {
+        const username = `TimeFieldFallback_${Date.now()}`;
+        const userId = 'u-timefield-fallback';
+        const userObj = { _id: userId, username, displayName: 'TimeField Fallback', slug: 'timefield-fallback', karma: 100 };
+
+        const initialPost = {
+            _id: 'p-tf-fallback',
+            title: 'Original Fallback Post',
+            slug: 'original-fallback-post',
+            pageUrl: 'https://lesswrong.com/posts/p-tf-fallback/original-fallback-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: '2025-01-01T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Original body</p>',
+            contents: { markdown: 'Original body' },
+            user: userObj
+        };
+        const editedPost = {
+            ...initialPost,
+            title: 'Edited Fallback Post',
+            modifiedAt: '3000-01-01T00:00:00.000Z',
+            htmlBody: '<p>Edited body</p>',
+            contents: { markdown: 'Edited body' }
+        };
+        const stalePost = {
+            ...initialPost,
+            _id: 'p-tf-stale',
+            title: 'Stale Fallback Post',
+            postedAt: '2026-06-01T00:00:00.000Z',
+            modifiedAt: '2024-01-01T00:00:00.000Z',
+            htmlBody: '<p>Stale body</p>',
+            contents: { markdown: 'Stale body' }
+        };
+
+        // First visit: full sync (no watermark yet) seeds the cache.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  if ((variables.offset || 0) !== 0) {
+    return { data: { posts: { results: [] } } };
+  }
+  return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+        await expect(page.locator('#archive-feed')).toContainText('Original Fallback Post');
+
+        // Second visit: the incremental query (timeField filter) is rejected;
+        // the loader must fall back to the full offset scan with client-side
+        // cutoff. The full scan must run to exhaustion: page 0 is entirely
+        // below-watermark junk (zero new items must NOT stop the scan), the
+        // edited post sits on page 1, and the stale post (modifiedAt below the
+        // watermark) must be excluded by the client-side cutoff.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPostsIncremental')) {
+  window.__POST_TIMEFIELD_REJECTED__ = true;
+  return { errors: [{ message: 'Unknown argument "timeField" on type "PostsUserPostsInput"' }], data: {} };
+}
+if (query.includes('GetUserPosts')) {
+  window.__POST_FULL_SCAN__ = true;
+  window.__POST_FULL_SCAN_FETCHES__ = (window.__POST_FULL_SCAN_FETCHES__ || 0) + 1;
+  window.__POST_FULL_SCAN_AFTER__ = variables.after ?? null;
+  const start = variables.offset || 0;
+  if (start === 0) {
+    const junk = [];
+    for (let i = 0; i < 100; i++) {
+      junk.push({
+        _id: 'p-junk-' + i,
+        title: 'Junk Post ' + i,
+        postedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+        modifiedAt: '2024-01-01T00:00:00.000Z',
+        user: ${JSON.stringify(userObj)}
+      });
+    }
+    return { data: { posts: { results: junk } } };
+  }
+  if (start === 100) {
+    return { data: { posts: { results: [${JSON.stringify(editedPost)}, ${JSON.stringify(stalePost)}] } } };
+  }
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.reload();
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        await expect(page.locator('#archive-feed')).toContainText('Edited Fallback Post');
+        await expect(page.locator('#archive-feed')).not.toContainText('Stale Fallback Post');
+        await expect(page.locator('#archive-feed')).not.toContainText('Junk Post');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+
+        const flags = await page.evaluate(() => ({
+            rejected: (window as any).__POST_TIMEFIELD_REJECTED__ === true,
+            fullScan: (window as any).__POST_FULL_SCAN__ === true,
+            fullScanFetches: (window as any).__POST_FULL_SCAN_FETCHES__ || 0,
+            fullScanAfter: (window as any).__POST_FULL_SCAN_AFTER__ ?? null
+        }));
+        expect(flags.rejected).toBe(true);
+        expect(flags.fullScan).toBe(true);
+        expect(flags.fullScanFetches).toBe(3);
+        expect(flags.fullScanAfter).toBeNull();
+    });
+
+    test('posts sync falls back to full offset scan when the server rejects the incremental combo mid-scan [PR-UARCH-15]', async ({ page }) => {
+        const username = `ComboRejectMidScan_${Date.now()}`;
+        const userId = 'u-combo-reject';
+        const userObj = { _id: userId, username, displayName: 'Combo Reject', slug: 'combo-reject', karma: 100 };
+        const initialPost = {
+            _id: 'p-combo-seed',
+            title: 'Seeded Combo Post',
+            slug: 'seeded-combo-post',
+            pageUrl: 'https://lesswrong.com/posts/p-combo-seed/seeded-combo-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: '2024-01-01T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Seeded body</p>',
+            contents: { markdown: 'Seeded body' },
+            user: userObj
+        };
+        const editedPost = {
+            ...initialPost,
+            title: 'Edited Combo Post',
+            modifiedAt: '3000-01-01T00:00:00.000Z',
+            htmlBody: '<p>Edited body</p>',
+            contents: { markdown: 'Edited body' }
+        };
+
+        // First visit: full sync (no watermark) seeds the cache.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  if ((variables.offset || 0) !== 0) {
+    return { data: { posts: { results: [] } } };
+  }
+  return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+        await expect(page.locator('#archive-feed')).toContainText('Seeded Combo Post');
+
+        // Second visit: the incremental query works on page 0 (full batch of
+        // below-watermark junk, so the scan continues) but rejects the
+        // after+offset combination on page 1 with a validation-shaped error.
+        // The loader must fall back to the full offset scan with client-side
+        // cutoff and still surface the edited post from the fallback scan.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPostsIncremental')) {
+  if ((variables.offset || 0) !== 0) {
+    window.__POST_COMBO_REJECTED__ = (window.__POST_COMBO_REJECTED__ || 0) + 1;
+    return { errors: [{ message: 'Invalid combination: after and offset cannot be used together' }], data: {} };
+  }
+  const junk = [];
+  for (let i = 0; i < 100; i++) {
+    junk.push({
+      _id: 'p-junk-combo-' + i,
+      title: 'Junk Combo Post ' + i,
+      postedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+      modifiedAt: '2024-01-01T00:00:00.000Z',
+      user: ${JSON.stringify(userObj)}
+    });
+  }
+  return { data: { posts: { results: junk } } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__POST_COMBO_FULL_SCAN__ = true;
+  const start = variables.offset || 0;
+  if (start === 0) {
+    return { data: { posts: { results: [${JSON.stringify(editedPost)}] } } };
+  }
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.reload();
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        await expect(page.locator('#archive-feed')).toContainText('Edited Combo Post');
+        await expect(page.locator('#archive-feed')).not.toContainText('Junk Combo Post');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+
+        const flags = await page.evaluate(() => ({
+            comboRejectedFetches: (window as any).__POST_COMBO_REJECTED__ || 0,
+            fullScan: (window as any).__POST_COMBO_FULL_SCAN__ === true
+        }));
+        expect(flags.comboRejectedFetches).toBe(1);
+        expect(flags.fullScan).toBe(true);
+    });
+
+    test('posts sync probes an empty incremental first page and falls back to the full scan [PR-UARCH-15]', async ({ page }) => {
+        const username = `EmptyIncrementalProbe_${Date.now()}`;
+        const userId = 'u-empty-incremental-probe';
+        const userObj = { _id: userId, username, displayName: 'Empty Incremental Probe', slug: 'empty-incremental-probe', karma: 100 };
+        const initialPost = {
+            _id: 'p-probe-seed',
+            title: 'Seeded Probe Post',
+            slug: 'seeded-probe-post',
+            pageUrl: 'https://lesswrong.com/posts/p-probe-seed/seeded-probe-post',
+            postedAt: '2020-01-01T00:00:00.000Z',
+            modifiedAt: '2024-01-01T00:00:00.000Z',
+            baseScore: 10,
+            voteCount: 3,
+            commentCount: 0,
+            htmlBody: '<p>Seeded body</p>',
+            contents: { markdown: 'Seeded body' },
+            user: userObj
+        };
+        const editedPost = {
+            ...initialPost,
+            title: 'Probed Edit Post',
+            modifiedAt: '3000-01-01T00:00:00.000Z',
+            htmlBody: '<p>Edited body</p>',
+            contents: { markdown: 'Edited body' }
+        };
+
+        // First visit: full sync (no watermark) seeds the cache.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  if ((variables.offset || 0) !== 0) {
+    return { data: { posts: { results: [] } } };
+  }
+  return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+        await expect(page.locator('#archive-feed')).toContainText('Seeded Probe Post');
+
+        // Second visit: the incremental query wrongly returns an EMPTY first
+        // page (server misapplies the after filter) while the modifiedAt
+        // query without the filter still serves the edited post. The loader
+        // must probe once (incremental query without `after`) and fall back
+        // to the full offset scan so the edited post is not silently skipped
+        // and the posts watermark is not advanced past it.
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPostsIncremental')) {
+  if (variables.after) {
+    window.__PROBE_INCREMENTAL_SEEN__ = true;
+    return { data: { posts: { results: [] } } };
+  }
+  window.__PROBE_REQUEST_SEEN__ = true;
+  return { data: { posts: { results: [${JSON.stringify(editedPost)}] } } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__PROBE_FULL_REQUESTS__ = (window.__PROBE_FULL_REQUESTS__ || 0) + 1;
+  const start = variables.offset || 0;
+  if (start === 0) {
+    return { data: { posts: { results: [${JSON.stringify(editedPost)}] } } };
+  }
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.reload();
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // The edited post arrives via the full-scan fallback (one probe
+        // request + the two scan pages); without the probe the sync would
+        // conclude "up to date" and the post would never appear.
+        await expect(page.locator('#archive-feed')).toContainText('Probed Edit Post');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+
+        const flags = await page.evaluate(() => ({
+            incrementalSeen: (window as any).__PROBE_INCREMENTAL_SEEN__ === true,
+            probeSeen: (window as any).__PROBE_REQUEST_SEEN__ === true,
+            fullRequests: (window as any).__PROBE_FULL_REQUESTS__ || 0
+        }));
+        expect(flags.incrementalSeen).toBe(true);
+        expect(flags.probeSeen).toBe(true);
+        expect(flags.fullRequests).toBe(2);
+    });
+
+    test('posts pagination stops when the server repeats the same full page (offset clamp) [PR-UARCH-15]', async ({ page }) => {
+        const username = `OffsetClamp_${Date.now()}`;
+        const userId = 'u-offset-clamp';
+        const userObj = { _id: userId, username, displayName: 'Offset Clamp', slug: 'offset-clamp', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__POST_CLAMP_FETCHES__ = (window.__POST_CLAMP_FETCHES__ || 0) + 1;
+  const results = [];
+  for (let i = 0; i < 100; i++) {
+    results.push({
+      _id: 'p-clamp-' + i,
+      title: 'Clamp Post ' + i,
+      postedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+      modifiedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+      user: ${JSON.stringify(userObj)}
+    });
+  }
+  return { data: { posts: { results } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // The loader must stop after the third identical page instead of looping
+        // (one page to prime, two consecutive all-seen pages to detect the clamp).
+        await expect(page.locator('#archive-status')).toContainText('100 total items');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+        await expect(page.locator('.pr-item')).toHaveCount(100);
+        const fetchCount = await page.evaluate(() => (window as any).__POST_CLAMP_FETCHES__ || 0);
+        expect(fetchCount).toBe(3);
+    });
+
+    test('posts pagination stops gracefully when the API skip limit is reached [PR-UARCH-15]', async ({ page }) => {
+        const username = `OffsetCap_${Date.now()}`;
+        const userId = 'u-offset-cap';
+        const userObj = { _id: userId, username, displayName: 'Offset Cap', slug: 'offset-cap', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  window.__POST_CAP_BATCHES__ = (window.__POST_CAP_BATCHES__ || 0) + 1;
+  if ((variables.offset || 0) >= 100) {
+    return { errors: [{ message: 'Exceeded maximum value for skip' }], data: {} };
+  }
+  const results = [];
+  for (let i = 0; i < 100; i++) {
+    results.push({
+      _id: 'p-cap-' + i,
+      title: 'Cap Post ' + i,
+      postedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+      user: ${JSON.stringify(userObj)}
+    });
+  }
+  return { data: { posts: { results } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // The sync must keep the 100 items fetched before the cap, not fail,
+        // and surface the truncation in the status line.
+        await expect(page.locator('#archive-status')).toContainText('100 total items');
+        await expect(page.locator('#archive-status')).toContainText('truncated at API offset limit');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+        await expect(page.locator('.pr-item')).toHaveCount(100);
+        const batchCount = await page.evaluate(() => (window as any).__POST_CAP_BATCHES__ || 0);
+        expect(batchCount).toBe(2);
+    });
+
+    test('posts pagination continues past a partial batch with invalid rows [PR-UARCH-15]', async ({ page }) => {
+        const username = `PostsPartial_${Date.now()}`;
+        const userId = 'u-posts-partial';
+        const userObj = { _id: userId, username, displayName: 'Posts Partial', slug: 'posts-partial', karma: 100 };
+
+        await setupMockEnvironment(page, {
+            mockHtml: '<html><body><div id="app"></div></body></html>',
+            testMode: true,
+            onGraphQL: `
+if (query.includes('UserBySlug') || query.includes('user(input:')) {
+  return { data: { user: ${JSON.stringify(userObj)} } };
+}
+if (query.includes('GetUserPosts')) {
+  const start = variables.offset || 0;
+  if (start === 0) {
+    const results = [];
+    for (let i = 0; i < 100; i++) {
+      results.push({
+        _id: 'p-partial-' + i,
+        title: 'Partial Post ' + i,
+        postedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+        modifiedAt: new Date(Date.UTC(2020, 0, 1, 0, 0, i)).toISOString(),
+        user: ${JSON.stringify(userObj)}
+      });
+    }
+    // Poisoned row: dropped by the loader's filter, yielding a short (99-item) batch.
+    results[50] = null;
+    return {
+      data: { posts: { results } },
+      errors: [{ message: 'Unable to find document for post: ghost-row', path: ['posts', 'results', 50, 'pageUrl'] }]
+    };
+  }
+  if (start === 100) {
+    return {
+      data: {
+        posts: {
+          results: [{
+            _id: 'p-partial-tail',
+            title: 'Partial Tail Post',
+            postedAt: '2019-01-01T00:00:00.000Z',
+            modifiedAt: '2019-01-01T00:00:00.000Z',
+            user: ${JSON.stringify(userObj)}
+          }]
+        }
+      }
+    };
+  }
+  return { data: { posts: { results: [] } } };
+}
+if (query.includes('GetUserComments')) {
+  return { data: { comments: { results: [] } } };
+}
+return { data: {} };
+`
+        });
+
+        await page.goto(`https://www.lesswrong.com/archive?username=${username}`);
+        await page.evaluate(scriptContent);
+        await page.waitForSelector('#lw-power-reader-ready-signal', { state: 'attached' });
+        await waitForArchiveRenderComplete(page);
+
+        // The short (99-item) first batch must NOT stop pagination: the tail
+        // post from the second page must be present and all valid items must
+        // render (99 + 1 = 100).
+        await expect(page.locator('#archive-feed')).toContainText('Partial Tail Post');
+        await expect(page.locator('#archive-status')).toContainText('100 total items');
+        await expect(page.locator('#archive-status')).not.toHaveClass(/status-error/);
+        await expect(page.locator('.pr-item')).toHaveCount(100);
     });
 
     test('[PR-UARCH-15] cursor pagination does not jump to outlier max timestamp and skip middle history', async ({ page }) => {
@@ -710,6 +1521,9 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
                     return { data: { user: { _id: '${userId}', username: '${username}' } } };
                 }
                 if (query.includes('GetUserPosts')) {
+                    if ((variables.offset || 0) !== 0) {
+                        return { data: { posts: { results: [] } } };
+                    }
                     // Return only old post initially
                     return { data: { posts: { results: [${JSON.stringify(initialPost)}] } } };
                 }
@@ -751,7 +1565,10 @@ test('[PR-UARCH-03][PR-UARCH-04][PR-UARCH-07] incremental sync fetches new items
                     return { data: { user: { _id: '${userId}', username: '${username}' } } };
                 }
                 if (query.includes('GetUserPosts')) {
-                    // Return both posts (Oldest first for forward-sync)
+                    if ((variables.offset || 0) !== 0) {
+                        return { data: { posts: { results: [] } } };
+                    }
+                    // Return both posts on the first offset page.
                     return { data: { posts: { results: [${JSON.stringify(initialPost)}, ${JSON.stringify(newPost)}] } } };
                 }
                 if (query.includes('GetUserComments')) {

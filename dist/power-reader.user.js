@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.731
+// @version    1.2.733
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1896,7 +1896,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.731"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.733"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -1935,7 +1935,8 @@ reset: () => {
     GetCommentReplies: { type: "multi", collection: "comments", inputType: "MultiCommentInput", view: "commentReplies" },
     GetNewPostsLite: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "new" },
     GetNewPostsFull: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "new" },
-    GetUserPosts: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "userPosts", inlineTerms: { sortedBy: "oldest" } },
+    GetUserPosts: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "userPosts", inlineTerms: { sortedBy: "new" } },
+    GetUserPostsIncremental: { type: "multi", collection: "posts", inputType: "MultiPostInput", view: "userPosts", inlineTerms: { sortedBy: "new", timeField: "modifiedAt" } },
     GetTagPreviewBySlug: { type: "multi", collection: "tags", inputType: "MultiTagInput", view: "tagBySlug" },
     GetSubscriptions: { type: "multi", collection: "subscriptions", inputType: "MultiSubscriptionInput", view: "subscriptionState", inlineTerms: { collectionName: "Users" } },
     GetPost: { type: "single", collection: "post", inputType: "SinglePostInput", idVar: "id" },
@@ -2461,17 +2462,16 @@ reset: () => {
   );
   const GET_USER_POSTS = (
 `
-  query GetUserPosts($userId: String!, $limit: Int, $after: String) {
+  query GetUserPosts($userId: String!, $limit: Int, $offset: Int) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "oldest"
-          timeField: "modifiedAt"
-          after: $after
+          sortedBy: "new"
         }
       },
-      limit: $limit
+      limit: $limit,
+      offset: $offset
     ) {
       results {
         ...PostFieldsFull
@@ -2481,18 +2481,20 @@ reset: () => {
   ${POST_FIELDS_FULL}
 `
   );
-  const GET_USER_POSTS_FALLBACK = (
+  const GET_USER_POSTS_INCREMENTAL = (
 `
-  query GetUserPostsFallback($userId: String!, $limit: Int, $after: String) {
+  query GetUserPostsIncremental($userId: String!, $limit: Int, $offset: Int, $after: String) {
     posts(
       selector: {
         userPosts: {
           userId: $userId
-          sortedBy: "oldest"
+          timeField: "modifiedAt"
+          sortedBy: "new"
           after: $after
         }
       },
-      limit: $limit
+      limit: $limit,
+      offset: $offset
     ) {
       results {
         ...PostFieldsFull
@@ -9247,7 +9249,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.733"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9427,7 +9429,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.733"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -13782,11 +13784,12 @@ getPromptPrefix: getAIStudioPrefix,
     });
     const existingMetadataRequest = metadataStore.get(username);
     const existingMetadata = await requestToPromise(existingMetadataRequest);
+    const pickWatermark = (next, stored) => next === void 0 ? stored ?? null : next;
     const updatedMetadata = {
       username,
-      lastSyncDate: watermarks.lastSyncDate ?? existingMetadata?.lastSyncDate ?? null,
-      lastSyncDate_comments: watermarks.lastSyncDate_comments ?? existingMetadata?.lastSyncDate_comments ?? null,
-      lastSyncDate_posts: watermarks.lastSyncDate_posts ?? existingMetadata?.lastSyncDate_posts ?? null,
+      lastSyncDate: pickWatermark(watermarks.lastSyncDate, existingMetadata?.lastSyncDate),
+      lastSyncDate_comments: pickWatermark(watermarks.lastSyncDate_comments, existingMetadata?.lastSyncDate_comments),
+      lastSyncDate_posts: pickWatermark(watermarks.lastSyncDate_posts, existingMetadata?.lastSyncDate_posts),
       baselineFacets: normalizeBaselineFacets(existingMetadata?.baselineFacets)
     };
     metadataStore.put(updatedMetadata);
@@ -14420,6 +14423,7 @@ getPromptPrefix: getAIStudioPrefix,
 </body>
 </html>`;
   };
+  const MAX_API_SKIP = 2e3;
   const fetchUserId = async (username) => {
     try {
       const response = await queryGraphQL(GET_USER_BY_SLUG, { slug: username });
@@ -14481,6 +14485,20 @@ getPromptPrefix: getAIStudioPrefix,
     const message = error instanceof Error ? error.message : String(error ?? "");
     if (!/timefield/i.test(message)) return false;
     return /unknown argument|doesn['’]?t accept argument|cannot query field|not defined by type/i.test(message);
+  };
+  const isTransientErrorMessage = (message) => /(?:timed out|timeout|network|HTTP \d)/i.test(message);
+  const isOffsetCapError = (error) => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (isTransientErrorMessage(message)) return false;
+    if (/skip/i.test(message)) {
+      return /(?:limit|maximum|max|exceed(?:ed|ing|s)?|too (?:large|big)|out of range|reach(?:ed)?)/i.test(message);
+    }
+    return /offset/i.test(message) && /\d{3,}/.test(message) && /(?:limit|maximum|max|exceed(?:ed|ing|s)?|too (?:large|big)|out of range|reach(?:ed)?|past)/i.test(message);
+  };
+  const isValidationShapeError = (error) => {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (isTransientErrorMessage(message)) return false;
+    return /(?:timefield|after|offset|skip)/i.test(message) && /(?:unknown argument|doesn['’]?t accept|cannot query field|not defined by type|invalid|cannot (?:be )?(?:used|combine)|not (?:allowed|supported)|combination)/i.test(message);
   };
   const compareTimestamps = (a, b) => {
     const aMs = parseTimestampMs(a);
@@ -14587,7 +14605,7 @@ getPromptPrefix: getAIStudioPrefix,
       contextType: "fetched"
     };
   };
-  async function fetchCollectionAdaptively(userId, query, key, cursorField, onProgress, afterDate, onBatch, archiveUsername, timeFieldFallback) {
+  async function fetchCollectionAdaptively(userId, query, cursorField, onProgress, afterDate, onBatch, archiveUsername, timeFieldFallback) {
     const allItems = [];
     const itemIndexById2 = new Map();
     let hasMore = true;
@@ -14603,15 +14621,15 @@ getPromptPrefix: getAIStudioPrefix,
       const startTime = Date.now();
       batchNumber++;
       try {
-        Logger.debug(`[Archive ${key}] Fetching batch: limit=${currentLimit}, after=${afterCursor}, cursorField=${activeCursorField}`);
+        Logger.debug(`[Archive comments] Fetching batch: limit=${currentLimit}, after=${afterCursor}, cursorField=${activeCursorField}`);
         const requestBatch = async (limit) => {
-          const operationName = key === "posts" ? fallbackActivated ? "GetUserPostsFallback" : "GetUserPosts" : fallbackActivated ? "GetUserCommentsFallback" : "GetUserComments";
+          const operationName = fallbackActivated ? "GetUserCommentsFallback" : "GetUserComments";
           const response = await queryGraphQL(activeQuery, {
             userId,
             limit,
             after: afterCursor
           }, { ...ARCHIVE_PARTIAL_QUERY_OPTIONS, operationName });
-          return response[key]?.results || [];
+          return response.comments?.results || [];
         };
         let fetchLimitUsed = currentLimit;
         let rawResults;
@@ -14624,7 +14642,7 @@ getPromptPrefix: getAIStudioPrefix,
             activeCursorField = timeFieldFallback.cursorField;
             afterCursor = null;
             Logger.warn(
-              `Archive ${key}: server rejected timeField; retrying with fallback query/cursor (${activeCursorField}).`
+              `Archive comments: server rejected timeField; retrying with fallback query/cursor (${activeCursorField}).`
             );
             rawResults = await requestBatch(fetchLimitUsed);
           } else {
@@ -14643,7 +14661,7 @@ getPromptPrefix: getAIStudioPrefix,
           if (boundaryCount <= 1) break;
           if (fetchLimitUsed >= MAX_PAGE_SIZE) {
             Logger.warn(
-              `Archive ${key}: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical ${activeCursorField} values.`
+              `Archive comments: unresolved timestamp boundary (${boundaryCount} rows at ${boundaryTimestamp}) at max limit ${MAX_PAGE_SIZE}; pagination may still miss rows with identical ${activeCursorField} values.`
             );
             break;
           }
@@ -14652,37 +14670,35 @@ getPromptPrefix: getAIStudioPrefix,
             Math.max(fetchLimitUsed + boundaryCount, Math.round(fetchLimitUsed * 1.5))
           );
           Logger.debug(
-            `Archive ${key}: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce ${activeCursorField} boundary truncation risk.`
+            `Archive comments: expanding batch limit ${fetchLimitUsed} -> ${expandedLimit} to reduce ${activeCursorField} boundary truncation risk.`
           );
           fetchLimitUsed = expandedLimit;
           rawResults = await requestBatch(fetchLimitUsed);
         }
         const results = rawResults.map((item) => normalizeArchiveItem(item, activeCursorField)).filter((item) => item !== null);
         const duration = Date.now() - startTime;
-        Logger.debug(`[Archive ${key}] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
+        Logger.debug(`[Archive comments] Received ${rawResults.length} items (${results.length} valid) in ${duration}ms`);
         if (results.length !== rawResults.length) {
-          Logger.warn(`Archive ${key}: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
+          Logger.warn(`Archive comments: dropped ${rawResults.length - results.length} invalid items from partial GraphQL response.`);
         }
         if (rawResults.length === 0) {
-          Logger.debug(`[Archive ${key}] End of collection reached (empty batch).`);
+          Logger.debug(`[Archive comments] End of collection reached (empty batch).`);
           hasMore = false;
           break;
         }
         if (onBatch && results.length > 0) {
-          if (key === "comments") {
-            const extractedParentsById = new Map();
-            for (const item of results) {
-              const parent = extractImmediateParentWithBody(item);
-              if (parent) extractedParentsById.set(parent._id, parent);
-            }
-            const extractedParents = Array.from(extractedParentsById.values());
-            if (extractedParents.length > 0) {
-              try {
-                const cacheOwner = archiveUsername || userId;
-                await saveContextualItems(cacheOwner, extractedParents, extractPostsFromComments(extractedParents));
-              } catch (e) {
-                Logger.warn("Failed to persist extracted immediate parent comments.", e);
-              }
+          const extractedParentsById = new Map();
+          for (const item of results) {
+            const parent = extractImmediateParentWithBody(item);
+            if (parent) extractedParentsById.set(parent._id, parent);
+          }
+          const extractedParents = Array.from(extractedParentsById.values());
+          if (extractedParents.length > 0) {
+            try {
+              const cacheOwner = archiveUsername || userId;
+              await saveContextualItems(cacheOwner, extractedParents, extractPostsFromComments(extractedParents));
+            } catch (e) {
+              Logger.warn("Failed to persist extracted immediate parent comments.", e);
             }
           }
           await onBatch(results);
@@ -14693,7 +14709,7 @@ getPromptPrefix: getAIStudioPrefix,
         const prevLimit = fetchLimitUsed;
         currentLimit = Math.min(Math.max(nextLimit, MIN_PAGE_SIZE), MAX_PAGE_SIZE);
         if (currentLimit !== prevLimit) {
-          Logger.debug(`Adaptive batching: ${key} batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
+          Logger.debug(`Adaptive batching: comments batch took ${duration}ms. Adjusting limit ${prevLimit} -> ${currentLimit}`);
         }
         for (const item of results) {
           const existingIndex = itemIndexById2.get(item._id);
@@ -14720,7 +14736,7 @@ getPromptPrefix: getAIStudioPrefix,
           const nextCursorLatest = cursorBounds.latest;
           if (nextCursorLatest && nextCursorTail && nextCursorLatest !== nextCursorTail) {
             Logger.debug(
-              `Archive ${key}: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); preferring boundary-safe cursor.`
+              `Archive comments: cursor candidates differ (tail=${nextCursorTail}, latest=${nextCursorLatest}); preferring boundary-safe cursor.`
             );
           }
           let nextCursor = null;
@@ -14729,7 +14745,7 @@ getPromptPrefix: getAIStudioPrefix,
           } else if (nextCursorEarliest) {
             nextCursor = nextCursorEarliest;
             Logger.warn(
-              `Archive ${key}: tail cursor did not advance (tail=${nextCursorTail}, after=${afterCursor}); using earliest advancing cursor (${nextCursorEarliest}).`
+              `Archive comments: tail cursor did not advance (tail=${nextCursorTail}, after=${afterCursor}); using earliest advancing cursor (${nextCursorEarliest}).`
             );
           }
           if (!nextCursor) {
@@ -14743,7 +14759,7 @@ getPromptPrefix: getAIStudioPrefix,
                 Math.max(currentLimit, Math.round(fetchLimitUsed * 1.5))
               );
               Logger.warn(
-                `Archive ${key}: non-advancing cursor detected (attempt ${nonAdvancingCursorRetries}/2); retrying same cursor with limit ${retriedLimit}.`
+                `Archive comments: non-advancing cursor detected (attempt ${nonAdvancingCursorRetries}/2); retrying same cursor with limit ${retriedLimit}.`
               );
               currentLimit = retriedLimit;
               previousBatchTail = {
@@ -14754,8 +14770,7 @@ getPromptPrefix: getAIStudioPrefix,
             }
             const stopReason = "cursor_not_advancing";
             const hint = !nextCursorTail ? tailDidNotAdvance ? "tail_unchanged_after_retry" : batchSummary.missingTimestampCount === rawResults.length ? `all_raw_items_missing_${activeCursorField}` : `tail_item_missing_or_invalid_${activeCursorField}` : batchSummary.uniqueTimestampCount <= 1 ? "batch_collapsed_to_single_timestamp" : "server_returned_non_advancing_page";
-            Logger.warn(`Archive ${key}: pagination guard stop (${stopReason}); stopping pagination.`, {
-              key,
+            Logger.warn(`Archive comments: pagination guard stop (${stopReason}); stopping pagination.`, {
               cursorField: activeCursorField,
               batchNumber,
               hint,
@@ -14799,30 +14814,193 @@ getPromptPrefix: getAIStudioPrefix,
           };
         }
       } catch (e) {
-        Logger.error(`Error fetching ${key} with cursor ${afterCursor}:`, e);
+        Logger.error(`Error fetching comments with cursor ${afterCursor}:`, e);
         throw e;
       }
     }
     return allItems;
   }
-  const fetchUserPosts = (userId, onProgress, afterDate, onBatch) => {
-    return fetchCollectionAdaptively(
-      userId,
-      GET_USER_POSTS,
-      "posts",
-      "modifiedAt",
-      onProgress,
-      afterDate,
-      onBatch,
-      void 0,
-      { query: GET_USER_POSTS_FALLBACK, cursorField: "postedAt" }
-    );
+  const sanitizeRawPosts = (results) => {
+    const raw = [];
+    for (const item of results) {
+      const candidate = item;
+      if (!candidate || typeof candidate._id !== "string" || candidate._id.length === 0) continue;
+      const postedAt = typeof candidate.postedAt === "string" ? candidate.postedAt : null;
+      const modifiedAt = typeof candidate.modifiedAt === "string" ? candidate.modifiedAt : null;
+      const postedAtValid = postedAt !== null && !isNaN(Date.parse(postedAt));
+      const date = postedAtValid ? postedAt : modifiedAt;
+      if (!date || isNaN(Date.parse(date))) continue;
+      if (!postedAtValid) {
+        raw.push({ ...candidate, postedAt: date });
+      } else {
+        raw.push(candidate);
+      }
+    }
+    return raw;
+  };
+  const applyClientCutoff = (raw, afterDate) => {
+    if (!afterDate) return raw;
+    const cutoffMs = afterDate.getTime();
+    return raw.filter((item) => {
+      const modifiedMs = typeof item.modifiedAt === "string" ? Date.parse(item.modifiedAt) : NaN;
+      const postedMs = typeof item.postedAt === "string" ? Date.parse(item.postedAt) : NaN;
+      const dateMs = Number.isFinite(modifiedMs) ? modifiedMs : postedMs;
+      return Number.isFinite(dateMs) && dateMs > cutoffMs;
+    });
+  };
+  const fetchUserPosts = async (userId, onProgress, afterDate, onBatch, abortSignal) => {
+    const BATCH_SIZE = 100;
+    let totalRequests = 0;
+    let persistenceFailed = false;
+    const runFetch = async (query, serverFilter) => {
+      const allPosts = [];
+      const idIndexByPost = new Map();
+      const pageSeenIds = new Set();
+      let truncated = false;
+      let truncationReason;
+      let allSeenStreak = 0;
+      let ghostPageStreak = 0;
+      let lastRawLength = 0;
+      let rawFetchedTotal = 0;
+      let emptyFirstPage = false;
+      let offset = 0;
+      const variables = { userId, limit: BATCH_SIZE, offset };
+      if (afterDate && serverFilter) {
+        variables.after = afterDate.toISOString();
+      }
+      while (true) {
+        totalRequests++;
+        if (abortSignal?.aborted) {
+          throw new Error("Sync aborted");
+        }
+        if (offset > MAX_API_SKIP) {
+          if (lastRawLength >= BATCH_SIZE) {
+            truncated = true;
+            truncationReason = "offset-limit";
+            Logger.warn(
+              `[Archive posts] offset=${offset}: API offset limit (${MAX_API_SKIP}) reached; stopping with ${allPosts.length} posts fetched so far.`
+            );
+          } else {
+            Logger.debug(`[Archive posts] offset=${offset}: reached API offset limit after a short batch; scan complete.`);
+          }
+          break;
+        }
+        let response;
+        try {
+          response = await queryGraphQL(
+            query,
+            variables,
+            ARCHIVE_PARTIAL_QUERY_OPTIONS
+          );
+        } catch (error) {
+          if (offset > 0 && isOffsetCapError(error) && (!isValidationShapeError(error) || !serverFilter)) {
+            if (lastRawLength >= BATCH_SIZE) {
+              truncated = true;
+              truncationReason = "offset-limit";
+              Logger.warn(
+                `[Archive posts] offset=${offset}: API offset limit reached; stopping with ${allPosts.length} posts fetched so far.`
+              );
+            } else {
+              Logger.debug(`[Archive posts] offset=${offset}: API rejected the offset after a short batch; scan complete.`);
+            }
+            break;
+          }
+          throw error;
+        }
+        const results = response.posts?.results || [];
+        if (results.length === 0) {
+          emptyFirstPage = offset === 0;
+          break;
+        }
+        const raw = sanitizeRawPosts(results);
+        if (raw.length > 0 && raw.every((item) => pageSeenIds.has(item._id))) {
+          allSeenStreak++;
+          ghostPageStreak = 0;
+          if (allSeenStreak >= 2) {
+            if (results.length >= BATCH_SIZE) {
+              truncated = true;
+              truncationReason = "clamp";
+              Logger.warn(`[Archive posts] offset=${offset}: server repeated full pages; stopping pagination.`);
+            } else {
+              Logger.debug(`[Archive posts] offset=${offset}: server repeated the final short page; scan complete.`);
+            }
+            break;
+          }
+        } else if (raw.length === 0) {
+          ghostPageStreak++;
+          allSeenStreak = 0;
+          if (ghostPageStreak >= 2) {
+            truncated = true;
+            truncationReason = "clamp";
+            Logger.warn(`[Archive posts] offset=${offset}: server served two consecutive pages of invalid rows; stopping pagination.`);
+            break;
+          }
+        } else {
+          allSeenStreak = 0;
+          ghostPageStreak = 0;
+        }
+        for (const item of raw) {
+          pageSeenIds.add(item._id);
+        }
+        const batch = applyClientCutoff(raw, afterDate);
+        let newCount = 0;
+        for (const item of batch) {
+          const existingIndex = idIndexByPost.get(item._id);
+          if (existingIndex === void 0) {
+            idIndexByPost.set(item._id, allPosts.length);
+            allPosts.push(item);
+            newCount++;
+          } else {
+            allPosts[existingIndex] = item;
+          }
+        }
+        Logger.debug(`[Archive posts] offset=${offset}: ${raw.length} fetched (${batch.length} after filter), ${newCount} new (total: ${allPosts.length})`);
+        rawFetchedTotal += raw.length;
+        onProgress?.(serverFilter ? allPosts.length : rawFetchedTotal);
+        if (onBatch && batch.length > 0) {
+          try {
+            await onBatch(batch);
+          } catch (error) {
+            persistenceFailed = true;
+            throw error;
+          }
+        }
+        lastRawLength = results.length;
+        offset += BATCH_SIZE;
+        variables.offset = offset;
+      }
+      return { posts: allPosts, truncated, truncationReason, emptyFirstPage };
+    };
+    try {
+      const incrementalResult = await runFetch(afterDate ? GET_USER_POSTS_INCREMENTAL : GET_USER_POSTS, Boolean(afterDate));
+      if (afterDate && incrementalResult.emptyFirstPage) {
+        if (abortSignal?.aborted) {
+          throw new Error("Sync aborted");
+        }
+        const probeResponse = await queryGraphQL(
+          GET_USER_POSTS_INCREMENTAL,
+          { userId, limit: BATCH_SIZE, offset: 0 },
+          ARCHIVE_PARTIAL_QUERY_OPTIONS
+        );
+        const probeHasNewerItems = applyClientCutoff(sanitizeRawPosts(probeResponse.posts?.results || []), afterDate).length > 0;
+        if (probeHasNewerItems) {
+          Logger.warn("Archive posts: incremental query returned an empty first page but newer items exist; retrying with the full offset scan and client-side cutoff.");
+          return await runFetch(GET_USER_POSTS, false);
+        }
+      }
+      return incrementalResult;
+    } catch (error) {
+      if (!afterDate || abortSignal?.aborted || persistenceFailed || isOffsetCapError(error) && !isValidationShapeError(error) || !isValidationShapeError(error) && totalRequests > 1) {
+        throw error;
+      }
+      Logger.warn("Archive posts: incremental query failed; retrying with full offset scan and client-side cutoff.", error);
+      return await runFetch(GET_USER_POSTS, false);
+    }
   };
   const fetchUserComments = (userId, onProgress, afterDate, onBatch, archiveUsername) => {
     return fetchCollectionAdaptively(
       userId,
       GET_USER_COMMENTS,
-      "comments",
       "lastEditedAt",
       onProgress,
       afterDate,
@@ -17481,7 +17659,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.733"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -19045,6 +19223,7 @@ sortCanonicalItems() {
       let startedWithEmptyCache = false;
       let syncCompleted = false;
       let shouldShowRefreshRequiredStatus = false;
+      let pendingSyncTruncationNote = null;
       let resolveInitialRender = null;
       const initialRenderPromise = new Promise((resolve) => {
         resolveInitialRender = resolve;
@@ -19056,7 +19235,7 @@ sortCanonicalItems() {
       }, { once: true });
       const maybeSetRefreshRequiredStatus = () => {
         if (!hasInitialRender || !syncCompleted || !shouldShowRefreshRequiredStatus) return;
-        setStatusBaseMessage("Fetch complete. Please refresh page to view latest content.", false, false);
+        setStatusBaseMessage(`Fetch complete. Please refresh page to view latest content.${pendingSyncTruncationNote ?? ""}`, false, false);
       };
       const renderInitialSnapshot = () => {
         if (!isCurrentRun() || hasInitialRender) return;
@@ -19111,6 +19290,13 @@ sortCanonicalItems() {
           syncErrorState.isRetrying = true;
           syncErrorState.retryCount = attemptNumber;
           syncErrorState.abortController = new AbortController();
+          let watermarks = {
+            lastSyncDate: null,
+            lastSyncDate_comments: null,
+            lastSyncDate_posts: null
+          };
+          let watermarksLoaded = false;
+          const syncPhase = { commentsDone: false };
           try {
             const [currentCached, cachedContext2] = await Promise.all([
               loadArchiveData(username),
@@ -19132,26 +19318,33 @@ sortCanonicalItems() {
             } else {
               setStatus(`No local data. Fetching full history for ${username}`, false, true);
             }
-            const watermarks = {
+            const netStart = performance.now();
+            const initialCount = state2.items.length;
+            watermarks = {
               lastSyncDate: forceFull ? null : currentCached.lastSyncDate,
               lastSyncDate_comments: forceFull ? null : currentCached.lastSyncDate_comments,
               lastSyncDate_posts: forceFull ? null : currentCached.lastSyncDate_posts
             };
-            const netStart = performance.now();
-            const initialCount = state2.items.length;
+            watermarksLoaded = true;
+            let syncTruncated = false;
+            let syncTruncationReason = null;
             const syncAbortController = new AbortController();
             const abortSyncAttempt = () => syncAbortController.abort();
             syncErrorState.abortController.signal.addEventListener("abort", abortSyncAttempt);
             runAbortController.signal.addEventListener("abort", abortSyncAttempt);
             try {
-              await syncArchive(
+              const syncResult = await syncArchive(
                 username,
                 state2,
                 watermarks,
                 (msg) => setStatus(msg, false, true),
                 syncAbortController.signal,
-                markCanonicalItemsMutated
+                markCanonicalItemsMutated,
+                syncPhase
               );
+              if (!isCurrentRun()) return;
+              syncTruncated = syncResult.truncated;
+              syncTruncationReason = syncResult.truncationReason ?? null;
             } finally {
               syncErrorState.abortController.signal.removeEventListener("abort", abortSyncAttempt);
               runAbortController.signal.removeEventListener("abort", abortSyncAttempt);
@@ -19163,13 +19356,29 @@ sortCanonicalItems() {
             syncErrorState.isRetrying = false;
             syncErrorState.retryCount = 0;
             if (errorContainer) errorContainer.style.display = "none";
-            setStatus(`Sync complete. ${state2.items.length} total items.`, false, false);
+            const truncationNote = syncTruncated ? syncTruncationReason === "clamp" ? " (posts sync truncated — server repeated or served invalid pages; will retry next sync)" : " (posts truncated at API offset limit — will retry next sync; oldest posts may be unavailable)" : "";
+            pendingSyncTruncationNote = truncationNote || null;
+            setStatus(`Sync complete${truncationNote}. ${state2.items.length} total items.`, false, false);
             syncCompleted = true;
             maybeSetRefreshRequiredStatus();
             if (pendingRetryCount === 0) {
               isSyncInProgress = false;
             }
           } catch (error) {
+            if (isCurrentRun()) {
+              pendingSyncTruncationNote = null;
+            }
+            if (isCurrentRun() && watermarksLoaded) {
+              try {
+                await saveArchiveData(username, [], {
+                  lastSyncDate_comments: syncPhase.commentsDone ? void 0 : watermarks.lastSyncDate_comments ?? null,
+                  lastSyncDate_posts: forceFull ? null : void 0,
+                  lastSyncDate: forceFull ? null : void 0
+                });
+              } catch (restoreError) {
+                Logger.warn("Failed to restore pre-sync watermarks after sync failure.", restoreError);
+              }
+            }
             syncErrorState.isRetrying = false;
             const errorMessage = error.message;
             const displayError = `Sync failed: ${errorMessage}`;
@@ -19330,7 +19539,7 @@ sortCanonicalItems() {
     }
     return newest;
   };
-  const syncArchive = async (username, state2, watermarks, onStatus, abortSignal, onCanonicalMutated) => {
+  const syncArchive = async (username, state2, watermarks, onStatus, abortSignal, onCanonicalMutated, phase) => {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
@@ -19345,30 +19554,37 @@ sortCanonicalItems() {
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
-    const afterDateComments = watermarks.lastSyncDate_comments ? new Date(watermarks.lastSyncDate_comments) : void 0;
-    const afterDatePosts = watermarks.lastSyncDate_posts ? new Date(watermarks.lastSyncDate_posts) : void 0;
+    const toValidDate = (value) => {
+      if (!value) return void 0;
+      const ms = Date.parse(value);
+      return Number.isFinite(ms) ? new Date(ms) : void 0;
+    };
+    const afterDateComments = toValidDate(watermarks.lastSyncDate_comments);
+    const afterDatePosts = toValidDate(watermarks.lastSyncDate_posts);
     if (afterDateComments || afterDatePosts) {
       const cStr = afterDateComments ? afterDateComments.toLocaleDateString() : "start";
       const pStr = afterDatePosts ? afterDatePosts.toLocaleDateString() : "start";
       onStatus(`Resuming: Comments from ${cStr}, Posts from ${pStr}...`);
     }
     const comments = await fetchUserComments(userId, (count) => {
-      onStatus(`Fetching comments: ${count} new...`);
+      onStatus(`Fetching comments: ${count}...`);
     }, afterDateComments, async (batch) => {
       const newestInBatch = newestBatchTimestamp(batch, "lastEditedAt");
       await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_comments: newestInBatch } : {});
       console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch ?? "n/a"}`);
     }, username);
+    if (phase) {
+      phase.commentsDone = true;
+    }
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
-    const posts = await fetchUserPosts(userId, (count) => {
-      onStatus(`Fetching posts: ${count} new...`);
+    const { posts, truncated: postsTruncated, truncationReason: postsTruncationReason } = await fetchUserPosts(userId, (count) => {
+      onStatus(`Fetching posts: ${count}...`);
     }, afterDatePosts, async (batch) => {
-      const newestInBatch = newestBatchTimestamp(batch, "modifiedAt");
-      await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_posts: newestInBatch } : {});
-      console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch ?? "n/a"}`);
-    });
+      await saveArchiveData(username, batch, {});
+      console.log(`[Archive Sync] Incremental save: ${batch.length} posts (watermark deferred to final save)`);
+    }, abortSignal);
     if (abortSignal?.aborted) {
       throw new Error("Sync aborted");
     }
@@ -19391,23 +19607,26 @@ sortCanonicalItems() {
       }
       state2.items.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
       onCanonicalMutated?.();
+      const postsWatermark = postsTruncated ? watermarks.lastSyncDate_posts ?? null : syncStartTime;
       await saveArchiveData(username, [], {
         lastSyncDate: syncStartTime,
         lastSyncDate_comments: syncStartTime,
-        lastSyncDate_posts: syncStartTime
+        lastSyncDate_posts: postsWatermark
       });
       state2.lastSyncDate = syncStartTime;
       onStatus(`Sync complete. ${state2.items.length} total items.`);
     } else {
       const statusMsg = watermarks.lastSyncDate ? `Up to date. (${state2.items.length} items)` : `No history found for ${username}.`;
       onStatus(statusMsg);
+      const postsWatermark = postsTruncated ? watermarks.lastSyncDate_posts ?? null : syncStartTime;
       await saveArchiveData(username, [], {
         lastSyncDate: syncStartTime,
         lastSyncDate_comments: syncStartTime,
-        lastSyncDate_posts: syncStartTime
+        lastSyncDate_posts: postsWatermark
       });
       state2.lastSyncDate = syncStartTime;
     }
+    return { truncated: postsTruncated, truncationReason: postsTruncationReason };
   };
   const ITEM_SELECTOR = ".pr-item[data-id]";
   const AUTHOR_CONTROL_SELECTOR = '[data-action="author-up"][data-author], [data-action="author-down"][data-author]';
@@ -19995,7 +20214,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.731"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.733"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;

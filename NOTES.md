@@ -87,6 +87,14 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
 - **Context**: Merging posts and comments into a single feed can lead to an "infinite range" problem if not capped. If a user has 10,000 unread comments over a month, fetching posts for that entire month while only showing 800 comments leads to a massive sync issue.
 - **Solution**: Cap the post fetch date range. Fetch comments first to determine the exact time window they cover. Use the oldest comment's date as `after` and the newest comment's date as `before` (if the comment batch hit the limit). This ensures posts and comments are strictly synchronized in the current view.
 
+### Posts Offset Pagination — Live Server Verification (2026-08-01)
+- **Context**: The archive posts fetch uses offset-based pagination (`MAX_API_SKIP = 2000`) with an incremental query (`after` + `timeField: "modifiedAt"` + `sortedBy: "new"`) and a fallback full-scan path for servers that reject that combination. The truncation/fallback classifiers (`isOffsetCapError`, `isValidationShapeError` in `archive/loader.ts`) rely on server error wording.
+- **Verified live** (read-only, logged-out, HTTP 200, 2026-08-01):
+  - EAF legacy API (`forum.effectivealtruism.org/graphql`) **accepts the full combo** — `posts(input: { terms: { view: "userPosts", userId, limit, offset, after, sortedBy: "new", timeField: "modifiedAt" } })` — as well as the probe/full-scan shapes (offset + sortedBy, with/without `after`/`timeField`). No schema/validation rejection, no auth wall. The incremental fallback path is never exercised for the combo on EAF.
+  - Skip-limit rejection wording on **both** servers is exactly `"Exceeded maximum value for skip"` at skip > 2000 (EAF offsets 2100/3000, LW offset 2100); offset 2000 is accepted on both.
+  - `isOffsetCapError` classifies the real wording as a cap (graceful truncation, watermark preserved); `isValidationShapeError` correctly does not.
+- **Implications**: `MAX_API_SKIP = 2000` matches the observed server boundary exactly, and the E2E mocks using `"Exceeded maximum value for skip"` mirror real behavior verbatim. Re-verify if either server changes the rejection wording or the offset boundary.
+
 ---
 
 ## UI & Rendering

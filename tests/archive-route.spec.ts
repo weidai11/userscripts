@@ -1953,7 +1953,7 @@ return { data: {} };
                 const userObj = { _id: userId, username: '${username}', displayName: 'Load More User' };
                 if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
                 if (query.includes('GetUserPosts')) {
-                    if (variables.after) return { data: { posts: { results: [] } } };
+                    if ((variables.offset || 0) !== 0) return { data: { posts: { results: [] } } };
                     
                     // Generate 60 posts to test limit (50)
                     const results = [];
@@ -1999,7 +1999,7 @@ return { data: {} };
                                         
                                         if (query.includes('GetUserPosts')) {
                                             window.__syncCount++;
-                                            const results = (window.__syncCount > 1 && !variables.after) ? [{ _id: 'post-new', postedAt: new Date().toISOString(), title: 'New Post', user: { displayName: 'Tester' } }] : [];
+                                            const results = (window.__syncCount > 1 && (variables.offset || 0) === 0) ? [{ _id: 'post-new', postedAt: new Date().toISOString(), title: 'New Post', user: { displayName: 'Tester' } }] : [];
                                             const response = { data: { posts: { results } } };
                                             if (window.__syncCount > 1) {
                                                 return new Promise(resolve => setTimeout(() => resolve(response), 100));
@@ -2059,9 +2059,10 @@ return { data: {} };
                 
                 if (query.includes('GetUserBySlug')) return { data: { user: userObj } };
                 if (query.includes('GetUserPosts')) {
-                    if (variables.after) return { data: { posts: { results: [] } } };
+                    const start = variables.offset || 0;
                     const results = [];
-                    for (let i = 0; i < 200; i++) {
+                    const batchEnd = Math.min(start + (variables.limit || 100), 200);
+                    for (let i = start; i < batchEnd; i++) {
                         results.push({
                             _id: 'p' + i,
                             title: 'Post ' + i,

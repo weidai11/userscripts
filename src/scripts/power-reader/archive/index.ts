@@ -2640,6 +2640,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
     let startedWithEmptyCache = false;
     let syncCompleted = false;
     let shouldShowRefreshRequiredStatus = false;
+    let pendingSyncTruncationNote: string | null = null;
     let resolveInitialRender: (() => void) | null = null;
     const initialRenderPromise = new Promise<void>((resolve) => {
       resolveInitialRender = resolve;
@@ -2652,7 +2653,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
     const maybeSetRefreshRequiredStatus = () => {
       if (!hasInitialRender || !syncCompleted || !shouldShowRefreshRequiredStatus) return;
-      setStatusBaseMessage('Fetch complete. Please refresh page to view latest content.', false, false);
+      setStatusBaseMessage(`Fetch complete. Please refresh page to view latest content.${pendingSyncTruncationNote ?? ''}`, false, false);
     };
 
     const renderInitialSnapshot = () => {
@@ -2718,6 +2719,17 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         syncErrorState.retryCount = attemptNumber;
         syncErrorState.abortController = new AbortController();
 
+        // Declared outside the try so the catch below can reference them; the
+        // restore only runs when watermarksLoaded, i.e. when the pre-sync
+        // values below were actually assigned.
+        let watermarks = {
+          lastSyncDate: null as string | null,
+          lastSyncDate_comments: null as string | null,
+          lastSyncDate_posts: null as string | null
+        };
+        let watermarksLoaded = false;
+        const syncPhase = { commentsDone: false };
+
         try {
           // Re-load fresh data from DB to get updated watermarks from any previous partial success
           const [currentCached, cachedContext] = await Promise.all([
@@ -2744,26 +2756,33 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             setStatus(`No local data. Fetching full history for ${username}`, false, true);
           }
 
-          const watermarks = {
+          const netStart = performance.now();
+          const initialCount = state.items.length;
+          watermarks = {
             lastSyncDate: forceFull ? null : currentCached.lastSyncDate,
             lastSyncDate_comments: forceFull ? null : currentCached.lastSyncDate_comments,
             lastSyncDate_posts: forceFull ? null : currentCached.lastSyncDate_posts
           };
-          const netStart = performance.now();
-          const initialCount = state.items.length;
+          watermarksLoaded = true;
+          let syncTruncated = false;
+          let syncTruncationReason: 'offset-limit' | 'clamp' | null = null;
           const syncAbortController = new AbortController();
           const abortSyncAttempt = () => syncAbortController.abort();
           syncErrorState.abortController.signal.addEventListener('abort', abortSyncAttempt);
           runAbortController.signal.addEventListener('abort', abortSyncAttempt);
           try {
-            await syncArchive(
+            const syncResult = await syncArchive(
               username,
               state,
               watermarks,
               (msg) => setStatus(msg, false, true),
               syncAbortController.signal,
-              markCanonicalItemsMutated
+              markCanonicalItemsMutated,
+              syncPhase
             );
+            if (!isCurrentRun()) return;
+            syncTruncated = syncResult.truncated;
+            syncTruncationReason = syncResult.truncationReason ?? null;
           } finally {
             syncErrorState.abortController.signal.removeEventListener('abort', abortSyncAttempt);
             runAbortController.signal.removeEventListener('abort', abortSyncAttempt);
@@ -2779,7 +2798,13 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           if (errorContainer) errorContainer.style.display = 'none';
 
           // Clear syncing state
-          setStatus(`Sync complete. ${state.items.length} total items.`, false, false);
+          const truncationNote = syncTruncated
+            ? (syncTruncationReason === 'clamp'
+                ? ' (posts sync truncated — server repeated or served invalid pages; will retry next sync)'
+                : ' (posts truncated at API offset limit — will retry next sync; oldest posts may be unavailable)')
+            : '';
+          pendingSyncTruncationNote = truncationNote || null;
+          setStatus(`Sync complete${truncationNote}. ${state.items.length} total items.`, false, false);
           syncCompleted = true;
           maybeSetRefreshRequiredStatus();
 
@@ -2790,6 +2815,36 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           }
 
         } catch (error) {
+          // The latest attempt failed; a truncation note from a previous
+          // successful sync no longer describes the current state. Guarded by
+          // isCurrentRun so a superseded run's catch cannot clear the note a
+          // successor run set on success.
+          if (isCurrentRun()) {
+            pendingSyncTruncationNote = null;
+          }
+          // A failed or aborted comments scan may have advanced the comments
+          // watermark via its per-batch saves; restore the pre-sync value so
+          // the next attempt re-scans instead of skipping the un-fetched tail.
+          // No restore is needed for the posts watermark on incremental
+          // failure (it is only advanced by the final save); a failed full
+          // resync must instead clear it so the rescan intent survives. Skip
+          // when this run never loaded the pre-sync values, and when a
+          // superseded run's stale values would clobber whatever the successor
+          // run persisted.
+          if (isCurrentRun() && watermarksLoaded) {
+            try {
+              // A failed full resync must not resume incrementally from the
+              // old posts watermark — clear it (and the combined watermark)
+              // so the rescan intent survives the failure.
+              await saveArchiveData(username, [], {
+                lastSyncDate_comments: syncPhase.commentsDone ? undefined : (watermarks.lastSyncDate_comments ?? null),
+                lastSyncDate_posts: forceFull ? null : undefined,
+                lastSyncDate: forceFull ? null : undefined
+              });
+            } catch (restoreError) {
+              Logger.warn('Failed to restore pre-sync watermarks after sync failure.', restoreError);
+            }
+          }
           syncErrorState.isRetrying = false;
           const errorMessage = (error as Error).message;
           const displayError = `Sync failed: ${errorMessage}`;
@@ -3013,8 +3068,9 @@ const syncArchive = async (
   },
   onStatus: (msg: string) => void,
   abortSignal?: AbortSignal,
-  onCanonicalMutated?: () => void
-) => {
+  onCanonicalMutated?: () => void,
+  phase?: { commentsDone: boolean }
+): Promise<{ truncated: boolean; truncationReason?: 'offset-limit' | 'clamp' }> => {
   // Check for abort before starting
   if (abortSignal?.aborted) {
     throw new Error('Sync aborted');
@@ -3035,9 +3091,17 @@ const syncArchive = async (
     throw new Error('Sync aborted');
   }
 
-  // Resumable independent watermarks
-  const afterDateComments = watermarks.lastSyncDate_comments ? new Date(watermarks.lastSyncDate_comments) : undefined;
-  const afterDatePosts = watermarks.lastSyncDate_posts ? new Date(watermarks.lastSyncDate_posts) : undefined;
+  // Resumable independent watermarks. A stored watermark that fails to parse
+  // (corrupted IndexedDB value) is treated as absent: syncing from the start is
+  // safe, whereas passing an Invalid Date down to the loader would either throw
+  // on toISOString() or silently filter out every item.
+  const toValidDate = (value: string | null): Date | undefined => {
+    if (!value) return undefined;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? new Date(ms) : undefined;
+  };
+  const afterDateComments = toValidDate(watermarks.lastSyncDate_comments);
+  const afterDatePosts = toValidDate(watermarks.lastSyncDate_posts);
 
   if (afterDateComments || afterDatePosts) {
     const cStr = afterDateComments ? afterDateComments.toLocaleDateString() : 'start';
@@ -3046,7 +3110,7 @@ const syncArchive = async (
   }
 
   const comments = await fetchUserComments(userId, (count) => {
-    onStatus(`Fetching comments: ${count} new...`);
+    onStatus(`Fetching comments: ${count}...`);
   }, afterDateComments, async (batch) => {
     // Incremental save for comments
     const newestInBatch = newestBatchTimestamp(batch as unknown as Array<Record<string, unknown>>, 'lastEditedAt');
@@ -3054,19 +3118,28 @@ const syncArchive = async (
     console.log(`[Archive Sync] Incremental save: ${batch.length} comments, watermark=${newestInBatch ?? 'n/a'}`);
   }, username);
 
+  // Record the completed scan BEFORE the abort check: if an abort fires in the
+  // window after the fetch resolved, the failure path must not restore the
+  // comments watermark to its pre-sync value and force a full re-scan next time.
+  if (phase) {
+    phase.commentsDone = true;
+  }
+
   // Check for abort after fetching comments
   if (abortSignal?.aborted) {
     throw new Error('Sync aborted');
   }
 
-  const posts = await fetchUserPosts(userId, (count) => {
-    onStatus(`Fetching posts: ${count} new...`);
+  const { posts, truncated: postsTruncated, truncationReason: postsTruncationReason } = await fetchUserPosts(userId, (count) => {
+    onStatus(`Fetching posts: ${count}...`);
   }, afterDatePosts, async (batch) => {
-    // Incremental save for posts
-    const newestInBatch = newestBatchTimestamp(batch as unknown as Array<Record<string, unknown>>, 'modifiedAt');
-    await saveArchiveData(username, batch, newestInBatch ? { lastSyncDate_posts: newestInBatch } : {});
-    console.log(`[Archive Sync] Incremental save: ${batch.length} posts, watermark=${newestInBatch ?? 'n/a'}`);
-  });
+    // Persist fetched items for crash recovery, but do NOT advance the posts
+    // watermark mid-scan: modifiedAt is not monotonic in the scan order, so an
+    // interrupted scan would otherwise make the next sync skip the un-fetched
+    // tail. The posts watermark is advanced only by the final save.
+    await saveArchiveData(username, batch, {});
+    console.log(`[Archive Sync] Incremental save: ${batch.length} posts (watermark deferred to final save)`);
+  }, abortSignal);
 
   // Check for abort after fetching posts
   if (abortSignal?.aborted) {
@@ -3100,11 +3173,16 @@ const syncArchive = async (
     state.items.sort((a: any, b: any) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime());
     onCanonicalMutated?.();
 
-    // Final watermark update to sync start time to cover any items created during sync
+    // Final watermark update to sync start time to cover any items created during sync.
+    // When the posts scan was truncated by the API offset limit, keep the
+    // pre-sync posts watermark (per-batch saves never advance it, so no restore
+    // is needed — the choice here is simply not to advance it) so a future sync
+    // retries the full scan instead of skipping the un-fetched tail.
+    const postsWatermark = postsTruncated ? (watermarks.lastSyncDate_posts ?? null) : syncStartTime;
     await saveArchiveData(username, [], {
       lastSyncDate: syncStartTime,
       lastSyncDate_comments: syncStartTime,
-      lastSyncDate_posts: syncStartTime
+      lastSyncDate_posts: postsWatermark
     });
     state.lastSyncDate = syncStartTime;
 
@@ -3112,11 +3190,14 @@ const syncArchive = async (
   } else {
     const statusMsg = watermarks.lastSyncDate ? `Up to date. (${state.items.length} items)` : `No history found for ${username}.`;
     onStatus(statusMsg);
+    const postsWatermark = postsTruncated ? (watermarks.lastSyncDate_posts ?? null) : syncStartTime;
     await saveArchiveData(username, [], {
       lastSyncDate: syncStartTime,
       lastSyncDate_comments: syncStartTime,
-      lastSyncDate_posts: syncStartTime
+      lastSyncDate_posts: postsWatermark
     });
     state.lastSyncDate = syncStartTime;
   }
+
+  return { truncated: postsTruncated, truncationReason: postsTruncationReason };
 };

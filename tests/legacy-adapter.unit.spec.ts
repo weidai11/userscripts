@@ -79,13 +79,31 @@ test.describe('[PR-DATA-05] Legacy Adapter – variable transformation', () => {
     });
 
     test('[PR-DATA-05] multi: inlineTerms for UserPosts', () => {
-        const { variables } = adaptForLegacy(Q.GET_USER_POSTS, { userId: 'u1', limit: 50, after: '2024-06-01' });
+        const { variables } = adaptForLegacy(Q.GET_USER_POSTS, { userId: 'u1', limit: 50, offset: 0 });
         expect(variables.input.terms).toMatchObject({
             view: 'userPosts',
             userId: 'u1',
             limit: 50,
-            after: '2024-06-01',
-            sortedBy: 'oldest',
+            offset: 0,
+            sortedBy: 'new',
+        });
+    });
+
+    test('[PR-DATA-05] multi: inlineTerms for UserPostsIncremental', () => {
+        const { variables } = adaptForLegacy(Q.GET_USER_POSTS_INCREMENTAL, {
+            userId: 'u1',
+            limit: 50,
+            offset: 0,
+            after: '2024-06-01T00:00:00.000Z',
+        });
+        expect(variables.input.terms).toMatchObject({
+            view: 'userPosts',
+            userId: 'u1',
+            limit: 50,
+            offset: 0,
+            after: '2024-06-01T00:00:00.000Z',
+            sortedBy: 'new',
+            timeField: 'modifiedAt',
         });
     });
 
