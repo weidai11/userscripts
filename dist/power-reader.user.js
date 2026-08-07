@@ -5,6 +5,8 @@
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
+// @match      https://www.greaterwrong.com/*
+// @match      https://ea.greaterwrong.com/*
 // @match      https://aistudio.google.com/*
 // @match      https://arena.ai/*
 // @match      https://www.arena.ai/*
@@ -562,9 +564,12 @@ reset: () => {
       }
       return { type: "arena-max" };
     }
-    const isForumDomain = isHost("lesswrong.com") || isHost("forum.effectivealtruism.org");
+    const isForumDomain = isHost("lesswrong.com") || isHost("forum.effectivealtruism.org") || isHost("greaterwrong.com");
     if (!isForumDomain) {
       return { type: "skip" };
+    }
+    if (isHost("greaterwrong.com")) {
+      return { type: "forum-injection" };
     }
     if (pathname === "/archive" || pathname === "/archive/") {
       const username = params.get("username");
@@ -1995,7 +2000,7 @@ reset: () => {
   }
   function isEAF() {
     const host = window.location.hostname.trim().toLowerCase();
-    return host === "forum.effectivealtruism.org" || host.endsWith(".forum.effectivealtruism.org");
+    return host === "forum.effectivealtruism.org" || host.endsWith(".forum.effectivealtruism.org") || host === "ea.greaterwrong.com" || host.endsWith(".ea.greaterwrong.com");
   }
   function getGraphQLEndpoint() {
     if (isEAF()) {
@@ -2634,14 +2639,28 @@ reset: () => {
   );
   const normalizeHost = (hostname) => hostname.trim().toLowerCase();
   const EA_FORUM_HOST = "forum.effectivealtruism.org";
+  const GREATER_WRONG_HOST = "greaterwrong.com";
   const isEAForumHostname = (hostname) => {
     const host = normalizeHost(hostname);
-    return host === EA_FORUM_HOST || host.endsWith(`.${EA_FORUM_HOST}`);
+    return host === EA_FORUM_HOST || host.endsWith(`.${EA_FORUM_HOST}`) || host === "ea.greaterwrong.com" || host.endsWith(".ea.greaterwrong.com");
+  };
+  const isGreaterWrongHostname = (hostname) => {
+    const host = normalizeHost(hostname);
+    return host === GREATER_WRONG_HOST || host.endsWith(`.${GREATER_WRONG_HOST}`);
   };
   const isLocalhostHostname = (hostname) => normalizeHost(hostname) === "localhost";
   const isEAForumHost = () => isEAForumHostname(window.location.hostname);
+  const isGreaterWrongHost = () => isGreaterWrongHostname(window.location.hostname);
   const isEAForumLikeHost = () => isEAForumHost() || isLocalhostHostname(window.location.hostname);
-  const getForumMeta = () => isEAForumHost() ? { forumLabel: "EA Forum", forumHomeUrl: "https://forum.effectivealtruism.org/" } : { forumLabel: "Less Wrong", forumHomeUrl: "https://www.lesswrong.com/" };
+  const getForumMeta = () => {
+    if (isGreaterWrongHost()) {
+      return isEAForumHostname(window.location.hostname) ? { forumLabel: "EA Forum", forumHomeUrl: "https://ea.greaterwrong.com/" } : { forumLabel: "Greater Wrong", forumHomeUrl: "https://www.greaterwrong.com/" };
+    }
+    if (isEAForumHost()) {
+      return { forumLabel: "EA Forum", forumHomeUrl: "https://forum.effectivealtruism.org/" };
+    }
+    return { forumLabel: "Less Wrong", forumHomeUrl: "https://www.lesswrong.com/" };
+  };
   const BASE36_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
   const HEX_DIGITS = "0123456789abcdef";
   const RANGE53 = 9007199254740992;
@@ -13097,16 +13116,24 @@ getPromptPrefix: getAIStudioPrefix,
     window.addEventListener("hashchange", scheduleInjectLinks, { signal });
     window.addEventListener("beforeunload", () => observer.disconnect(), { signal });
   };
-  const COMMENT_CONTAINER_SELECTORS = [".comments-node", ".CommentFrame-node"];
+  const GW_SELECTORS = {
+    commentContainers: isGreaterWrongHost() ? [".comment-item"] : [],
+    commentBodies: isGreaterWrongHost() ? [".comment-body"] : [],
+    postBodies: isGreaterWrongHost() ? [".post", ".post-body"] : [],
+    postLinkContexts: isGreaterWrongHost() ? [".post-title-link"] : [],
+    excludedRegions: isGreaterWrongHost() ? [".page-toolbar", "#bottom-bar"] : []
+  };
+  const COMMENT_CONTAINER_SELECTORS = [".comments-node", ".CommentFrame-node", ...GW_SELECTORS.commentContainers];
   const FEED_CARD_SELECTORS = [".LWPostsItem-postsItem", ".PostsItem2-root", ".PostsItem-root"];
   const COMMENT_BODY_SELECTORS = [
     ".CommentsItem-content",
     ".CommentBody-root",
     ".commentBody",
     ".CommentsItem-body",
-    ".CommentFrame-body"
+    ".CommentFrame-body",
+    ...GW_SELECTORS.commentBodies
   ];
-  const POST_BODY_SELECTORS = ["#postBody", ".PostsPage-postsPage", ".PostsPage-post"];
+  const POST_BODY_SELECTORS = ["#postBody", ".PostsPage-postsPage", ".PostsPage-post", ...GW_SELECTORS.postBodies];
   const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS = [
     ".CommentsItem-meta",
     ".CommentsItemMeta-root",
@@ -13121,6 +13148,7 @@ getPromptPrefix: getAIStudioPrefix,
     ".PostsItem2-title",
     ".PostsItem-title",
     ".PostsPageTitle-root",
+    ...GW_SELECTORS.postLinkContexts,
     "h1",
     "h2"
   ];
@@ -13139,7 +13167,8 @@ getPromptPrefix: getAIStudioPrefix,
     ".GlobalHeader-root",
     ".UsersMenu-root",
     ".SearchBar-root",
-    ".GlobalSidebar-root"
+    ".GlobalSidebar-root",
+    ...GW_SELECTORS.excludedRegions
   ];
   const COMMENT_PERMALINK_ROOT_SELECTOR = ".CommentPermalink-root";
   const joinSelector = (selectors) => selectors.join(", ");
@@ -13164,11 +13193,16 @@ getPromptPrefix: getAIStudioPrefix,
     if (!COMMENT_ID_PATTERN.test(normalized)) return null;
     return normalized;
   };
+  const COMMENT_ID_PATH_PATTERN = /\/(?:comment|answer)\/([A-Za-z0-9_-]{2,128})\/?$/i;
   const parseCommentIdFromHref = (href) => {
     try {
       const url = new URL(href, window.location.origin);
       const commentId = url.searchParams.get("commentId");
       if (commentId) return extractCommentId(commentId);
+      if (isGreaterWrongHost()) {
+        const pathMatch = url.pathname.match(COMMENT_ID_PATH_PATTERN);
+        if (pathMatch?.[1]) return extractCommentId(pathMatch[1]);
+      }
       const hash = url.hash.startsWith("#") ? url.hash.slice(1) : url.hash;
       const hashMatch = hash.match(/(?:^|[/?&])comment(?:id)?[-_:/=]([A-Za-z0-9_-]{2,128})(?:$|[/?&])/i);
       if (hashMatch?.[1]) return extractCommentId(hashMatch[1]);
@@ -13180,7 +13214,13 @@ getPromptPrefix: getAIStudioPrefix,
   const getCommentIdFromCurrentUrl = () => {
     try {
       const url = new URL(window.location.href);
-      return extractCommentId(url.searchParams.get("commentId"));
+      const fromParam = extractCommentId(url.searchParams.get("commentId"));
+      if (fromParam) return fromParam;
+      if (isGreaterWrongHost()) {
+        const pathMatch = url.pathname.match(COMMENT_ID_PATH_PATTERN);
+        if (pathMatch?.[1]) return extractCommentId(pathMatch[1]);
+      }
+      return null;
     } catch {
       return null;
     }
@@ -13210,6 +13250,7 @@ getPromptPrefix: getAIStudioPrefix,
   };
   const isStructuralPostLink = (anchor) => {
     if (!parsePostIdFromAnchor(anchor)) return false;
+    if (isGreaterWrongHost() && getCommentContainer(anchor)) return false;
     if (isInBodyContent(anchor)) return false;
     return !!anchor.closest(STRUCTURAL_POST_LINK_CONTEXT_SELECTOR);
   };
@@ -13219,6 +13260,10 @@ getPromptPrefix: getAIStudioPrefix,
     const nearestPostAnchor = el.closest('a[href*="/posts/"]');
     const fromAnchor = nearestPostAnchor ? parsePostIdFromAnchor(nearestPostAnchor) : null;
     if (fromAnchor) return fromAnchor;
+    if (isGreaterWrongHost()) {
+      const dataPostId = el.closest("[data-post-id]")?.getAttribute("data-post-id") ?? el.querySelector(".comment[data-post-id]")?.getAttribute("data-post-id");
+      if (dataPostId && COMMENT_ID_PATTERN.test(dataPostId.trim())) return dataPostId.trim();
+    }
     const card = el.closest(FEED_CARD_SELECTOR);
     if (card) {
       const cardLink = findFirstPostLinkInContainer(card);
@@ -13292,7 +13337,7 @@ getPromptPrefix: getAIStudioPrefix,
         return buildCommentTarget(commentId, commentContainer, commentContainer);
       }
     }
-    if (anchor && !isInBodyContent(anchor) && !isInExcludedRegion(anchor)) {
+    if (anchor && !isInBodyContent(anchor) && !isInExcludedRegion(anchor) && (!isGreaterWrongHost() || !getCommentContainer(anchor))) {
       const postId = parsePostIdFromAnchor(anchor);
       if (postId) {
         const container = resolvePostContainer(anchor) || anchor;
@@ -13330,12 +13375,14 @@ getPromptPrefix: getAIStudioPrefix,
   const SELECTION_CONTEXT_SELECTOR = [
     ".comments-node[id]",
     ".CommentFrame-node[id]",
+    ...isGreaterWrongHost() ? [".comment-item[id]"] : [],
     ".LWPostsItem-postsItem",
     ".PostsItem2-root",
     ".PostsItem-root",
     "#postBody",
     ".PostsPage-postsPage",
-    ".PostsPage-post"
+    ".PostsPage-post",
+    ...isGreaterWrongHost() ? [".post"] : []
   ].join(", ");
   const INTERACTIVE_TARGET_SELECTOR = [
     "button",
@@ -20154,7 +20201,9 @@ sortCanonicalItems() {
       return;
     }
     if (route.type === "forum-injection") {
-      setupHeaderInjection();
+      if (!isGreaterWrongHost()) {
+        setupHeaderInjection();
+      }
       setupForumAIHotkeys(getState());
       return;
     }

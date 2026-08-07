@@ -34,10 +34,16 @@ function isToleratedGraphQLError(err: any, patterns: Array<string | RegExp>): bo
     });
 }
 
+// Keep this host set in sync with `isEAForumHostname` in
+// src/scripts/power-reader/utils/forum.ts (they drive endpoint selection and
+// the EA storage namespace respectively, so they must not diverge).
 function isEAF(): boolean {
     const host = window.location.hostname.trim().toLowerCase();
     return host === 'forum.effectivealtruism.org'
-        || host.endsWith('.forum.effectivealtruism.org');
+        || host.endsWith('.forum.effectivealtruism.org')
+        // GreaterWrong's EA Forum viewer serves EAF content and needs the legacy EAF API.
+        || host === 'ea.greaterwrong.com'
+        || host.endsWith('.ea.greaterwrong.com');
 }
 
 function getGraphQLEndpoint(): string {

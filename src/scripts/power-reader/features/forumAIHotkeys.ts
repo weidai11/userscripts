@@ -3,6 +3,7 @@ import { Z_INDEX_TOP_LAYER } from '../config';
 import { handleSendToAIStudio, handleSendToArenaMax } from './aiProviders';
 import { resetForumAICache, type StatusReporter } from './aiProviderPopupCore';
 import { resolveForumAITargetFromElement, type ForumResolvedAITarget } from './forumAITargetResolver';
+import { isGreaterWrongHost } from '../utils/forum';
 import { Logger } from '../utils/logger';
 
 declare const GM_addStyle: ((css: string) => void) | undefined;
@@ -16,12 +17,14 @@ const FALLBACK_TARGET_MAX_AGE_MS = 120;
 const SELECTION_CONTEXT_SELECTOR = [
   '.comments-node[id]',
   '.CommentFrame-node[id]',
+  ...(isGreaterWrongHost() ? ['.comment-item[id]'] : []),
   '.LWPostsItem-postsItem',
   '.PostsItem2-root',
   '.PostsItem-root',
   '#postBody',
   '.PostsPage-postsPage',
   '.PostsPage-post',
+  ...(isGreaterWrongHost() ? ['.post'] : []),
 ].join(', ');
 const INTERACTIVE_TARGET_SELECTOR = [
   'button',

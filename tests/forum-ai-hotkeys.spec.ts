@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { getScriptContent } from './helpers/setup';
 
 interface NativeForumFixture {
-  host: 'www.lesswrong.com' | 'forum.effectivealtruism.org';
+  host: 'www.lesswrong.com' | 'forum.effectivealtruism.org' | 'www.greaterwrong.com' | 'ea.greaterwrong.com';
   commentId: string;
   postId: string;
   commentClass: string;
@@ -13,6 +13,8 @@ interface NativeGraphQLOptions {
   commentDescendentCount?: number;
   getPostDelayMs?: number;
   getCommentDelayMs?: number;
+  // Overrides the comment mock's postId (null exercises postIdHint-based post resolution).
+  commentPostId?: string | null;
 }
 
 const createForumHtml = ({ commentId, postId, commentClass }: NativeForumFixture): string => `
@@ -131,6 +133,80 @@ const createCommentPermalinkWithReplyHtml = (
   </html>
 `;
 
+const createGreaterWrongPostHtml = (
+  { commentId, postId }: Pick<NativeForumFixture, 'commentId' | 'postId'>
+): string => `
+  <!doctype html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body class="theme-default">
+      <nav id="primary-bar" class="nav-bar nav-bar-top active-bar">
+        <span id="nav-item-home" class="nav-item nav-inactive"><a class="nav-inner" href="/">Home</a></span>
+      </nav>
+      <div id="content" class="post-page comment-thread-page">
+        <main class="post">
+          <h1 class="post-title">Example Post</h1>
+          <div class="post-meta top-post-meta">
+            <a class="author" href="/users/author" data-userid="u1">Author</a>
+            <a class="comment-count" href="#comments">1 comment</a>
+          </div>
+          <div class="body-text post-body">
+            <p id="gw-post-body-text">Post body text</p>
+          </div>
+        </main>
+        <div id="comments" class="comments">
+          <ul class="comment-thread">
+            <li id="comment-${commentId}" class="comment-item depth-odd">
+              <div class="comment" data-post-id="${postId}">
+                <div class="comment-meta">
+                  <a class="author" href="/users/author" data-userid="u1">Author</a>
+                  <a class="date" href="/posts/${postId}/example-post#comment-${commentId}">Jan 2, 2026</a>
+                  <a class="permalink" href="/posts/${postId}/example-post/comment/${commentId}">Permalink</a>
+                  <span class="comment-post-title">on: <a id="gw-comment-post-title-link" class="comment-post-title-link" href="/posts/${postId}/example-post">Example Post</a></span>
+                </div>
+                <div class="body-text comment-body">
+                  <p id="gw-comment-body">Comment ${commentId}</p>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </body>
+  </html>
+`;
+
+const createGreaterWrongCommentPermalinkHtml = (
+  { commentId, postId }: Pick<NativeForumFixture, 'commentId' | 'postId'>,
+  includeCommentId: boolean = true
+): string => `
+  <!doctype html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body class="theme-default">
+      <div id="content" class="individual-thread-page comment-thread-page">
+        <h1 class="post-title">Author comments on Example Post</h1>
+        <div id="comments" class="comments">
+          <ul class="comment-thread">
+            <li ${includeCommentId ? `id="comment-${commentId}"` : ''} class="comment-item depth-odd">
+              <div class="comment" data-post-id="${postId}">
+                <div class="comment-meta">
+                  <a class="author" href="/users/author" data-userid="u1">Author</a>
+                  ${includeCommentId ? `<a class="date" href="/posts/${postId}/example-post#comment-${commentId}">Jan 2, 2026</a>` : ''}
+                  <a class="permalink" href="/posts/${postId}/example-post/comment/${commentId}">Permalink</a>
+                </div>
+                <div class="body-text comment-body">
+                  <p id="gw-permalink-comment-body">Permalink comment ${commentId}</p>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </body>
+  </html>
+`;
+
 const mockGraphQLResponse = (
   commentId: string,
   postId: string,
@@ -149,7 +225,7 @@ const mockGraphQLResponse = (
       author: 'author',
       rejected: false,
       topLevelCommentId: commentId,
-      postId,
+      postId: options.commentPostId === undefined ? postId : options.commentPostId,
       parentCommentId: null,
       parentComment: null,
       user: {
@@ -341,6 +417,150 @@ const loadNativeForumScript = async (
   await page.keyboard.press(provider === 'ai-studio' ? 'g' : 'm');
 
   return { commentId };
+};
+
+const getGreaterWrongGraphUrl = (host: NativeForumFixture['host']): string =>
+  host === 'ea.greaterwrong.com'
+    ? 'https://forum.effectivealtruism.org/graphql'
+    : 'https://www.lesswrong.com/graphql';
+
+const mockGreaterWrongGraphQL = async (
+  page: Page,
+  host: NativeForumFixture['host'],
+  commentId: string,
+  postId: string,
+  postTitle: string,
+  options: NativeGraphQLOptions = {}
+) => {
+  const graphUrl = getGreaterWrongGraphUrl(host);
+  const graphData = mockGraphQLResponse(commentId, postId, postTitle, options);
+
+  await page.route(graphUrl, async (route) => {
+    const body = route.request().postDataJSON() as { query?: string };
+    const query = body?.query || '';
+    const corsHeaders = { 'Access-Control-Allow-Origin': '*' };
+
+    await page.evaluate(({ url, query: q }) => {
+      const win = window as any;
+      win.__LAST_GRAPHQL_REQUESTS = win.__LAST_GRAPHQL_REQUESTS || [];
+      win.__LAST_GRAPHQL_REQUESTS.push({ url, query: q });
+    }, { url: route.request().url(), query });
+
+    if (query.includes('GetComment')) {
+      await route.fulfill({ contentType: 'application/json', headers: corsHeaders, body: JSON.stringify({ data: { comment: graphData.comment } }) });
+      return;
+    }
+    if (query.includes('GetPost')) {
+      await route.fulfill({ contentType: 'application/json', headers: corsHeaders, body: JSON.stringify({ data: { post: graphData.post } }) });
+      return;
+    }
+    await route.fulfill({ contentType: 'application/json', headers: corsHeaders, body: JSON.stringify({ data: {} }) });
+  });
+};
+
+const setupGreaterWrongPage = async (
+  page: Page,
+  fixture: NativeForumFixture,
+  options: NativeGraphQLOptions = {},
+  pagePath = `/posts/${fixture.postId}/example-post`
+) => {
+  const { host, commentId, postId } = fixture;
+  const pageUrl = `https://${host}${pagePath}`;
+
+  await page.route(pageUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: createGreaterWrongPostHtml({ commentId, postId }),
+    });
+  });
+
+  await mockGreaterWrongGraphQL(page, host, commentId, postId, `Post ${postId}`, options);
+
+  await page.goto(pageUrl);
+  await installGmMocks(page);
+
+  const scriptContent = getScriptContent();
+  await page.evaluate(scriptContent);
+  await page.waitForSelector('#content');
+};
+
+const setupGreaterWrongCommentPermalinkPage = async (
+  page: Page,
+  fixture: NativeForumFixture,
+  options: NativeGraphQLOptions = {},
+  includeCommentId: boolean = true
+) => {
+  const { host, commentId, postId } = fixture;
+  const pageUrl = `https://${host}/posts/${postId}/example-post/comment/${commentId}`;
+
+  await page.route(pageUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: createGreaterWrongCommentPermalinkHtml({ commentId, postId }, includeCommentId),
+    });
+  });
+
+  await mockGreaterWrongGraphQL(page, host, commentId, postId, `Post ${postId}`, options);
+
+  await page.goto(pageUrl);
+  await installGmMocks(page);
+
+  const scriptContent = getScriptContent();
+  await page.evaluate(scriptContent);
+  await page.waitForSelector('#content');
+};
+
+const createGreaterWrongProfileHtml = (
+  { commentId, postId }: Pick<NativeForumFixture, 'commentId' | 'postId'>
+): string => `
+  <!doctype html>
+  <html>
+    <head><meta charset="utf-8" /></head>
+    <body class="theme-default">
+      <div id="content" class="user-page">
+        <h1 class="user-name">Author</h1>
+        <div id="comments" class="comments">
+          <ul class="comment-thread">
+            <li id="comment-${commentId}" class="comment-item depth-odd">
+              <div class="comment" data-post-id="${postId}">
+                <div class="comment-meta">
+                  <a class="author" href="/users/author" data-userid="u1">Author</a>
+                </div>
+                <div class="body-text comment-body">
+                  <p id="gw-profile-comment-body">Profile comment ${commentId}</p>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </body>
+  </html>
+`;
+
+const setupGreaterWrongProfilePage = async (
+  page: Page,
+  fixture: NativeForumFixture,
+  options: NativeGraphQLOptions = {}
+) => {
+  const { host, commentId, postId } = fixture;
+  const pageUrl = `https://${host}/users/author?show=comments`;
+
+  await page.route(pageUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: createGreaterWrongProfileHtml({ commentId, postId }),
+    });
+  });
+
+  await mockGreaterWrongGraphQL(page, host, commentId, postId, `Post ${postId}`, options);
+
+  await page.goto(pageUrl);
+  await installGmMocks(page);
+
+  const scriptContent = getScriptContent();
+  await page.evaluate(scriptContent);
+  await page.waitForSelector('#content');
 };
 
 test.describe('Forum AI Hotkeys', () => {
@@ -633,5 +853,123 @@ test.describe('Forum AI Hotkeys', () => {
 
     const openCount = await page.evaluate(() => ((window as any).__OPEN_TAB_CALLS || []).length);
     expect(openCount).toBe(0);
+  });
+
+  test('[PR-AI-12] GW post page: g sends hovered comment to AI Studio', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'www.greaterwrong.com',
+      commentId: 'c-gw-1',
+      postId: 'p-gw-1',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongPage(page, fixture);
+
+    await page.locator('#gw-comment-body').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="c-gw-1"`);
+    expect(payload).toMatch(new RegExp(`<comment id="c-gw-1"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="p-gw-1"[^>]*is_focal="true"`));
+  });
+
+  test('[PR-AI-12] GW post page: m over post body sends post to Arena Max', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'www.greaterwrong.com',
+      commentId: 'c-gw-2',
+      postId: 'p-gw-2',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongPage(page, fixture);
+
+    await page.locator('#gw-post-body-text').hover();
+    await page.keyboard.press('m');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('arena.ai/max');
+    const payload = (await getStoredPayloadByPrefix(page, 'arena_max_prompt_payload:')) || '';
+    expect(payload).toContain(`<post id="p-gw-2"`);
+    expect(payload).toMatch(new RegExp(`<post id="p-gw-2"[^>]*is_focal="true"`));
+  });
+
+  test('[PR-AI-12] GW comment permalink page: g over comment body sends focal comment thread', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'www.greaterwrong.com',
+      commentId: 'c-gw-permalink',
+      postId: 'p-gw-permalink',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongCommentPermalinkPage(page, fixture);
+
+    await page.locator('#gw-permalink-comment-body').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="c-gw-permalink"`);
+    expect(payload).toMatch(new RegExp(`<comment id="c-gw-permalink"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="p-gw-permalink"[^>]*is_focal="true"`));
+  });
+
+  test('[PR-AI-12] GW permalink comment without container id resolves via /comment/{cid} permalink path', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'www.greaterwrong.com',
+      commentId: 'c-gw-path',
+      postId: 'p-gw-path',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongCommentPermalinkPage(page, fixture, {}, false);
+
+    await page.locator('#gw-permalink-comment-body').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="c-gw-path"`);
+    expect(payload).toMatch(new RegExp(`<comment id="c-gw-path"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="p-gw-path"[^>]*is_focal="true"`));
+  });
+
+  test('[PR-AI-12] EA GW post page: g sends hovered comment to AI Studio via EAF API', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'ea.greaterwrong.com',
+      commentId: 'c-ea-gw-1',
+      postId: 'p-ea-gw-1',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongPage(page, fixture);
+
+    await page.locator('#gw-comment-body').hover();
+    await page.keyboard.press('g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="c-ea-gw-1"`);
+    expect(payload).toMatch(new RegExp(`<comment id="c-ea-gw-1"[^>]*is_focal="true"`));
+    expect(payload).not.toMatch(new RegExp(`<post id="p-ea-gw-1"[^>]*is_focal="true"`));
+
+    const requests = await page.evaluate(() => (window as any).__LAST_GRAPHQL_REQUESTS || []);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((r: { url: string }) => r.url === 'https://forum.effectivealtruism.org/graphql')).toBe(true);
+    const adaptedQueries = requests.map((r: { query: string }) => r.query);
+    expect(adaptedQueries.some((q: string) => q.includes('GetPost') && q.includes('input: $input'))).toBe(true);
+  });
+
+  test('[PR-AI-12] GW profile page: postIdHint resolves from data-post-id when URL has no /posts/ segment', async ({ page }) => {
+    const fixture: NativeForumFixture = {
+      host: 'www.greaterwrong.com',
+      commentId: 'c-gw-profile',
+      postId: 'p-gw-profile',
+      commentClass: 'comment-item',
+    };
+    await setupGreaterWrongProfilePage(page, fixture, { commentPostId: null });
+
+    await page.locator('#gw-profile-comment-body').hover();
+    await page.keyboard.press('Shift+g');
+
+    await expect.poll(async () => page.evaluate(() => (window as any).__LAST_TAB_URL)).toContain('aistudio.google.com');
+    const payload = (await getStoredPayloadByPrefix(page, 'ai_studio_prompt_payload:')) || '';
+    expect(payload).toContain(`<comment id="c-gw-profile"`);
+    expect(payload).toMatch(new RegExp(`<comment id="c-gw-profile"[^>]*is_focal="true"`));
   });
 });

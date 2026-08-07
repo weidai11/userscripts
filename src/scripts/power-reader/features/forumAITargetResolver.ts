@@ -1,10 +1,22 @@
 import type { AISendTarget } from './aiProviderPopupCore';
+import { isGreaterWrongHost } from '../utils/forum';
 
 export interface ForumResolvedAITarget extends AISendTarget {
   containerEl: HTMLElement | null;
 }
 
-const COMMENT_CONTAINER_SELECTORS = ['.comments-node', '.CommentFrame-node'];
+// GreaterWrong-specific selectors are appended only on GreaterWrong hosts so
+// LW/EAF target resolution stays byte-for-byte unchanged. `.post`, `.comment-item`,
+// `.comment-body`, etc. are generic class names that could collide on LW/EAF pages.
+const GW_SELECTORS = {
+  commentContainers: isGreaterWrongHost() ? ['.comment-item'] : [],
+  commentBodies: isGreaterWrongHost() ? ['.comment-body'] : [],
+  postBodies: isGreaterWrongHost() ? ['.post', '.post-body'] : [],
+  postLinkContexts: isGreaterWrongHost() ? ['.post-title-link'] : [],
+  excludedRegions: isGreaterWrongHost() ? ['.page-toolbar', '#bottom-bar'] : [],
+};
+
+const COMMENT_CONTAINER_SELECTORS = ['.comments-node', '.CommentFrame-node', ...GW_SELECTORS.commentContainers];
 const FEED_CARD_SELECTORS = ['.LWPostsItem-postsItem', '.PostsItem2-root', '.PostsItem-root'];
 const COMMENT_BODY_SELECTORS = [
   '.CommentsItem-content',
@@ -12,8 +24,9 @@ const COMMENT_BODY_SELECTORS = [
   '.commentBody',
   '.CommentsItem-body',
   '.CommentFrame-body',
+  ...GW_SELECTORS.commentBodies,
 ];
-const POST_BODY_SELECTORS = ['#postBody', '.PostsPage-postsPage', '.PostsPage-post'];
+const POST_BODY_SELECTORS = ['#postBody', '.PostsPage-postsPage', '.PostsPage-post', ...GW_SELECTORS.postBodies];
 const STRUCTURAL_COMMENT_LINK_CONTEXT_SELECTORS = [
   '.CommentsItem-meta',
   '.CommentsItemMeta-root',
@@ -28,6 +41,7 @@ const STRUCTURAL_POST_LINK_CONTEXT_SELECTORS = [
   '.PostsItem2-title',
   '.PostsItem-title',
   '.PostsPageTitle-root',
+  ...GW_SELECTORS.postLinkContexts,
   'h1',
   'h2',
 ];
@@ -47,6 +61,7 @@ const EXCLUDED_REGION_SELECTORS = [
   '.UsersMenu-root',
   '.SearchBar-root',
   '.GlobalSidebar-root',
+  ...GW_SELECTORS.excludedRegions,
 ];
 const COMMENT_PERMALINK_ROOT_SELECTOR = '.CommentPermalink-root';
 
@@ -81,11 +96,20 @@ const extractCommentId = (value: string | null | undefined): string | null => {
   return normalized;
 };
 
+const COMMENT_ID_PATH_PATTERN = /\/(?:comment|answer)\/([A-Za-z0-9_-]{2,128})\/?$/i;
+
 const parseCommentIdFromHref = (href: string): string | null => {
   try {
     const url = new URL(href, window.location.origin);
     const commentId = url.searchParams.get('commentId');
     if (commentId) return extractCommentId(commentId);
+
+    // `/comment/{cid}` / `/answer/{cid}` permalink path forms are GreaterWrong-specific;
+    // keep LW/EAF acceptance surface byte-for-byte unchanged.
+    if (isGreaterWrongHost()) {
+      const pathMatch = url.pathname.match(COMMENT_ID_PATH_PATTERN);
+      if (pathMatch?.[1]) return extractCommentId(pathMatch[1]);
+    }
 
     const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
     const hashMatch = hash.match(/(?:^|[/?&])comment(?:id)?[-_:/=]([A-Za-z0-9_-]{2,128})(?:$|[/?&])/i);
@@ -99,7 +123,13 @@ const parseCommentIdFromHref = (href: string): string | null => {
 const getCommentIdFromCurrentUrl = (): string | null => {
   try {
     const url = new URL(window.location.href);
-    return extractCommentId(url.searchParams.get('commentId'));
+    const fromParam = extractCommentId(url.searchParams.get('commentId'));
+    if (fromParam) return fromParam;
+    if (isGreaterWrongHost()) {
+      const pathMatch = url.pathname.match(COMMENT_ID_PATH_PATTERN);
+      if (pathMatch?.[1]) return extractCommentId(pathMatch[1]);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -136,6 +166,9 @@ const getStructuralCommentLinkId = (anchor: HTMLAnchorElement): string | null =>
 
 const isStructuralPostLink = (anchor: HTMLAnchorElement): boolean => {
   if (!parsePostIdFromAnchor(anchor)) return false;
+  // On GreaterWrong, a `/posts/` link inside a comment container resolves to the
+  // enclosing comment (SPEC PR-AI-12). LW/EAF resolution stays unchanged.
+  if (isGreaterWrongHost() && getCommentContainer(anchor)) return false;
   if (isInBodyContent(anchor)) return false;
   return !!anchor.closest(STRUCTURAL_POST_LINK_CONTEXT_SELECTOR);
 };
@@ -149,6 +182,14 @@ const getPostIdHintForElement = (el: HTMLElement): string | null => {
   const nearestPostAnchor = el.closest('a[href*="/posts/"]') as HTMLAnchorElement | null;
   const fromAnchor = nearestPostAnchor ? parsePostIdFromAnchor(nearestPostAnchor) : null;
   if (fromAnchor) return fromAnchor;
+
+  // GreaterWrong comments carry `data-post-id` (e.g. on pages whose URL has no /posts/ segment).
+  // It sits on the inner `.comment` div, which may be the element itself or a descendant of it.
+  if (isGreaterWrongHost()) {
+    const dataPostId = el.closest('[data-post-id]')?.getAttribute('data-post-id')
+      ?? el.querySelector('.comment[data-post-id]')?.getAttribute('data-post-id');
+    if (dataPostId && COMMENT_ID_PATTERN.test(dataPostId.trim())) return dataPostId.trim();
+  }
 
   const card = el.closest(FEED_CARD_SELECTOR);
   if (card) {
@@ -242,7 +283,9 @@ export const resolveForumAITargetFromElement = (rawEl: EventTarget | null): Foru
     }
   }
 
-  if (anchor && !isInBodyContent(anchor) && !isInExcludedRegion(anchor)) {
+  // On GreaterWrong, a `/posts/` link inside a comment container resolves to the
+  // enclosing comment (SPEC PR-AI-12). LW/EAF resolution stays unchanged.
+  if (anchor && !isInBodyContent(anchor) && !isInExcludedRegion(anchor) && (!isGreaterWrongHost() || !getCommentContainer(anchor))) {
     const postId = parsePostIdFromAnchor(anchor);
     if (postId) {
       const container = resolvePostContainer(anchor) || anchor;

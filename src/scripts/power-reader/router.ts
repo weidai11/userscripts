@@ -46,13 +46,20 @@ export const getRoute = (): RouteResult => {
     return { type: 'arena-max' };
   }
 
-  // LessWrong / EA Forum
+  // LessWrong / EA Forum / GreaterWrong
   const isForumDomain =
     isHost('lesswrong.com') ||
-    isHost('forum.effectivealtruism.org');
+    isHost('forum.effectivealtruism.org') ||
+    isHost('greaterwrong.com');
 
   if (!isForumDomain) {
     return { type: 'skip' };
+  }
+
+  // GreaterWrong is an alternative frontend for LW content. Only AI handoff
+  // features apply there; the reader/archive modes are LW/EAF-specific.
+  if (isHost('greaterwrong.com')) {
+    return { type: 'forum-injection' };
   }
 
   // /archive?username=...

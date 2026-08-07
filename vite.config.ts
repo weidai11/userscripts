@@ -20,6 +20,8 @@ const scripts: Record<string, { name: string; match: string[]; entry: string }> 
         match: [
             'https://www.lesswrong.com/*',
             'https://forum.effectivealtruism.org/*',
+            'https://www.greaterwrong.com/*',
+            'https://ea.greaterwrong.com/*',
             'https://aistudio.google.com/*',
             'https://arena.ai/*',
             'https://www.arena.ai/*'

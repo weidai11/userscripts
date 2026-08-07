@@ -641,6 +641,7 @@ Both comment queries use the same fragment fields as `GET_ALL_RECENT_COMMENTS` (
 - **[PR-AI-07]** **URL Context**: Automatically enables the "URL context" tool in AI Studio.
 - **[PR-AI-08]** **Arena Automation**: For Arena.ai, the script MUST inject into the "Ask anything..." textarea and click the send button. If 2 seconds after submission the URL path still starts with `/max`, it MUST retry submission once. It MUST handle Cloudflare challenges by allowing the user to manually verify if blocked.
 - **[PR-AI-09]** **Native Forum Handoff**: On native LW/EAF pages (non-`/reader`), `g/G/m/M` hotkeys MUST use the same payload + tab handoff pipeline as reader mode, resolving hovered comment/post targets from forum DOM/permalink context.
+- **[PR-AI-12]** **GreaterWrong Handoff**: On GreaterWrong pages (`www.greaterwrong.com`, `ea.greaterwrong.com`), `g/G/m/M` hotkeys MUST use the same payload + tab handoff pipeline as reader mode, resolving hovered comment/post targets from GreaterWrong DOM/URL structure (`.comment-item` containers, `.comment-meta`/`.comment-body` comment parts, `main.post`/`.post-body` post parts, `/posts/{id}/{slug}` URLs with `#comment-`/`/comment/`/`/answer/` permalink forms). Links inside comment bodies or comment meta MUST resolve to the enclosing comment, not the linked post. On `ea.greaterwrong.com` the GraphQL client MUST use the EA Forum legacy API (`forum.effectivealtruism.org/graphql` with the legacy query adapter).
 
 ---
 

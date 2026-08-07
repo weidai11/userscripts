@@ -32,7 +32,7 @@ import { initReactionTooltips } from './features/reactionTooltips';
 import { setupHeaderInjection } from './features/headerInjection';
 import { setupForumAIHotkeys } from './features/forumAIHotkeys';
 import { initArchive } from './archive/index';
-import { getForumMeta } from './utils/forum';
+import { getForumMeta, isGreaterWrongHost } from './utils/forum';
 import { setupSyncUiConsistencyLayer } from './features/syncUiConsistency';
 import { cleanupStaleAIPayloadKeys } from './utils/aiPayloadStorage';
 
@@ -55,7 +55,11 @@ const initReader = async (): Promise<void> => {
 
 
   if (route.type === 'forum-injection') {
-    setupHeaderInjection();
+    // GreaterWrong only gets the AI handoff hotkeys; header injection targets
+    // the LW/EAF React header, which does not exist there.
+    if (!isGreaterWrongHost()) {
+      setupHeaderInjection();
+    }
     setupForumAIHotkeys(getState());
     return;
   }
