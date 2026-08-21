@@ -17,6 +17,7 @@ Userscripts for LessWrong and EA Forum
 10. Run `npm test`
 11. Run `jj bookmark set main`
 12. Run `jj git push` (don't run this without explicit user direction)
+13. Run `jj new` after pushing so subsequent changes don't land on the pushed commit.
 
 # Key Commands
 - Build: `npm run build:power-reader`
