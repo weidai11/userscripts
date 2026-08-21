@@ -206,7 +206,14 @@ const loadAndRender = async (currentUserSnapshot?: unknown | null): Promise<void
 };
 
 // Start the reader
-initReader();
+initReader().catch((e) => {
+  Logger.error('Initialization failed:', e);
+  const root = getRoot();
+  if (root) {
+    root.innerHTML = `<div class="pr-error">Error loading reader. Check console.</div>`;
+  }
+  signalReady();
+});
 
 // Export for external access (tests, etc.)
 export { getState } from './state';

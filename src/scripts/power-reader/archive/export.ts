@@ -149,7 +149,9 @@ export const buildArchiveMarkdown = (payload: ArchiveExportPayload): string => {
     const date = item.postedAt || 'unknown';
     const score = Number.isFinite(item.baseScore) ? item.baseScore : 0;
     const url = formatItemUrl(item);
-    const author = item.user?.displayName || item.user?.username || item.author || 'unknown';
+    const author = item.user?.displayName || item.user?.username
+      || (isPostItem(item) ? '' : item.author)
+      || 'unknown';
     const bodyText = getMarkdownOrFallbackText(item);
 
     lines.push(`## [${type.toUpperCase()}] ${escapeMarkdownInline(title)}`);

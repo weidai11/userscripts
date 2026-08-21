@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name       LW Power Reader
 // @namespace  npm/vite-plugin-monkey
-// @version    1.2.734
+// @version    1.2.735
 // @author     Wei Dai
 // @match      https://www.lesswrong.com/*
 // @match      https://forum.effectivealtruism.org/*
@@ -1901,7 +1901,7 @@ reset: () => {
     const html = `
     <head>
       <meta charset="UTF-8">
-      <title>Less Wrong: Power Reader v${"1.2.734"}</title>
+      <title>Less Wrong: Power Reader v${"1.2.735"}</title>
       <style>${STYLES}</style>
     </head>
     <body>
@@ -1947,7 +1947,10 @@ reset: () => {
     GetPost: { type: "single", collection: "post", inputType: "SinglePostInput", idVar: "id" },
     GetComment: { type: "single", collection: "comment", inputType: "SingleCommentInput", idVar: "id" },
     GetUser: { type: "single", collection: "user", inputType: "SingleUserInput", idVar: "id" }
-  };
+
+
+
+};
   const legacyQueryCache = new Map();
   function buildLegacyQuery(query, adapter) {
     const cached = legacyQueryCache.get(query);
@@ -4658,10 +4661,10 @@ gridPrimary: ["agree", "disagree", "important", "dontUnderstand", "plus", "shrug
         <span class="pr-reaction-chip ${userVoted ? "voted" : ""}" 
               data-action="reaction-vote" 
               data-id="${itemId}" 
-              data-reaction-name="${reaction.name}"
+              data-reaction-name="${escapeHtml$1(reaction.name)}"
               ${labelAttr} ${descAttr} ${usersAttr}>
           <span class="pr-reaction-icon" style="overflow:visible">
-             <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
+             <img src="${reaction.svg}" alt="${escapeHtml$1(reaction.name)}" style="${imgStyle}">
           </span>
           <span class="pr-reaction-count">${countText}</span>
         </span>
@@ -4834,7 +4837,7 @@ reactionsHtml,
               title="${authorUpTitle}">&#8593;</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl || "#"}" target="_blank"><time datetime="${escapeHtml$1(postedAt)}">${timeStr}</time></a>
+        <a href="${escapeHtml$1(item.pageUrl || "#")}" target="_blank"><time datetime="${escapeHtml$1(postedAt)}">${timeStr}</time></a>
       </span>
       ${children}
     </div>
@@ -6114,6 +6117,7 @@ refresh() {
       });
       this.container.setAttribute("data-author", getAuthorHandle(post, ""));
       const newHeader = this.container.querySelector(".pr-post-header");
+      if (!newHeader) return;
       const titleH2 = newHeader.querySelector("h2");
       const authorLink = newHeader.querySelector(".pr-author");
       const postEl = currentPost || document.querySelector(`.pr-post[data-id="${postId}"]`);
@@ -6178,14 +6182,21 @@ refresh() {
     stickyHeader.init();
   };
   const getStickyHeader = () => stickyHeader;
+  let installed$1 = false;
+  let activeState = null;
   const setupInlineReactions = (state2) => {
+    activeState = state2;
+    if (installed$1) return;
+    installed$1 = true;
     document.addEventListener("selectionchange", () => {
+      const state22 = activeState;
+      if (!state22) return;
       const selection = window.getSelection();
       const existingBtn = document.getElementById("pr-inline-react-btn");
       if (!selection || selection.isCollapsed || !selection.toString().trim()) {
         if (existingBtn && !document.getElementById("pr-global-reaction-picker")?.classList.contains("visible")) {
           existingBtn.remove();
-          state2.currentSelection = null;
+          state22.currentSelection = null;
         }
         return;
       }
@@ -6197,7 +6208,7 @@ refresh() {
         return;
       }
       const text = selection.toString().slice(0, 500);
-      state2.currentSelection = { text, range };
+      state22.currentSelection = { text, range };
       if (!existingBtn) {
         const btn = document.createElement("div");
         btn.id = "pr-inline-react-btn";
@@ -6216,7 +6227,10 @@ refresh() {
       }
     });
   };
+  let installed = false;
   const setupExternalLinks = () => {
+    if (installed) return;
+    installed = true;
     document.addEventListener("click", (e) => {
       const target = e.target;
       const link = target.closest("a");
@@ -6249,12 +6263,22 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     scrollTimeout = null;
     resumeProcessTimeout = null;
     scrollListenerAdded = false;
+    initialProcessTimeout = null;
+    initialStateTimeout = null;
     isCheckingForMore = false;
     lastCheckedIso = null;
     recheckTimer = null;
     countdownSeconds = 0;
     hasAdvancedThisBatch = false;
     hasSeenScrollEvent = false;
+    destroyed = false;
+    handleScrollBound = () => this.handleScroll();
+    scheduleResumeProcessingBound = () => this.scheduleResumeProcessing();
+    handleVisibilityChangeBound = () => {
+      if (!document.hidden) {
+        this.scheduleResumeProcessing();
+      }
+    };
     constructor(scrollMarkDelay, commentsDataGetter, postsDataGetter = () => [], initialBatchNewestDateGetter = () => null) {
       this.scrollMarkDelay = scrollMarkDelay;
       this.commentsDataGetter = commentsDataGetter;
@@ -6263,18 +6287,58 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
     }
     init() {
       if (this.scrollListenerAdded) return;
-      window.addEventListener("scroll", () => this.handleScroll(), { passive: true });
-      window.addEventListener("focus", () => this.scheduleResumeProcessing(), { passive: true });
-      window.addEventListener("pageshow", () => this.scheduleResumeProcessing(), { passive: true });
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-          this.scheduleResumeProcessing();
-        }
-      }, { passive: true });
+      window.addEventListener("scroll", this.handleScrollBound, { passive: true });
+      window.addEventListener("focus", this.scheduleResumeProcessingBound, { passive: true });
+      window.addEventListener("pageshow", this.scheduleResumeProcessingBound, { passive: true });
+      document.addEventListener("visibilitychange", this.handleVisibilityChangeBound, { passive: true });
       this.scrollListenerAdded = true;
       this.hasAdvancedThisBatch = false;
-      setTimeout(() => this.processScroll(), 500);
-      setTimeout(() => this.checkInitialState(), 1e3);
+      this.initialProcessTimeout = window.setTimeout(() => {
+        this.initialProcessTimeout = null;
+        this.processScroll();
+      }, 500);
+      this.initialStateTimeout = window.setTimeout(() => {
+        this.initialStateTimeout = null;
+        this.checkInitialState();
+      }, 1e3);
+    }
+    destroy() {
+      this.destroyed = true;
+      if (this.scrollListenerAdded) {
+        window.removeEventListener("scroll", this.handleScrollBound);
+        window.removeEventListener("focus", this.scheduleResumeProcessingBound);
+        window.removeEventListener("pageshow", this.scheduleResumeProcessingBound);
+        document.removeEventListener("visibilitychange", this.handleVisibilityChangeBound);
+        this.scrollListenerAdded = false;
+      }
+      for (const timeoutId of Object.values(this.pendingReadTimeouts)) {
+        window.clearTimeout(timeoutId);
+      }
+      this.pendingReadTimeouts = {};
+      if (this.scrollTimeout !== null) {
+        window.clearTimeout(this.scrollTimeout);
+        this.scrollTimeout = null;
+      }
+      if (this.resumeProcessTimeout !== null) {
+        window.clearTimeout(this.resumeProcessTimeout);
+        this.resumeProcessTimeout = null;
+      }
+      if (this.initialProcessTimeout !== null) {
+        window.clearTimeout(this.initialProcessTimeout);
+        this.initialProcessTimeout = null;
+      }
+      if (this.initialStateTimeout !== null) {
+        window.clearTimeout(this.initialStateTimeout);
+        this.initialStateTimeout = null;
+      }
+      if (this.recheckTimer !== null) {
+        window.clearInterval(this.recheckTimer);
+        this.recheckTimer = null;
+      }
+      const msgEl = document.getElementById("pr-bottom-message");
+      if (msgEl) {
+        msgEl.onclick = null;
+      }
     }
     scheduleResumeProcessing() {
       if (this.resumeProcessTimeout !== null) {
@@ -6439,6 +6503,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       this.checkServerForMore(nextLoadFrom);
     }
     startRecheckTimer(afterIso) {
+      if (this.destroyed) return;
       if (this.recheckTimer) clearInterval(this.recheckTimer);
       this.countdownSeconds = 60;
       this.updateCountdownMessage(afterIso);
@@ -6496,6 +6561,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
           }, RECENT_COMMENTS_PARTIAL_QUERY_OPTIONS);
           hasMore = (res?.comments?.results?.length || 0) > 0;
         }
+        if (this.destroyed) return;
         if (hasMore) {
           msgEl.textContent = "New comments available! Click here to reload.";
           msgEl.classList.add("has-more");
@@ -6507,6 +6573,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
         }
       } catch (e) {
         Logger.error("Failed to check for more comments:", e);
+        if (this.destroyed) return;
         msgEl.textContent = "Failed to check server. Click to retry.";
         msgEl.onclick = () => this.checkServerForMore(afterIso, true);
       } finally {
@@ -6517,6 +6584,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
   let readTracker = null;
   const setupScrollTracking = (commentsGetter, postsGetter, initialBatchNewestDateGetter = () => null) => {
     if (readTracker) {
+      readTracker.destroy();
       readTracker = null;
     }
     readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);
@@ -7808,10 +7876,17 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
       return { acquired: true, value };
     }
     if (!acquired) return { acquired: false };
+    let heartbeat = null;
     try {
+      heartbeat = window.setInterval(() => {
+        tryAcquireLocalStorageLock(lockName, token, lockTtlMs);
+      }, 3e3);
       const value = await fn();
       return { acquired: true, value };
     } finally {
+      if (heartbeat !== null) {
+        window.clearInterval(heartbeat);
+      }
       releaseLocalStorageLock(lockName, token);
     }
   }
@@ -8281,6 +8356,7 @@ toleratedErrorPatterns: [/Unable to find document for comment:/i, /commentGetPag
               readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
             } catch (readError) {
               logBackendError("sync push permission-denied retry read failed", readError);
+              return false;
             }
             continue;
           }
@@ -9268,7 +9344,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     let html = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.734"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.735"}</small></h1>
       <div class="pr-status">
         📆 ${startDate} → ${endDate}
         · 🔴 <span id="pr-unread-count">${unreadItemCount}</span> unread
@@ -9448,7 +9524,7 @@ currentUserSnapshot: void 0
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.734"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Welcome to Power Reader! <small style="font-size: 0.6em; color: #888;">v${"1.2.735"}</small></h1>
     </div>
     <div class="pr-setup">
       <p>Select a starting date to load comments from, or leave blank to load the most recent ${CONFIG.loadMax} comments.</p>
@@ -9775,6 +9851,8 @@ currentUserSnapshot: void 0
       const res = await executeVote(documentId, holdTargetState, config.kind, state2, targetDoc);
       if (res) {
         syncVoteToState(state2, documentId, res);
+      } else {
+        applyRestingVoteClasses(action, target, currentVoteStr);
       }
     }, 500);
     const mouseUpHandler = async () => {
@@ -9785,13 +9863,15 @@ currentUserSnapshot: void 0
       const res = await executeVote(documentId, clickTargetState, config.kind, state2, targetDoc);
       if (res) {
         syncVoteToState(state2, documentId, res);
+      } else {
+        applyRestingVoteClasses(action, target, currentVoteStr);
       }
     };
     const mouseLeaveHandler = () => {
       if (committed) return;
       clearTimeout(timer);
       cleanup();
-      clearVoteClasses(target);
+      applyRestingVoteClasses(action, target, currentVoteStr);
     };
     target.addEventListener("mouseup", mouseUpHandler);
     target.addEventListener("mouseleave", mouseLeaveHandler);
@@ -9811,6 +9891,27 @@ currentUserSnapshot: void 0
   };
   const clearVoteClasses = (target) => {
     target.classList.remove("active-up", "active-down", "agree-active", "disagree-active", "strong-vote");
+  };
+  const applyRestingVoteClasses = (action, target, voteStr) => {
+    clearVoteClasses(target);
+    switch (action) {
+      case "karma-up":
+        if (voteStr === "smallUpvote" || voteStr === "bigUpvote") target.classList.add("active-up");
+        if (voteStr === "bigUpvote") target.classList.add("strong-vote");
+        break;
+      case "karma-down":
+        if (voteStr === "smallDownvote" || voteStr === "bigDownvote") target.classList.add("active-down");
+        if (voteStr === "bigDownvote") target.classList.add("strong-vote");
+        break;
+      case "agree":
+        if (voteStr === "smallUpvote" || voteStr === "bigUpvote" || voteStr === "agree") target.classList.add("agree-active");
+        if (voteStr === "bigUpvote") target.classList.add("strong-vote");
+        break;
+      case "disagree":
+        if (voteStr === "smallDownvote" || voteStr === "bigDownvote" || voteStr === "disagree") target.classList.add("disagree-active");
+        if (voteStr === "bigDownvote") target.classList.add("strong-vote");
+        break;
+    }
   };
   const executeVote = async (documentId, targetState, kind, state2, document2) => {
     if (!state2.currentUserId) {
@@ -10182,6 +10283,18 @@ currentCommentId = null;
         this.closeHandler = null;
       }
       this.closeHandler = (e) => {
+        if (!picker.isConnected) {
+          if (this.closeHandler) {
+            document.removeEventListener("mousedown", this.closeHandler);
+            this.closeHandler = null;
+          }
+          this.currentSelection = null;
+          this.activeTriggerButton = null;
+          this.currentCommentId = null;
+          this.activeReactions = [];
+          this.reactionByName.clear();
+          return;
+        }
         if (!button.contains(e.target) && !picker.contains(e.target)) {
           picker?.classList.remove("visible");
           if (picker) {
@@ -13795,9 +13908,11 @@ getPromptPrefix: getAIStudioPrefix,
     }
     return score;
   };
-  const openDB = () => {
+  let dbPromise = null;
+  const openDBOnce = () => {
     return new Promise((resolve, reject) => {
       const request2 = indexedDB.open(DB_NAME, DB_VERSION);
+      let settled = false;
       request2.onupgradeneeded = (event) => {
         const db = event.target.result;
         if (!db.objectStoreNames.contains(STORE_ITEMS)) {
@@ -13816,8 +13931,39 @@ getPromptPrefix: getAIStudioPrefix,
           contextualStore.createIndex("lastAccessedAt", "lastAccessedAt", { unique: false });
         }
       };
-      request2.onsuccess = () => resolve(request2.result);
-      request2.onerror = () => reject(request2.error);
+      request2.onsuccess = () => {
+        if (settled) {
+          request2.result.close();
+          return;
+        }
+        settled = true;
+        const db = request2.result;
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        resolve(db);
+      };
+      request2.onerror = () => {
+        if (settled) return;
+        settled = true;
+        reject(request2.error);
+      };
+      request2.onblocked = () => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`IndexedDB upgrade blocked for "${DB_NAME}": close other tabs and retry.`));
+      };
+    });
+  };
+  const openDB = () => {
+    const current = dbPromise ?? openDBOnce();
+    dbPromise = current;
+    return current.catch((e) => {
+      if (dbPromise === current) {
+        dbPromise = null;
+      }
+      throw e;
     });
   };
   const saveArchiveData = async (username, items, watermarks) => {
@@ -14166,7 +14312,7 @@ getPromptPrefix: getAIStudioPrefix,
       const date = item.postedAt || "unknown";
       const score = Number.isFinite(item.baseScore) ? item.baseScore : 0;
       const url = formatItemUrl(item);
-      const author = item.user?.displayName || item.user?.username || item.author || "unknown";
+      const author = item.user?.displayName || item.user?.username || (isPostItem(item) ? "" : item.author) || "unknown";
       const bodyText = getMarkdownOrFallbackText(item);
       lines.push(`## [${type.toUpperCase()}] ${escapeMarkdownInline(title)}`);
       lines.push("");
@@ -16069,7 +16215,7 @@ getPromptPrefix: getAIStudioPrefix,
       const bodyText = stripHtmlTags(item.htmlBody || "");
       title = extractSnippet(bodyText, INDEX_SNIPPET_MAX_LEN, snippetTerms, snippetPattern);
     }
-    const context = isPost2 ? "Post" : `Reply to ${getInterlocutorName(item)}`;
+    const context = isPost2 ? "Post" : `Reply to ${escapeHtml$1(getInterlocutorName(item))}`;
     const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : "";
     return `
         <div class="pr-archive-index-item pr-item" data-id="${item._id}" data-action="expand-index-item" style="cursor: pointer;">
@@ -17706,7 +17852,7 @@ sortCanonicalItems() {
     `;
       root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.734"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: User Archive: ${escapeHtml$1(username)} <small style="font-size: 0.6em; color: #888;">v${"1.2.735"}</small></h1>
       <div class="pr-status" id="archive-status">Checking local database...</div>
     </div>
     
@@ -18732,6 +18878,11 @@ sortCanonicalItems() {
           renderFacets(result.items, result.canonicalQuery, result.resolvedScope, contextItems.length, requestId);
           updateResetButton();
           const renderOptions = getRenderOptionsForQuery(currentUi.query);
+          if (activeRenderController) {
+            activeRenderController.abort();
+          }
+          const renderController = new AbortController();
+          activeRenderController = renderController;
           const totalItems = activeItems.length;
           if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
             showRenderCountDialog(totalItems, async (count) => {
@@ -18741,6 +18892,7 @@ sortCanonicalItems() {
               setArchiveRenderProgress(0);
               await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, {
                 ...renderOptions,
+                abortSignal: renderController.signal,
                 onProgress: (percent) => {
                   setArchiveRenderProgress(percent);
                   if (!hooksPrimed2 && percent > 0) {
@@ -18749,6 +18901,9 @@ sortCanonicalItems() {
                   }
                 }
               });
+              if (renderController.signal.aborted) {
+                return;
+              }
               setArchiveRenderProgress(100);
               if (!hooksPrimed2) {
                 runPostRenderHooks();
@@ -18756,10 +18911,6 @@ sortCanonicalItems() {
             });
             return;
           }
-          if (activeRenderController) {
-            activeRenderController.abort();
-          }
-          activeRenderController = new AbortController();
           if (pendingRenderCount !== null) {
             updateRenderLimit(pendingRenderCount);
           }
@@ -18769,7 +18920,7 @@ sortCanonicalItems() {
           setArchiveRenderProgress(0);
           await renderArchiveFeed(feedEl, activeItems, state2.viewMode, uiHost.getReaderState(), state2.sortBy, {
             ...renderOptions,
-            abortSignal: activeRenderController.signal,
+            abortSignal: renderController.signal,
             onProgress: (percent) => {
               perfMetrics.renderPercent = percent;
               perfMetrics.renderMs = performance.now() - renderStart;
@@ -18781,7 +18932,7 @@ sortCanonicalItems() {
               }
             }
           });
-          if (activeRenderController.signal.aborted) {
+          if (renderController.signal.aborted) {
             return;
           }
           perfMetrics.renderMs = performance.now() - renderStart;
@@ -20263,7 +20414,7 @@ sortCanonicalItems() {
     const { forumLabel, forumHomeUrl } = getForumMeta();
     root.innerHTML = `
     <div class="pr-header">
-      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.734"}</small></h1>
+      <h1><a href="${forumHomeUrl}" target="_blank" rel="noopener noreferrer" class="pr-site-home-link">${forumLabel}</a>: Power Reader <small style="font-size: 0.6em; color: #888;">v${"1.2.735"}</small></h1>
       <div class="pr-status">Fetching comments...</div>
     </div>
   `;
@@ -20310,6 +20461,13 @@ sortCanonicalItems() {
       signalReady();
     }
   };
-  initReader();
+  initReader().catch((e) => {
+    Logger.error("Initialization failed:", e);
+    const root = getRoot();
+    if (root) {
+      root.innerHTML = `<div class="pr-error">Error loading reader. Check console.</div>`;
+    }
+    signalReady();
+  });
 
 })();

@@ -18,6 +18,7 @@ export const setupScrollTracking = (
   initialBatchNewestDateGetter: () => string | null = () => null,
 ): void => {
   if (readTracker) {
+    readTracker.destroy();
     readTracker = null;
   }
   readTracker = new ReadTracker(CONFIG.scrollMarkDelay, commentsGetter, postsGetter, initialBatchNewestDateGetter);

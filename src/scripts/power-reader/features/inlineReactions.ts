@@ -5,11 +5,21 @@
 
 import type { ReaderState } from '../state';
 
+let installed = false;
+// Mutable binding so a re-init (e.g. archive DOM-recovery restart) re-points
+// the single listener at the latest state instead of closing over a stale one.
+let activeState: ReaderState | null = null;
+
 /**
  * Setup inline reactions on text selection
  */
 export const setupInlineReactions = (state: ReaderState): void => {
+  activeState = state;
+  if (installed) return;
+  installed = true;
   document.addEventListener('selectionchange', () => {
+    const state = activeState;
+    if (!state) return;
     const selection = window.getSelection();
     const existingBtn = document.getElementById('pr-inline-react-btn');
 

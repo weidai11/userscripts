@@ -3,10 +3,14 @@
  * Ensures external links open in new tabs
  */
 
+let installed = false;
+
 /**
  * Setup external link handling
  */
 export const setupExternalLinks = (): void => {
+  if (installed) return;
+  installed = true;
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     const link = target.closest('a');

@@ -34,12 +34,22 @@ export class ReadTracker {
     private scrollTimeout: number | null = null;
     private resumeProcessTimeout: number | null = null;
     private scrollListenerAdded: boolean = false;
+    private initialProcessTimeout: number | null = null;
+    private initialStateTimeout: number | null = null;
     private isCheckingForMore: boolean = false;
     private lastCheckedIso: string | null = null;
     private recheckTimer: number | null = null;
     private countdownSeconds: number = 0;
     private hasAdvancedThisBatch: boolean = false;
     private hasSeenScrollEvent: boolean = false;
+    private destroyed: boolean = false;
+    private handleScrollBound = () => this.handleScroll();
+    private scheduleResumeProcessingBound = () => this.scheduleResumeProcessing();
+    private handleVisibilityChangeBound = () => {
+        if (!document.hidden) {
+            this.scheduleResumeProcessing();
+        }
+    };
     constructor(
         scrollMarkDelay: number,
         commentsDataGetter: () => { postedAt: string, _id: string }[],
@@ -54,23 +64,65 @@ export class ReadTracker {
 
     public init() {
         if (this.scrollListenerAdded) return;
-        window.addEventListener('scroll', () => this.handleScroll(), { passive: true });
-        window.addEventListener('focus', () => this.scheduleResumeProcessing(), { passive: true });
-        window.addEventListener('pageshow', () => this.scheduleResumeProcessing(), { passive: true });
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                this.scheduleResumeProcessing();
-            }
-        }, { passive: true });
+        window.addEventListener('scroll', this.handleScrollBound, { passive: true });
+        window.addEventListener('focus', this.scheduleResumeProcessingBound, { passive: true });
+        window.addEventListener('pageshow', this.scheduleResumeProcessingBound, { passive: true });
+        document.addEventListener('visibilitychange', this.handleVisibilityChangeBound, { passive: true });
         this.scrollListenerAdded = true;
         this.hasAdvancedThisBatch = false;
 
-        // [PR-READ-02] Initial processing pass: Handle cases where content is 
+        // [PR-READ-02] Initial processing pass: Handle cases where content is
         // already visible or less than one screen (no scroll event will fire)
-        setTimeout(() => this.processScroll(), 500);
+        this.initialProcessTimeout = window.setTimeout(() => {
+            this.initialProcessTimeout = null;
+            this.processScroll();
+        }, 500);
 
         // Initial check for session advancement if all items were already read
-        setTimeout(() => this.checkInitialState(), 1000);
+        this.initialStateTimeout = window.setTimeout(() => {
+            this.initialStateTimeout = null;
+            this.checkInitialState();
+        }, 1000);
+    }
+
+    public destroy() {
+        this.destroyed = true;
+        if (this.scrollListenerAdded) {
+            window.removeEventListener('scroll', this.handleScrollBound);
+            window.removeEventListener('focus', this.scheduleResumeProcessingBound);
+            window.removeEventListener('pageshow', this.scheduleResumeProcessingBound);
+            document.removeEventListener('visibilitychange', this.handleVisibilityChangeBound);
+            this.scrollListenerAdded = false;
+        }
+        for (const timeoutId of Object.values(this.pendingReadTimeouts)) {
+            window.clearTimeout(timeoutId);
+        }
+        this.pendingReadTimeouts = {};
+        if (this.scrollTimeout !== null) {
+            window.clearTimeout(this.scrollTimeout);
+            this.scrollTimeout = null;
+        }
+        if (this.resumeProcessTimeout !== null) {
+            window.clearTimeout(this.resumeProcessTimeout);
+            this.resumeProcessTimeout = null;
+        }
+        if (this.initialProcessTimeout !== null) {
+            window.clearTimeout(this.initialProcessTimeout);
+            this.initialProcessTimeout = null;
+        }
+        if (this.initialStateTimeout !== null) {
+            window.clearTimeout(this.initialStateTimeout);
+            this.initialStateTimeout = null;
+        }
+        if (this.recheckTimer !== null) {
+            window.clearInterval(this.recheckTimer);
+            this.recheckTimer = null;
+        }
+        // A destroyed tracker must not keep driving the bottom message
+        const msgEl = document.getElementById('pr-bottom-message');
+        if (msgEl) {
+            msgEl.onclick = null;
+        }
     }
 
     private scheduleResumeProcessing() {
@@ -282,6 +334,7 @@ export class ReadTracker {
     }
 
     private startRecheckTimer(afterIso: string) {
+        if (this.destroyed) return;
         if (this.recheckTimer) clearInterval(this.recheckTimer);
 
         this.countdownSeconds = 60;
@@ -350,6 +403,9 @@ export class ReadTracker {
                 hasMore = (res?.comments?.results?.length || 0) > 0;
             }
 
+            // The tracker may have been destroyed while the request was in flight
+            if (this.destroyed) return;
+
             if (hasMore) {
                 msgEl.textContent = 'New comments available! Click here to reload.';
                 msgEl.classList.add('has-more');
@@ -361,6 +417,7 @@ export class ReadTracker {
             }
         } catch (e) {
             Logger.error('Failed to check for more comments:', e);
+            if (this.destroyed) return;
             msgEl.textContent = 'Failed to check server. Click to retry.';
             msgEl.onclick = () => this.checkServerForMore(afterIso, true);
         } finally {

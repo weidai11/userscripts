@@ -146,11 +146,16 @@ const getCompletenessScore = (item: ContextualItem): number => {
 };
 
 /**
- * Open the IndexedDB database
+ * Open the IndexedDB database.
+ * A singleton connection is reused across operations to avoid accumulating
+ * one connection per call.
  */
-const openDB = (): Promise<IDBDatabase> => {
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+const openDBOnce = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
@@ -177,8 +182,43 @@ const openDB = (): Promise<IDBDatabase> => {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      // If onblocked already rejected this promise, don't leak the connection.
+      if (settled) {
+        request.result.close();
+        return;
+      }
+      settled = true;
+      const db = request.result;
+      // Yield our connection when another tab needs a version upgrade,
+      // so the new singleton is opened fresh on next use.
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    request.onerror = () => {
+      if (settled) return;
+      settled = true;
+      reject(request.error);
+    };
+    request.onblocked = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`IndexedDB upgrade blocked for "${DB_NAME}": close other tabs and retry.`));
+    };
+  });
+};
+
+const openDB = (): Promise<IDBDatabase> => {
+  const current = dbPromise ?? openDBOnce();
+  dbPromise = current;
+  return current.catch((e) => {
+    if (dbPromise === current) {
+      dbPromise = null;
+    }
+    throw e;
   });
 };
 

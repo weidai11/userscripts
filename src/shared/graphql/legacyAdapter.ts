@@ -49,6 +49,10 @@ export const LEGACY_ADAPTERS: Record<string, LegacyAdapter> = {
     GetPost: { type: 'single', collection: 'post', inputType: 'SinglePostInput', idVar: 'id' },
     GetComment: { type: 'single', collection: 'comment', inputType: 'SingleCommentInput', idVar: 'id' },
     GetUser: { type: 'single', collection: 'user', inputType: 'SingleUserInput', idVar: 'id' },
+    // GetUserBySlug is intentionally absent: EAF supports the modern named-arg
+    // form `GetUserBySlug(slug:)` directly (verified live 2026-08-21), and the
+    // aliased field shape can't be rewritten by buildLegacyQuery anyway.
+    // See NOTES.md "GetUserBySlug on EA Forum — Live Verification".
 };
 
 const legacyQueryCache = new Map<string, string>();

@@ -397,6 +397,19 @@ export class ReactionPicker {
         }
 
         this.closeHandler = (e: MouseEvent) => {
+            // Self-cleanup if a rerender detached the picker from the DOM
+            if (!picker.isConnected) {
+                if (this.closeHandler) {
+                    document.removeEventListener('mousedown', this.closeHandler);
+                    this.closeHandler = null;
+                }
+                this.currentSelection = null;
+                this.activeTriggerButton = null;
+                this.currentCommentId = null;
+                this.activeReactions = [];
+                this.reactionByName.clear();
+                return;
+            }
             if (!button.contains(e.target as Node) && !picker.contains(e.target as Node)) {
                 picker?.classList.remove('visible');
                 if (picker) {

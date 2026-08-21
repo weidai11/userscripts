@@ -667,7 +667,7 @@ export const renderIndexItem = (
     const bodyText = stripHtmlTags((item as Comment).htmlBody || '');
     title = extractSnippet(bodyText, INDEX_SNIPPET_MAX_LEN, snippetTerms, snippetPattern);
   }
-  const context = isPost ? 'Post' : `Reply to ${getInterlocutorName(item)}`;
+  const context = isPost ? 'Post' : `Reply to ${escapeHtml(getInterlocutorName(item))}`;
   const date = item.postedAt ? new Date(item.postedAt).toLocaleDateString() : '';
 
   return `

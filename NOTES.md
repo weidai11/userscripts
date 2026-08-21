@@ -95,6 +95,18 @@ The classic Vite "Vanilla TS" template includes assets (CSS/SVGs) that break whe
   - `isOffsetCapError` classifies the real wording as a cap (graceful truncation, watermark preserved); `isValidationShapeError` correctly does not.
 - **Implications**: `MAX_API_SKIP = 2000` matches the observed server boundary exactly, and the E2E mocks using `"Exceeded maximum value for skip"` mirror real behavior verbatim. Re-verify if either server changes the rejection wording or the offset boundary.
 
+### GetUserBySlug on EA Forum — Live Verification (2026-08-21)
+- **Context**: `GET_USER_BY_SLUG` (`shared/graphql/queries.ts`) uses the modern named-arg form `user: GetUserBySlug(slug: $slug)` and is intentionally **absent** from `LEGACY_ADAPTERS` (passes through unchanged on EAF). Code reviews have repeatedly flagged this as an EAF bug; it is not.
+- **Verified live** (read-only, logged-out, HTTP 200, 2026-08-21) against `forum.effectivealtruism.org/graphql`:
+  - `GetUserBySlug(slug:)` exists as a top-level query field on EAF and **accepts the modern syntax unchanged**, returning full user data (`_id`, `username`, `displayName`, `slug`, `karma`, `htmlBio`).
+  - Do NOT "fix" this by switching to `user(selector: { slug })` — the root `user` query on both servers takes the generic `SelectorInput` which only supports `_id`/`documentId` (no `slug`); graphql-codegen correctly rejects it.
+  - A legacy adapter entry would also require rewriting the aliased field, which `buildLegacyQuery`'s regex cannot match. No adapter entry is needed or wanted.
+- **Implication**: If author-by-slug previews fail on EAF in future, suspect an EAF-side change to `GetUserBySlug` itself; re-run the probe query before touching the adapter.
+
+### pagination.ts — Dead Code Removed (2026-08-21)
+- **Context**: `findOffsetForTimestamp` and `loadCommentsFromDate` (binary-search offset finder + date-based loader) had **zero callers** anywhere in src/tests/tooling. They were removed; only `MAX_API_SKIP` remains (used by `archive/loader.ts`). `getDateFromCommentId` was removed in the same cleanup.
+- **Known bug in the removed code** (do not reintroduce): the binary search returned `lo` while its invariant placed a strictly-newer-than-target comment *at* `lo`, so the returned offset could start up to ~100 comments past the target date. Any future reimplementation must resolve the exact boundary offset within the final ≤100 window (or post-filter results by `postedAt`).
+
 ---
 
 ## UI & Rendering

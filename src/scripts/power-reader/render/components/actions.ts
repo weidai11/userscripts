@@ -238,10 +238,10 @@ export const renderReactions = (
         <span class="pr-reaction-chip ${userVoted ? 'voted' : ''}" 
               data-action="reaction-vote" 
               data-id="${itemId}" 
-              data-reaction-name="${reaction.name}"
+              data-reaction-name="${escapeHtml(reaction.name)}"
               ${labelAttr} ${descAttr} ${usersAttr}>
           <span class="pr-reaction-icon" style="overflow:visible">
-             <img src="${reaction.svg}" alt="${reaction.name}" style="${imgStyle}">
+             <img src="${reaction.svg}" alt="${escapeHtml(reaction.name)}" style="${imgStyle}">
           </span>
           <span class="pr-reaction-count">${countText}</span>
         </span>

@@ -257,7 +257,7 @@ export const renderMetadata = (
               title="${authorUpTitle}">&#8593;</span>
       </span>
       <span class="pr-timestamp">
-        <a href="${item.pageUrl || '#'}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
+        <a href="${escapeHtml(item.pageUrl || '#')}" target="_blank"><time datetime="${escapeHtml(postedAt)}">${timeStr}</time></a>
       </span>
       ${children}
     </div>

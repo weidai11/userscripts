@@ -96,6 +96,8 @@ export const handleVoteInteraction = (
     const res = await executeVote(documentId, holdTargetState, config.kind, state, targetDoc);
     if (res) {
       syncVoteToState(state, documentId, res);
+    } else {
+      applyRestingVoteClasses(action, target, currentVoteStr);
     }
   }, 500);
 
@@ -111,6 +113,8 @@ export const handleVoteInteraction = (
     const res = await executeVote(documentId, clickTargetState, config.kind, state, targetDoc);
     if (res) {
       syncVoteToState(state, documentId, res);
+    } else {
+      applyRestingVoteClasses(action, target, currentVoteStr);
     }
   };
 
@@ -119,8 +123,8 @@ export const handleVoteInteraction = (
     clearTimeout(timer);
     cleanup();
 
-    // Revert optimistic styles - just clear classes, original state is preserved in DOM
-    clearVoteClasses(target);
+    // Revert optimistic styles back to the pre-interaction state
+    applyRestingVoteClasses(action, target, currentVoteStr);
   };
 
   target.addEventListener('mouseup', mouseUpHandler);
@@ -149,6 +153,32 @@ const applyOptimisticVoteUI = (target: HTMLElement, currentVote: string, dir: Vo
  */
 const clearVoteClasses = (target: HTMLElement): void => {
   target.classList.remove('active-up', 'active-down', 'agree-active', 'disagree-active', 'strong-vote');
+};
+
+/**
+ * Restore the resting (pre-interaction) vote styling for a button based on
+ * the persisted vote state. Used when a vote request fails or is aborted.
+ */
+const applyRestingVoteClasses = (action: string, target: HTMLElement, voteStr: string): void => {
+  clearVoteClasses(target);
+  switch (action) {
+    case 'karma-up':
+      if (voteStr === 'smallUpvote' || voteStr === 'bigUpvote') target.classList.add('active-up');
+      if (voteStr === 'bigUpvote') target.classList.add('strong-vote');
+      break;
+    case 'karma-down':
+      if (voteStr === 'smallDownvote' || voteStr === 'bigDownvote') target.classList.add('active-down');
+      if (voteStr === 'bigDownvote') target.classList.add('strong-vote');
+      break;
+    case 'agree':
+      if (voteStr === 'smallUpvote' || voteStr === 'bigUpvote' || voteStr === 'agree') target.classList.add('agree-active');
+      if (voteStr === 'bigUpvote') target.classList.add('strong-vote');
+      break;
+    case 'disagree':
+      if (voteStr === 'smallDownvote' || voteStr === 'bigDownvote' || voteStr === 'disagree') target.classList.add('disagree-active');
+      if (voteStr === 'bigDownvote') target.classList.add('strong-vote');
+      break;
+  }
 };
 
 /**

@@ -1992,7 +1992,15 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         updateResetButton();
         const renderOptions = getRenderOptionsForQuery(currentUi.query);
 
-        // 3. Check if we need to ask user about render count for large datasets
+        // 3. Abort any existing background rendering before any render path
+        // (including the large-dataset dialog path below)
+        if (activeRenderController) {
+          activeRenderController.abort();
+        }
+        const renderController = new AbortController();
+        activeRenderController = renderController;
+
+        // Check if we need to ask user about render count for large datasets
         const totalItems = activeItems.length;
         if (totalItems >= LARGE_DATASET_THRESHOLD && pendingRenderCount === null) {
           // Show dialog to ask user how many to render
@@ -2004,6 +2012,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
             setArchiveRenderProgress(0);
             await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, {
               ...renderOptions,
+              abortSignal: renderController.signal,
               onProgress: (percent) => {
                 setArchiveRenderProgress(percent);
                 if (!hooksPrimed && percent > 0) {
@@ -2012,6 +2021,9 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
                 }
               }
             });
+            if (renderController.signal.aborted) {
+              return;
+            }
             setArchiveRenderProgress(100);
             if (!hooksPrimed) {
               runPostRenderHooks();
@@ -2021,12 +2033,6 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
         }
 
         // 4. Render
-        // Abort any existing background rendering
-        if (activeRenderController) {
-          activeRenderController.abort();
-        }
-        activeRenderController = new AbortController();
-
         // Only override render limit for large datasets where user explicitly chose a count.
         // Default render limit stays uncapped unless a test/dev override is provided.
         if (pendingRenderCount !== null) {
@@ -2042,7 +2048,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
 
         await renderArchiveFeed(feedEl!, activeItems, state.viewMode, uiHost.getReaderState(), state.sortBy, {
           ...renderOptions,
-          abortSignal: activeRenderController.signal,
+          abortSignal: renderController.signal,
           onProgress: (percent) => {
             perfMetrics.renderPercent = percent;
             perfMetrics.renderMs = performance.now() - renderStart;
@@ -2055,7 +2061,7 @@ export const initArchive = async (username: string, recoveryAttempt = 0): Promis
           }
         });
 
-        if (activeRenderController.signal.aborted) {
+        if (renderController.signal.aborted) {
           return;
         }
 

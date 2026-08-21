@@ -1060,10 +1060,19 @@ async function withBootstrapLock<T>(site: SyncSite, userId: string, fn: () => Pr
     return { acquired: true, value };
   }
   if (!acquired) return { acquired: false };
+  // Heartbeat: the critical section can outlive a single TTL (user fetch +
+  // mutation + verification rounds), so keep renewing the lock while it runs.
+  let heartbeat: number | null = null;
   try {
+    heartbeat = window.setInterval(() => {
+      tryAcquireLocalStorageLock(lockName, token, lockTtlMs);
+    }, 3_000) as unknown as number;
     const value = await fn();
     return { acquired: true, value };
   } finally {
+    if (heartbeat !== null) {
+      window.clearInterval(heartbeat);
+    }
     releaseLocalStorageLock(lockName, token);
   }
 }
@@ -1655,6 +1664,7 @@ async function writeWithCas(
             readResult = await readEnvelope(activeConfig, activeSite, activeSyncNode);
           } catch (readError) {
             logBackendError('sync push permission-denied retry read failed', readError);
+            return false;
           }
           continue;
         }

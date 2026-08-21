@@ -103,6 +103,7 @@ export class StickyHeader {
         this.container.setAttribute('data-author', getAuthorHandle(post, ''));
 
         const newHeader = this.container.querySelector('.pr-post-header') as HTMLElement;
+        if (!newHeader) return;
         const titleH2 = newHeader.querySelector('h2') as HTMLElement;
         const authorLink = newHeader.querySelector('.pr-author') as HTMLElement;
 
